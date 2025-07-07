@@ -8,8 +8,8 @@ import { config } from 'dotenv'
 config()
 
 export const RPC = {
-  user: process.env.RPC_USER,
-  password: process.env.RPC_PASSWORD,
-  address: process.env.RPC_ADDRESS,
-  port: process.env.RPC_PORT,
+  user: process.env.NODE_RPC_USER,
+  password: process.env.NODE_RPC_PASS,
+  address: process.env.NODE_RPC_HOST,
+  port: process.env.NODE_RPC_PORT,
 }
