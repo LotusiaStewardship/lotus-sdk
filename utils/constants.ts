@@ -3,10 +3,7 @@
  * Github: https://github.com/LotusiaStewardship
  * License: MIT
  */
-import {
-  Block,
-  ScriptChunkPlatformUTF8,
-} from './types'
+import { Block, ScriptChunkPlatformUTF8 } from './types'
 
 /**
  * API URLs
