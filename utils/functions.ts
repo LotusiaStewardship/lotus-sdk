@@ -15,7 +15,7 @@ import {
  * @param collection - The collection to convert
  * @returns The async iterable
  */
-export async function* toAsyncIterable<T>(collection: Iterable<T>) {
+async function* toAsyncIterable<T>(collection: Iterable<T>) {
   for (const item of collection) {
     yield item
   }
@@ -26,7 +26,7 @@ export async function* toAsyncIterable<T>(collection: Iterable<T>) {
  * @param ip - The IP address to get the GeoIP data for
  * @returns The GeoIP data for the IP address
  */
-export async function getGeoIP(ip: string) {
+async function getGeoIP(ip: string) {
   const response = await fetch(`${NODE_GEOIP_URL}/${ip}`)
   const json = await response.json()
   return (json.success ? json.data : {}) as GeoIPResponse
@@ -37,7 +37,7 @@ export async function getGeoIP(ip: string) {
  * @param sats - The number of sats to convert
  * @returns The number of XPI
  */
-export function toXPIFromSats(sats: number | string) {
+function toXPIFromSats(sats: number | string) {
   return Number(sats) / 1_000_000
 }
 
@@ -46,7 +46,7 @@ export function toXPIFromSats(sats: number | string) {
  * @param xpi - The number of XPI to convert
  * @returns The number of sats
  */
-export function toSatsFromXPI(xpi: number | string) {
+function toSatsFromXPI(xpi: number | string) {
   return Number(xpi) * 1_000_000
 }
 
@@ -55,7 +55,7 @@ export function toSatsFromXPI(xpi: number | string) {
  * @param sha256 - The sha256 hash to truncate
  * @returns The truncated sha256 hash
  */
-export function truncateSha256(sha256: string) {
+function truncateSha256(sha256: string) {
   return sha256.slice(0, 16) + '...' + sha256.slice(-6)
 }
 
@@ -64,7 +64,7 @@ export function truncateSha256(sha256: string) {
  * @param txid - The transaction id to truncate
  * @returns The truncated transaction id
  */
-export function truncateTxid(txid: string) {
+function truncateTxid(txid: string) {
   return txid.slice(0, 16) + '...' + txid.slice(-6)
 }
 
@@ -73,7 +73,7 @@ export function truncateTxid(txid: string) {
  * @param address - The address to truncate
  * @returns The truncated address
  */
-export function truncateAddress(address: string) {
+function truncateAddress(address: string) {
   return address.slice(0, 17) + '...' + address.slice(-6)
 }
 
@@ -82,7 +82,7 @@ export function truncateAddress(address: string) {
  * @param blockHash - The block hash to truncate
  * @returns The truncated block hash
  */
-export function truncateBlockHash(blockHash: string) {
+function truncateBlockHash(blockHash: string) {
   return blockHash.slice(0, 1) + '...' + blockHash.slice(-16)
 }
 
@@ -92,7 +92,7 @@ export function truncateBlockHash(blockHash: string) {
  * @param blockHeight - The height of the block
  * @returns The number of blocks from the tip to the block height
  */
-export function numBlocksFromTip(tipHeight: number, blockHeight: number) {
+function numBlocksFromTip(tipHeight: number, blockHeight: number) {
   return tipHeight - blockHeight + 1
 }
 
@@ -101,7 +101,7 @@ export function numBlocksFromTip(tipHeight: number, blockHeight: number) {
  * @param timestamp - The timestamp to format
  * @returns The formatted timestamp
  */
-export function formatTimestamp(timestamp: number | string) {
+function formatTimestamp(timestamp: number | string) {
   const date = new Date(Number(timestamp) * 1000)
   return (
     date.toLocaleString('en-US', {
@@ -122,7 +122,7 @@ export function formatTimestamp(timestamp: number | string) {
  * @param negative - The number of negative votes, in sats
  * @returns The minified percentage
  */
-export function toMinifiedPercent(positive: string, negative: string): string {
+function toMinifiedPercent(positive: string, negative: string): string {
   const positiveNum = BigInt(positive)
   const negativeNum = BigInt(negative)
   if (positiveNum === 0n && negativeNum === 0n) {
@@ -144,7 +144,7 @@ export function toMinifiedPercent(positive: string, negative: string): string {
  * @param percentage - The percentage to convert
  * @returns The color
  */
-export function toPercentColor(percentage: string): string {
+function toPercentColor(percentage: string): string {
   const num = parseFloat(percentage)
   if (num <= 100 && num >= 90) {
     return 'green'
@@ -166,7 +166,7 @@ export function toPercentColor(percentage: string): string {
  * @param number - The networkhashps to convert
  * @returns The minified hashrate
  */
-export function toMinifiedNumber(
+function toMinifiedNumber(
   type: 'hashrate' | 'blocksize',
   number: number | string,
 ): string {
@@ -205,7 +205,7 @@ export function toMinifiedNumber(
  * @param time - The time to convert
  * @returns The minified time
  */
-export function toMinifiedTime(seconds: number | string): string {
+function toMinifiedTime(seconds: number | string): string {
   const num = Number(seconds)
   if (isNaN(num)) {
     return seconds.toString()
@@ -225,7 +225,7 @@ export function toMinifiedTime(seconds: number | string): string {
  * @param change - The change to determine the color for
  * @returns The color
  */
-export function getRankingColor(change: number): string {
+function getRankingColor(change: number): string {
   return change > 0 ? 'green' : change < 0 ? 'red' : 'gray'
 }
 
@@ -234,7 +234,7 @@ export function getRankingColor(change: number): string {
  * @param sentiment - The sentiment to get the color for
  * @returns The color
  */
-export function getSentimentColor(sentiment: ScriptChunkSentimentUTF8): string {
+function getSentimentColor(sentiment: ScriptChunkSentimentUTF8): string {
   switch (sentiment) {
     case 'positive':
       return 'green'
@@ -252,7 +252,7 @@ export function getSentimentColor(sentiment: ScriptChunkSentimentUTF8): string {
  * @param divisor - The divisor to use
  * @returns The rate
  */
-export function calculateRate(
+function calculateRate(
   current: number,
   previous: number,
   divisor: number = 1_000_000,
@@ -265,7 +265,7 @@ export function calculateRate(
  * @param rate - The rate to format
  * @returns The formatted rate
  */
-export function formatRate(rate: number) {
+function formatRate(rate: number) {
   if (!isFinite(rate)) return 'New'
   return `${Math.abs(rate).toFixed(1)}%`
 }
@@ -275,7 +275,7 @@ export function formatRate(rate: number) {
  * @param str - The string to convert
  * @returns The string with the first letter converted to uppercase
  */
-export function toUppercaseFirstLetter(str: string) {
+function toUppercaseFirstLetter(str: string) {
   return str.charAt(0).toUpperCase() + str.slice(1)
 }
 
@@ -284,7 +284,7 @@ export function toUppercaseFirstLetter(str: string) {
  * @param sentiment - The sentiment to convert
  * @returns The trending icon
  */
-export function toTrendingIcon(sentiment: ScriptChunkSentimentUTF8) {
+function toTrendingIcon(sentiment: ScriptChunkSentimentUTF8) {
   return sentiment === 'positive'
     ? 'i-mdi-arrow-up-thin'
     : 'i-mdi-arrow-down-thin'
@@ -296,7 +296,7 @@ export function toTrendingIcon(sentiment: ScriptChunkSentimentUTF8) {
  * @param profileId - The profile ID to convert
  * @returns The profile URL
  */
-export function toProfileUrl(platform: string, profileId: string) {
+function toProfileUrl(platform: string, profileId: string) {
   return `/${platform}/${profileId}`
 }
 
@@ -307,7 +307,7 @@ export function toProfileUrl(platform: string, profileId: string) {
  * @param postId - The post ID to convert
  * @returns The post URL
  */
-export function toPostUrl(
+function toPostUrl(
   platform: ScriptChunkPlatformUTF8,
   profileId: string,
   postId: string,
@@ -322,7 +322,7 @@ export function toPostUrl(
  * @param postId - The post ID to convert
  * @returns The external post URL
  */
-export function toExternalPostUrl(
+function toExternalPostUrl(
   platform: ScriptChunkPlatformUTF8,
   profileId: string,
   postId: string,
@@ -336,7 +336,7 @@ export function toExternalPostUrl(
  * @param divisor - The divisor to use
  * @returns The minified stat count
  */
-export function toMinifiedStatCount(
+function toMinifiedStatCount(
   number: number | string,
   divisor: number = 1_000_000,
 ) {
@@ -362,6 +362,83 @@ export function toMinifiedStatCount(
  * @param postId - The post ID to truncate
  * @returns The truncated post ID
  */
-export function truncatePostId(postId: string) {
+function truncatePostId(postId: string) {
   return postId.length > 8 ? `${postId.substring(0, 8)}...` : postId
+}
+
+/**
+ * Utility functions
+ */
+const Util = {
+  /** Sha256 operations */
+  sha256: {
+    /**
+     * Hashes a string to a sha256 hash
+     * @param str The string to hash
+     * @returns The sha256 hash
+     */
+    validate(str: string) {
+      return str.match(/^[a-f0-9]{64}$/)
+    },
+  },
+  /** Base64 operations */
+  base64: {
+    /**
+     * Encodes a string to a base64 encoded string
+     * @param str The string to encode
+     * @returns The base64 encoded string
+     */
+    encode(str: string) {
+      return Buffer.from(str).toString('base64')
+    },
+    /**
+     * Decodes a base64 encoded string
+     * @param str The base64 encoded string to decode
+     * @returns The decoded string
+     */
+    decode(str: string) {
+      return Buffer.from(str, 'base64').toString('utf8')
+    },
+  },
+  /** Crypto operations */
+  crypto: {
+    /**
+     * Generates a random UUID
+     * @returns The random UUID
+     */
+    randomUUID(): string {
+      return crypto.randomUUID()
+    },
+  },
+}
+
+export {
+  // Functions
+  toAsyncIterable,
+  getGeoIP,
+  toXPIFromSats,
+  toSatsFromXPI,
+  truncateSha256,
+  truncateTxid,
+  truncateAddress,
+  truncateBlockHash,
+  numBlocksFromTip,
+  formatTimestamp,
+  toMinifiedPercent,
+  toPercentColor,
+  toMinifiedNumber,
+  toMinifiedTime,
+  getRankingColor,
+  getSentimentColor,
+  calculateRate,
+  formatRate,
+  toUppercaseFirstLetter,
+  toTrendingIcon,
+  toProfileUrl,
+  toPostUrl,
+  toExternalPostUrl,
+  toMinifiedStatCount,
+  truncatePostId,
+  // Utilities
+  Util,
 }
