@@ -59,11 +59,11 @@ function createSocket(
   switch (socketType) {
     // Lotus RPC socket
     case 'req':
-      sock.connect(settings.reqSocketPath)
+      sock.connect(`ipc://${settings.reqSocketPath}`)
       break
     // Lotus event socket
     case 'sub':
-      sock.connect(settings.subSocketPath)
+      sock.connect(`ipc://${settings.subSocketPath}`)
       // Validate channels
       if (channels && channels.length > 0) {
         sock.chan(channels)
