@@ -16,8 +16,8 @@ const RANK_API_URL = 'https://rank.lotusia.org/api/v1'
 /**
  * NNG configuration
  */
-const NNG_PUB_DEFAULT_SOCKET_PATH = `${os.homedir()}/.lotus/pub.pipe`
-const NNG_RPC_DEFAULT_SOCKET_PATH = `${os.homedir()}/.lotus/rpc.pipe`
+const NNG_SUB_SOCKET_PATH_DEFAULT = `${os.homedir()}/.lotus/pub.pipe`
+const NNG_REQ_SOCKET_PATH_DEFAULT = `${os.homedir()}/.lotus/rpc.pipe`
 const NNG_RPC_RCVMAXSIZE_POLICY = 33_554_432 // 32 MiB (2^20 * 32)
 const NNG_RPC_BLOCKRANGE_SIZE = 20
 const NNG_SOCKET_RECONN = 300 // time (ms) between reconnect attempts
@@ -66,8 +66,8 @@ export {
   NODE_GEOIP_URL,
   RANK_API_URL,
   // NNG configuration
-  NNG_PUB_DEFAULT_SOCKET_PATH,
-  NNG_RPC_DEFAULT_SOCKET_PATH,
+  NNG_SUB_SOCKET_PATH_DEFAULT,
+  NNG_REQ_SOCKET_PATH_DEFAULT,
   NNG_RPC_RCVMAXSIZE_POLICY,
   NNG_RPC_BLOCKRANGE_SIZE,
   NNG_SOCKET_RECONN,
