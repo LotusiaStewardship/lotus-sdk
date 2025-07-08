@@ -4,14 +4,25 @@
  * License: MIT
  */
 import { config } from 'dotenv'
+import {
+  NNG_SUB_SOCKET_PATH_DEFAULT,
+  NNG_REQ_SOCKET_PATH_DEFAULT,
+} from '../utils/constants'
 
-config({
-  path: '.env',
-})
+const parsed = config({ path: '.env' }).parsed
+
+if (!parsed) {
+  throw new Error('Failed to load .env file')
+}
 
 export const RPC = {
-  user: process.env.NODE_RPC_USER,
-  password: process.env.NODE_RPC_PASS,
-  address: process.env.NODE_RPC_HOST,
-  port: process.env.NODE_RPC_PORT,
+  user: parsed.NODE_RPC_USER,
+  password: parsed.NODE_RPC_PASS,
+  address: parsed.NODE_RPC_HOST,
+  port: parsed.NODE_RPC_PORT,
+}
+
+export const NNG = {
+  subSocketPath: parsed.NNG_SUB_SOCKET_PATH || NNG_SUB_SOCKET_PATH_DEFAULT,
+  reqSocketPath: parsed.NNG_REQ_SOCKET_PATH || NNG_REQ_SOCKET_PATH_DEFAULT,
 }
