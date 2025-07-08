@@ -3,6 +3,7 @@
  * Github: https://github.com/LotusiaStewardship
  * License: MIT
  */
+import os from 'node:os'
 import { Block, ScriptChunkPlatformUTF8 } from './types'
 
 /**
@@ -12,6 +13,18 @@ const CHRONIK_API_URL = 'http://172.16.11.102:7123'
 // export const NODE_API_URL = 'https://explorer.lotusia.org/api'
 const NODE_GEOIP_URL = 'https://api.sefinek.net/api/v2/geoip'
 const RANK_API_URL = 'https://rank.lotusia.org/api/v1'
+/**
+ * NNG configuration
+ */
+const NNG_PUB_DEFAULT_SOCKET_PATH = `${os.homedir()}/.lotus/pub.pipe`
+const NNG_RPC_DEFAULT_SOCKET_PATH = `${os.homedir()}/.lotus/rpc.pipe`
+const NNG_RPC_RCVMAXSIZE_POLICY = 33_554_432 // 32 MiB (2^20 * 32)
+const NNG_RPC_BLOCKRANGE_SIZE = 20
+const NNG_SOCKET_RECONN = 300 // time (ms) between reconnect attempts
+const NNG_SOCKET_MAXRECONN = 3_000 // max time (ms) before giving up reconnect
+const NNG_REQUEST_TIMEOUT_LENGTH = 2_000 // max time (ms) before aborting a Socket.send()
+const NNG_MESSAGE_BATCH_SIZE = 10 // number of messages to process in each batch
+const NNG_SOCKET_TYPES = ['sub', 'req'] // valid socket types
 /**
  * RANK script configuration
  */
@@ -52,6 +65,16 @@ export {
   CHRONIK_API_URL,
   NODE_GEOIP_URL,
   RANK_API_URL,
+  // NNG configuration
+  NNG_PUB_DEFAULT_SOCKET_PATH,
+  NNG_RPC_DEFAULT_SOCKET_PATH,
+  NNG_RPC_RCVMAXSIZE_POLICY,
+  NNG_RPC_BLOCKRANGE_SIZE,
+  NNG_SOCKET_RECONN,
+  NNG_SOCKET_MAXRECONN,
+  NNG_REQUEST_TIMEOUT_LENGTH,
+  NNG_MESSAGE_BATCH_SIZE,
+  NNG_SOCKET_TYPES,
   // RANK constants
   RANK_OUTPUT_MIN_VALID_SATS,
   RANK_BLOCK_GENESIS_V1,

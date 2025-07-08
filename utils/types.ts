@@ -3,6 +3,7 @@
  * Github: https://github.com/LotusiaStewardship
  * License: MIT
  */
+import { ByteBuffer } from 'flatbuffers'
 type InstanceData = {
   instanceId: string
   runtimeId: string
@@ -405,6 +406,19 @@ type RawTransaction = {
   confirmations?: number
 }
 
+/** NNG types */
+type NNGMessageType =
+  | 'mempooltxadd'
+  | 'mempooltxrem'
+  | 'blkconnected'
+  | 'blkdisconctd'
+type NNGMessageProcessor = (bb: ByteBuffer) => Promise<void>
+type NNGPendingMessageProcessor = [NNGMessageProcessor, ByteBuffer]
+type NNGQueue = {
+  busy: boolean
+  pending: NNGPendingMessageProcessor[]
+}
+
 export type {
   // API types
   InstanceData,
@@ -445,6 +459,11 @@ export type {
   RawTransaction,
   TransactionInput,
   TransactionOutput,
+  // NNG types
+  NNGMessageType,
+  NNGMessageProcessor,
+  NNGPendingMessageProcessor,
+  NNGQueue,
   // Dashboard types
   GeoIPData,
   GeoIPResponse,
