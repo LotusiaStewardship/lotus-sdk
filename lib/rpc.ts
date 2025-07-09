@@ -3,7 +3,7 @@
  * Github: https://github.com/LotusiaStewardship
  * License: MIT
  */
-import { RPC as config } from '../utils/settings'
+import { RPC as settings } from '../utils/settings'
 import type {
   NetworkInfo,
   MiningInfo,
@@ -16,7 +16,7 @@ import type {
   JSONRPCResult,
 } from '../utils/types'
 
-const { user, password, address, port } = config
+const { user, password, address, port } = settings
 const rpcUrl = `http://${address}:${port}`
 
 /**
