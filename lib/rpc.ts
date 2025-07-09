@@ -3,7 +3,7 @@
  * Github: https://github.com/LotusiaStewardship
  * License: MIT
  */
-import { RPC as config } from '../utils/settings'
+import { RPC as settings } from '../utils/settings'
 import type {
   NetworkInfo,
   MiningInfo,
@@ -11,12 +11,12 @@ import type {
   PeerInfo,
   BlockStats,
   BlockInfo,
-  TransactionInput,
-  TransactionOutput,
   RawTransaction,
+  JSONRPCResponse,
+  JSONRPCResult,
 } from '../utils/types'
 
-const { user, password, address, port } = config
+const { user, password, address, port } = settings
 const rpcUrl = `http://${address}:${port}`
 
 /**
@@ -25,7 +25,10 @@ const rpcUrl = `http://${address}:${port}`
  * @param params - Array of parameters to pass to the RPC method
  * @returns Promise that resolves to the JSON response from the RPC daemon
  */
-async function sendRPCRequest(method: string, params: any[]) {
+async function sendRPCRequest(
+  method: string,
+  params: unknown[],
+): Promise<JSONRPCResult> {
   const response = await fetch(rpcUrl, {
     method: 'POST',
     body: JSON.stringify({ method, params }),
@@ -36,9 +39,11 @@ async function sendRPCRequest(method: string, params: any[]) {
       )}`,
     }),
   })
-  const json = await response.json()
+  const json = (await response.json()) as JSONRPCResponse
   if (json.error) {
-    throw new Error(json.error)
+    throw new Error(
+      `JSON-RPC error: ${json.error.message} (code: ${json.error.code})`,
+    )
   }
   return json.result
 }
@@ -48,7 +53,17 @@ async function sendRPCRequest(method: string, params: any[]) {
  * @returns {Promise<MiningInfo>} Raw mining information
  */
 async function getMiningInfo(): Promise<MiningInfo> {
-  return sendRPCRequest('getmininginfo', [])
+  const result = await sendRPCRequest('getmininginfo', [])
+  return result as MiningInfo
+}
+
+/**
+ * RPC command - `getnetworkinfo`
+ * @returns {Promise<NetworkInfo>} Network information
+ */
+async function getNetworkInfo(): Promise<NetworkInfo> {
+  const result = await sendRPCRequest('getnetworkinfo', [])
+  return result as NetworkInfo
 }
 
 /**
@@ -56,7 +71,8 @@ async function getMiningInfo(): Promise<MiningInfo> {
  * @returns {Promise<PeerInfo[]>} Array of peer connection information
  */
 async function getPeerInfo(): Promise<PeerInfo[]> {
-  return sendRPCRequest('getpeerinfo', [])
+  const result = await sendRPCRequest('getpeerinfo', [])
+  return result as PeerInfo[]
 }
 
 /**
@@ -64,7 +80,8 @@ async function getPeerInfo(): Promise<PeerInfo[]> {
  * @returns {Promise<number>} Current block count
  */
 async function getBlockCount(): Promise<number> {
-  return sendRPCRequest('getblockcount', [])
+  const result = await sendRPCRequest('getblockcount', [])
+  return result as number
 }
 
 /**
@@ -73,7 +90,8 @@ async function getBlockCount(): Promise<number> {
  * @returns {Promise<string>} Block hash for the given height
  */
 async function getBlockHash(height: number): Promise<string> {
-  return sendRPCRequest('getblockhash', [height])
+  const result = await sendRPCRequest('getblockhash', [height])
+  return result as string
 }
 
 /**
@@ -82,7 +100,8 @@ async function getBlockHash(height: number): Promise<string> {
  * @returns {Promise<BlockStats>} Block statistics
  */
 async function getBlockStats(hash: string): Promise<BlockStats> {
-  return sendRPCRequest('getblockstats', [hash])
+  const result = await sendRPCRequest('getblockstats', [hash])
+  return result as BlockStats
 }
 
 /**
@@ -91,7 +110,8 @@ async function getBlockStats(hash: string): Promise<BlockStats> {
  * @returns {Promise<Block>} Block information
  */
 async function getBlock(hash: string): Promise<BlockInfo> {
-  return sendRPCRequest('getblock', [hash])
+  const result = await sendRPCRequest('getblock', [hash])
+  return result as BlockInfo
 }
 
 /**
@@ -100,7 +120,8 @@ async function getBlock(hash: string): Promise<BlockInfo> {
  * @returns {Promise<RawTransaction>} Raw transaction information
  */
 async function getRawTransaction(txid: string): Promise<RawTransaction> {
-  return sendRPCRequest('getrawtransaction', [txid, true])
+  const result = await sendRPCRequest('getrawtransaction', [txid, true])
+  return result as RawTransaction
 }
 
 /**
@@ -108,7 +129,8 @@ async function getRawTransaction(txid: string): Promise<RawTransaction> {
  * @returns {Promise<string[]>} Array of transaction IDs in mempool
  */
 async function getRawMemPool(): Promise<string[]> {
-  return sendRPCRequest('getrawmempool', [])
+  const result = await sendRPCRequest('getrawmempool', [])
+  return result as string[]
 }
 
 /**
@@ -116,23 +138,13 @@ async function getRawMemPool(): Promise<string[]> {
  * @returns {Promise<MempoolInfo>} Mempool information
  */
 async function getMempoolInfo(): Promise<MempoolInfo> {
-  return sendRPCRequest('getmempoolinfo', [])
-}
-
-export type {
-  NetworkInfo,
-  MiningInfo,
-  MempoolInfo,
-  PeerInfo,
-  BlockStats,
-  BlockInfo,
-  TransactionInput,
-  TransactionOutput,
-  RawTransaction,
+  const result = await sendRPCRequest('getmempoolinfo', [])
+  return result as MempoolInfo
 }
 
 export {
   getMiningInfo,
+  getNetworkInfo,
   getPeerInfo,
   getBlockCount,
   getBlockHash,
