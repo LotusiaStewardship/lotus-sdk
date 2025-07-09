@@ -78,8 +78,9 @@ class NNG extends EventEmitter {
     this.registeredProcessors = processors
     this.sockets = {} as typeof this.sockets
     sockets.forEach(({ type, path }) => {
+      // Create socket
       const socket = this.createSocket(type)
-      // Connect socket
+      // Set up socket depending on type
       switch (type) {
         // Lotus RPC socket
         case 'req':
