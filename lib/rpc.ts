@@ -56,6 +56,15 @@ async function getMiningInfo(): Promise<MiningInfo> {
 }
 
 /**
+ * RPC command - `getnetworkinfo`
+ * @returns {Promise<NetworkInfo>} Network information
+ */
+async function getNetworkInfo(): Promise<NetworkInfo> {
+  const result = await sendRPCRequest('getnetworkinfo', [])
+  return result as NetworkInfo
+}
+
+/**
  * RPC command - `getpeerinfo`
  * @returns {Promise<PeerInfo[]>} Array of peer connection information
  */
@@ -133,6 +142,7 @@ async function getMempoolInfo(): Promise<MempoolInfo> {
 
 export {
   getMiningInfo,
+  getNetworkInfo,
   getPeerInfo,
   getBlockCount,
   getBlockHash,
