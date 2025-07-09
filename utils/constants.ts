@@ -16,15 +16,22 @@ const RANK_API_URL = 'https://rank.lotusia.org/api/v1'
 /**
  * NNG configuration
  */
-const NNG_PUB_DEFAULT_SOCKET_PATH = `${os.homedir()}/.lotus/pub.pipe`
-const NNG_RPC_DEFAULT_SOCKET_PATH = `${os.homedir()}/.lotus/rpc.pipe`
-const NNG_RPC_RCVMAXSIZE_POLICY = 33_554_432 // 32 MiB (2^20 * 32)
+const NNG_SUB_SOCKET_PATH_DEFAULT = `${os.homedir()}/.lotus/pub.pipe`
+const NNG_REQ_SOCKET_PATH_DEFAULT = `${os.homedir()}/.lotus/rpc.pipe`
+/** Max block size in bytes for requests to RPC socket (32 MiB, i.e. 2^20 * 32) */
+const NNG_RPC_RCVMAXSIZE_POLICY = 33_554_432
+/** Max number of blocks to request in a single block range request (20) */
 const NNG_RPC_BLOCKRANGE_SIZE = 20
-const NNG_SOCKET_RECONN = 300 // time (ms) between reconnect attempts
-const NNG_SOCKET_MAXRECONN = 3_000 // max time (ms) before giving up reconnect
-const NNG_REQUEST_TIMEOUT_LENGTH = 2_000 // max time (ms) before aborting a Socket.send()
-const NNG_MESSAGE_BATCH_SIZE = 10 // number of messages to process in each batch
-const NNG_SOCKET_TYPES = ['sub', 'req'] // valid socket types
+/** Time (ms) between reconnect attempts */
+const NNG_SOCKET_RECONN = 300
+/** Max time (ms) before giving up reconnect */
+const NNG_SOCKET_MAXRECONN = 3_000
+/** Max time (ms) before aborting a Socket.send() */
+const NNG_REQUEST_TIMEOUT_LENGTH = 2_000
+/** Number of messages to process in each batch */
+const NNG_MESSAGE_BATCH_SIZE = 10
+/** Valid socket types */
+const NNG_SOCKET_TYPES = ['sub', 'req']
 /**
  * RANK script configuration
  */
@@ -66,8 +73,8 @@ export {
   NODE_GEOIP_URL,
   RANK_API_URL,
   // NNG configuration
-  NNG_PUB_DEFAULT_SOCKET_PATH,
-  NNG_RPC_DEFAULT_SOCKET_PATH,
+  NNG_SUB_SOCKET_PATH_DEFAULT,
+  NNG_REQ_SOCKET_PATH_DEFAULT,
   NNG_RPC_RCVMAXSIZE_POLICY,
   NNG_RPC_BLOCKRANGE_SIZE,
   NNG_SOCKET_RECONN,
