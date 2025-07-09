@@ -407,6 +407,11 @@ type RawTransaction = {
 }
 
 /** NNG types */
+type NNGSocketParameters = {
+  type: NNGSocketType
+  path?: string
+  channels?: Array<NNGMessageType>
+}
 type NNGSocketType = 'pub' | 'sub' | 'req' | 'rep'
 type NNGMessageType =
   | 'mempooltxadd'
@@ -461,6 +466,7 @@ export type {
   TransactionInput,
   TransactionOutput,
   // NNG types
+  NNGSocketParameters,
   NNGSocketType,
   NNGMessageType,
   NNGMessageProcessor,

@@ -28,6 +28,7 @@ import {
   NNG_RPC_BLOCKRANGE_SIZE,
 } from '../utils/constants'
 import {
+  NNGSocketParameters,
   NNGSocketType,
   NNGMessageProcessor,
   NNGMessageType,
@@ -62,16 +63,14 @@ class NNG extends EventEmitter {
   >
   /**
    * Instantiate and configure Lotus NNG sockets
+   * @param sockets - The sockets to connect to
+   * @param processors - The processors to register
    */
   constructor({
     sockets,
     processors,
   }: {
-    sockets: Array<{
-      type: NNGSocketType
-      path?: string
-      channels?: Array<NNGMessageType>
-    }>
+    sockets: Array<NNGSocketParameters>
     processors: Partial<Record<NNGMessageType, NNGMessageProcessor>>
   }) {
     super()
