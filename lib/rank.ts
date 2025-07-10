@@ -3,30 +3,117 @@
  * Github: https://github.com/LotusiaStewardship
  * License: MIT
  */
-import type {
-  PlatformParameters,
-  ScriptChunkLokadMap,
-  ScriptChunkPlatformMap,
-  ScriptChunkPlatformUTF8,
-  ScriptChunkSentimentUTF8,
-  ScriptChunkSentimentMap,
-  ScriptChunksRequired,
-  ScriptChunksOptional,
-  ScriptChunk,
-  RankOutput,
-  ScriptChunkField,
-  ScriptChunkLokadUTF8,
-} from '../utils/types'
+// RANK script types
+type ScriptChunkLokadUTF8 = 'RANK' | 'RNKC'
+type ScriptChunkPlatformUTF8 = 'lotusia' | 'twitter'
+type ScriptChunkSentimentUTF8 = 'positive' | 'negative' | 'neutral'
+type ScriptChunkLokadMap = Map<number, ScriptChunkLokadUTF8>
+type ScriptChunkPlatformMap = Map<number, ScriptChunkPlatformUTF8>
+type ScriptChunkSentimentMap = Map<number, ScriptChunkSentimentUTF8>
+type ScriptChunkField =
+  | 'lokad'
+  | 'sentiment'
+  | 'platform'
+  | 'profileId'
+  | 'postId'
+  | 'postHash'
+  | 'instanceId'
+type ScriptChunk = {
+  /** Byte offset of the chunk in the output script */
+  offset: number | null
+  /** Byte length of the chunk in the output script */
+  len: number | null
+  /** Map of supported RANK script chunks */
+  map?: ScriptChunkLokadMap | ScriptChunkPlatformMap | ScriptChunkSentimentMap
+}
+/** Required RANK script chunks */
+type ScriptChunksRequired = {
+  [name in Exclude<
+    ScriptChunkField,
+    'postId' | 'postHash' | 'instanceId'
+  >]: ScriptChunk
+}
+/** Optional RANK script chunks */
+type ScriptChunksOptional = {
+  [name in Extract<
+    ScriptChunkField,
+    'postId' | 'postHash' | 'instanceId'
+  >]: ScriptChunk
+}
+/** OP_RETURN \<RANK\> \<sentiment\> \<profileId\> [\<postId\> \<postHash\> [\<instanceId\>]] */
+type RankOutput = {
+  sentiment: ScriptChunkSentimentUTF8 // positive or negative sentiment (can support more)
+  platform: ScriptChunkPlatformUTF8 // e.g. Twitter/X.com, etc.
+  profileId: string // who the ranking is for
+  postId?: string // optional post ID if ranking specific content
+  postHash?: string // optional hash of the post content (required if postId is provided)
+  instanceId?: string // ID of the registered extension instance
+}
+/**  */
+type RankTransaction = RankOutput & {
+  txid: string
+  firstSeen: bigint // time first seen by indexer, only for new mempool transactions
+  scriptPayload: string
+  height?: number // undefined if mempool
+  sats: bigint
+  timestamp: bigint // unix timestamp
+}
+type RankTarget = {
+  id: string // profileId, postId, etc
+  platform: string
+  ranking: bigint
+  ranks: Omit<RankTransaction, 'profileId' | 'platform'>[] // omit the database relation fields
+  satsPositive: bigint
+  satsNegative: bigint
+  votesPositive: number
+  votesNegative: number
+}
+/**
+ * `RankTransaction` objects are converted to a `ProfileMap` for database ops
+ *
+ * `string` is `profileId`
+ */
+type ProfileMap = Map<string, Profile>
+type PostMap = Map<string, Post>
+/**  */
+type Profile = RankTarget & {
+  posts?: PostMap
+}
+/**  */
+type Post = RankTarget & {
+  profileId: string
+  /** The hash of the post content (i.e. RankOutput['postHash']) */
+  hash: string
+}
+
+/** Platform parameters */
+type PlatformParameters = {
+  profileId: {
+    len: number
+  }
+  postId: {
+    len: number
+    regex: RegExp
+    reader: 'readBigUInt64BE' // additional Buffer reader methods if needed
+    type: 'BigInt' | 'Number' | 'String'
+  }
+}
 
 /** LOKAD chunk map */
+const LOKAD_PREFIX_RANK = 0x52414e4b // RANK v1
+const LOKAD_PREFIX_RNKC = 0x524e4b43 // RANK Comment
 const SCRIPT_CHUNK_LOKAD: ScriptChunkLokadMap = new Map()
-SCRIPT_CHUNK_LOKAD.set(0x52414e4b, 'RANK') // RANK v1
+SCRIPT_CHUNK_LOKAD.set(LOKAD_PREFIX_RANK, 'RANK') // RANK v1
+SCRIPT_CHUNK_LOKAD.set(LOKAD_PREFIX_RNKC, 'RNKC') // RANK Comment
 // SCRIPT_CHUNK_LOKAD.set(0x524e4b32, 'RNK2') // RANK v2
+const RANK_SENTIMENT_NEUTRAL = 0x60 // OP_16
+const RANK_SENTIMENT_POSITIVE = 0x51 // OP_1 | OP_TRUE
+const RANK_SENTIMENT_NEGATIVE = 0x00 // OP_0 | OP_FALSE
 /** Sentiment chunk map */
 const SCRIPT_CHUNK_SENTIMENT: ScriptChunkSentimentMap = new Map()
-SCRIPT_CHUNK_SENTIMENT.set(0x60, 'neutral') // OP_16
-SCRIPT_CHUNK_SENTIMENT.set(0x51, 'positive') // OP_1 | OP_TRUE
-SCRIPT_CHUNK_SENTIMENT.set(0x00, 'negative') // OP_0 | OP_FALSE
+SCRIPT_CHUNK_SENTIMENT.set(RANK_SENTIMENT_NEUTRAL, 'neutral')
+SCRIPT_CHUNK_SENTIMENT.set(RANK_SENTIMENT_POSITIVE, 'positive')
+SCRIPT_CHUNK_SENTIMENT.set(RANK_SENTIMENT_NEGATIVE, 'negative')
 /** Platform chunk map */
 const SCRIPT_CHUNK_PLATFORM: ScriptChunkPlatformMap = new Map()
 //SCRIPT_CHUNK_PLATFORM.set(0x00, 'web_url') // any URL; the PROFILE script chunk is not necessary
@@ -45,7 +132,7 @@ const RANK_SCRIPT_CHUNKS_REQUIRED: Record<
     map: SCRIPT_CHUNK_LOKAD,
   },
   sentiment: {
-    offset: 6, // 0x51 | 0x00 (OP_TRUE | OP_FALSE)
+    offset: 6, // 0x60 | 0x51 | 0x00 (OP_16 | OP_1 | OP_0)
     len: 1,
     map: SCRIPT_CHUNK_SENTIMENT,
   },
@@ -594,12 +681,39 @@ class RankScriptProcessor {
   }
 }
 
+export type {
+  PlatformParameters,
+  ScriptChunkField,
+  ScriptChunkLokadUTF8,
+  ScriptChunkLokadMap,
+  ScriptChunkPlatformMap,
+  ScriptChunkPlatformUTF8,
+  ScriptChunkSentimentUTF8,
+  ScriptChunkSentimentMap,
+  ScriptChunksRequired,
+  ScriptChunksOptional,
+  ScriptChunk,
+  RankOutput,
+  RankTransaction,
+  ProfileMap,
+  PostMap,
+  Profile,
+  Post,
+}
+
 export {
   // Constants
   PLATFORMS,
   SCRIPT_CHUNK_LOKAD,
   SCRIPT_CHUNK_PLATFORM,
   SCRIPT_CHUNK_SENTIMENT,
+  // LOKAD constants
+  LOKAD_PREFIX_RANK,
+  LOKAD_PREFIX_RNKC,
+  // RANK sentiment constants
+  RANK_SENTIMENT_NEUTRAL,
+  RANK_SENTIMENT_POSITIVE,
+  RANK_SENTIMENT_NEGATIVE,
   // RANK script parameters
   RANK_SCRIPT_REQUIRED_LENGTH,
   RANK_SCRIPT_CHUNKS_REQUIRED,

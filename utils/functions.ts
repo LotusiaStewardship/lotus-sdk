@@ -5,12 +5,8 @@
  */
 import { NODE_GEOIP_URL, PlatformURL } from './constants'
 import * as NNGInterface from '../lib/nng-interface'
-import type {
-  Block,
-  GeoIPResponse,
-  ScriptChunkPlatformUTF8,
-  ScriptChunkSentimentUTF8,
-} from './types'
+import type { Block, GeoIPResponse } from './types'
+import { ScriptChunkPlatformUTF8, ScriptChunkSentimentUTF8 } from '../lib/rank'
 
 /**
  * Convert an iterable to an async iterable
@@ -381,11 +377,13 @@ const Util = {
      */
     toBlockhashOrTxid(hash: NNGInterface.Hash) {
       // assume that the hash is valid
+      const { bb_pos, bb } = hash
       return Buffer.from(
-        hash.bb!.bytes().subarray(hash.bb_pos, hash.bb_pos + 32),
-      )
-        .reverse() // reverse for little endian
-        .toString('hex') // convert to hex string
+        bb!
+          .bytes()
+          .subarray(bb_pos, bb_pos + 32)
+          .reverse(),
+      ).toString('hex')
     },
     /**
      * Parse raw `NNG.BlockHeader` flatbuffer for the nHeight
@@ -418,9 +416,9 @@ const Util = {
   /** Sha256 operations */
   sha256: {
     /**
-     * Hashes a string to a sha256 hash
-     * @param str The string to hash
-     * @returns The sha256 hash
+     * Validate a sha256 hash
+     * @param str - The sha256 hash to validate
+     * @returns Whether the sha256 hash is valid
      */
     validate(str: string) {
       return str.match(/^[a-f0-9]{64}$/)

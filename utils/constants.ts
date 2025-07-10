@@ -4,7 +4,8 @@
  * License: MIT
  */
 import os from 'node:os'
-import { Block, ScriptChunkPlatformUTF8 } from './types'
+import { Block } from './types'
+import type { ScriptChunkPlatformUTF8 } from '../lib/rank'
 
 /**
  * API URLs
@@ -32,9 +33,11 @@ const NNG_REQUEST_TIMEOUT_LENGTH = 2_000
 const NNG_MESSAGE_BATCH_SIZE = 10
 /** Valid socket types */
 const NNG_SOCKET_TYPES = ['sub', 'req']
+
 /**
  * RANK script configuration
  */
+/** Minimum RANK burn value in sats */
 const RANK_OUTPUT_MIN_VALID_SATS = 1_000_000 // minimum RANK burn value in sats
 /** First block with a RANK transaction */
 const RANK_BLOCK_GENESIS_V1: Partial<Block> = {
@@ -82,7 +85,7 @@ export {
   NNG_REQUEST_TIMEOUT_LENGTH,
   NNG_MESSAGE_BATCH_SIZE,
   NNG_SOCKET_TYPES,
-  // RANK constants
+  // RANK script configuration
   RANK_OUTPUT_MIN_VALID_SATS,
   RANK_BLOCK_GENESIS_V1,
   // Platform configuration

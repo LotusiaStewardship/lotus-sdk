@@ -27,15 +27,26 @@ import {
   NNG_REQUEST_TIMEOUT_LENGTH,
   NNG_RPC_BLOCKRANGE_SIZE,
 } from '../utils/constants'
-import {
-  NNGSocketParameters,
-  NNGSocketType,
-  NNGMessageProcessor,
-  NNGMessageType,
-  NNGPendingMessage,
-  NNGQueue,
-} from '../utils/types'
 import { NNG as settings } from '../utils/settings'
+
+/** NNG types */
+type NNGSocketParameters = {
+  type: NNGSocketType
+  path?: string
+  channels?: Array<NNGMessageType>
+}
+type NNGSocketType = 'pub' | 'sub' | 'req' | 'rep'
+type NNGMessageType =
+  | 'mempooltxadd'
+  | 'mempooltxrem'
+  | 'blkconnected'
+  | 'blkdisconctd'
+type NNGMessageProcessor = (bb: ByteBuffer) => Promise<void>
+type NNGPendingMessage = [NNGMessageType, ByteBuffer]
+type NNGQueue = {
+  busy: boolean
+  pending: NNGPendingMessage[]
+}
 
 /**
  * Error codes
@@ -344,6 +355,15 @@ class NNG extends EventEmitter {
       socket.send(msg)
     })
   }
+}
+
+export type {
+  NNGSocketParameters,
+  NNGSocketType,
+  NNGMessageProcessor,
+  NNGMessageType,
+  NNGPendingMessage,
+  NNGQueue,
 }
 
 export { NNG }
