@@ -3,6 +3,7 @@
  * Github: https://github.com/LotusiaStewardship
  * License: MIT
  */
+import { MAX_OP_RETURN_DATA } from '../utils/constants'
 // RANK script types
 type ScriptChunkLokadUTF8 = 'RANK' | 'RNKC'
 type ScriptChunkPlatformUTF8 = 'lotusia' | 'twitter'
@@ -583,7 +584,7 @@ class ScriptProcessor {
 
     // Check profileId (must exist and be valid for the platform)
     const profileId = this.processProfileId()
-    if (!profileId || !platform || !PLATFORMS[platform]?.profileId) {
+    if (!profileId) {
       return false
     }
 
@@ -609,13 +610,19 @@ class ScriptProcessor {
 
     // Check profileId (must exist and be valid for the platform)
     const profileId = this.processProfileId()
-    if (!profileId || !platform || !PLATFORMS[platform]?.profileId) {
+    if (!profileId) {
       return false
     }
 
     // Check postId (must exist and be valid for the platform)
     const postId = this.processPostId()
-    if (!postId || !platform || !PLATFORMS[platform]?.postId) {
+    if (!postId) {
+      return false
+    }
+
+    // Process comment and set it in the output if it exists
+    const comment = this.processComment()
+    if (!comment) {
       return false
     }
 
@@ -624,6 +631,7 @@ class ScriptProcessor {
       platform,
       profileId,
       postId,
+      comment,
     } as TransactionOutputRNKC
 
     return true
@@ -659,11 +667,6 @@ class ScriptProcessor {
           return null
         }
         output = this.processedOutput! as TransactionOutputRNKC
-        // Process comment and set it in the output if it exists
-        const comment = this.processComment()
-        if (comment) {
-          output.comment = comment
-        }
         break
       }
     }
