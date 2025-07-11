@@ -35,6 +35,13 @@ const NNG_MESSAGE_BATCH_SIZE = 10
 const NNG_SOCKET_TYPES = ['sub', 'req']
 
 /**
+ * Lotus constants
+ */
+/** Maximum relay size of an OP_RETURN transaction output, in bytes (OP_RETURN + pushdata ops + data) */
+const MAX_OP_RETURN_RELAY = 223
+const MAX_OP_RETURN_DATA = 220
+
+/**
  * RANK script configuration
  */
 /** Minimum RANK burn value in sats */
@@ -85,6 +92,9 @@ export {
   NNG_REQUEST_TIMEOUT_LENGTH,
   NNG_MESSAGE_BATCH_SIZE,
   NNG_SOCKET_TYPES,
+  // Lotus constants
+  MAX_OP_RETURN_RELAY,
+  MAX_OP_RETURN_DATA,
   // RANK script configuration
   RANK_OUTPUT_MIN_VALID_SATS,
   RANK_BLOCK_GENESIS_V1,

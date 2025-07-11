@@ -377,8 +377,85 @@ function toScriptRANK(
     // Append the postId
     script += toPostIdBuf(platform, postId)!.toString('hex')
   }
-  return script
+  return Buffer.from(script, 'hex')
 }
+
+/**
+ * Create a hex-encoded RANK Comment script from the given parameters
+ *
+ * RNKC requires 2 output scripts at minimum, so we return output scripts in an
+ * array of `Buffer` objects according to outIdx.
+ * @param platform - The platform to use
+ * @param profileId - The profile ID to use
+ * @param postId - The post ID to use
+ * @param comment - The comment to use
+ * @returns The hex-encoded RANK Comment script
+ */
+function toScriptRNKC(
+  platform: ScriptChunkPlatformUTF8,
+  profileId: string,
+  postId: string,
+  comment: string,
+): Buffer[] {
+  // validate platform and profileId
+  if (!platform || !profileId) {
+    throw new Error('Must specify platform and profileId')
+  }
+  if (!PLATFORMS[platform]) {
+    throw new Error('Invalid platform specified')
+  }
+  const platformSpec = PLATFORMS[platform]
+  if (!platformSpec.profileId) {
+    throw new Error('No platform profileId specification defined')
+  }
+  if (!platformSpec.postId) {
+    throw new Error('No platform postId specification defined')
+  }
+  if (comment.length < 1 || comment.length > MAX_OP_RETURN_DATA * 2) {
+    throw new Error(
+      `Comment must be between 1 and ${MAX_OP_RETURN_DATA * 2} bytes`,
+    )
+  }
+  const scriptBufs: Buffer[] = []
+  // create the script (OP_RETURN + push op + LOKAD prefix)
+  let scriptRNKC = '6a' + '04' + LOKAD_PREFIX_RNKC.toString(16)
+  // Append the push op and platform byte
+  scriptRNKC += '01' + toPlatformBuf(platform)!.toString('hex')
+  // Append the push op for profileId length
+  scriptRNKC += platformSpec.profileId.len.toString(16).padStart(2, '0')
+  // Append the padded profileId
+  scriptRNKC += toProfileIdBuf(platform, profileId)!.toString('hex')
+  // Append the push op for postId length
+  scriptRNKC += platformSpec.postId.len.toString(16).padStart(2, '0')
+  // Append the postId
+  scriptRNKC += toPostIdBuf(platform, postId)!.toString('hex')
+  scriptBufs.push(Buffer.from(scriptRNKC, 'hex'))
+
+  // create the comment script(s)
+  const commentBuf = Buffer.from(comment, 'utf8')
+  const commentBuf1 = commentBuf.subarray(0, MAX_OP_RETURN_DATA)
+  // create the first comment script
+  let scriptComment = '6a' + '4c'
+  // Append the push op for comment length
+  scriptComment += commentBuf1.length.toString(16).padStart(2, '0')
+  // Append the comment
+  scriptComment += commentBuf1.toString('hex')
+  scriptBufs.push(Buffer.from(scriptComment, 'hex'))
+
+  // create the second comment script if necessary
+  if (commentBuf.length > MAX_OP_RETURN_DATA) {
+    const commentBuf2 = commentBuf.subarray(MAX_OP_RETURN_DATA)
+    let scriptComment2 = '6a' + '4c'
+    // Append the push op for comment length
+    scriptComment2 += commentBuf2.length.toString(16).padStart(2, '0')
+    // Append the comment
+    scriptComment2 += commentBuf2.toString('hex')
+    scriptBufs.push(Buffer.from(scriptComment2, 'hex'))
+  }
+
+  return scriptBufs
+}
+
 /**
  * API operations
  */
@@ -725,6 +802,7 @@ export {
   toSentimentUTF8,
   toCommentUTF8,
   toScriptRANK,
+  toScriptRNKC,
   // API
   API,
   // Classes
