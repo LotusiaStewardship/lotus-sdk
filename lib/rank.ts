@@ -3,7 +3,7 @@
  * Github: https://github.com/LotusiaStewardship
  * License: MIT
  */
-import { MAX_OP_RETURN_DATA } from '../utils/constants'
+import { MAX_OP_RETURN_DATA, opcodes } from '../utils/constants'
 // RANK script types
 type ScriptChunkLokadUTF8 = 'RANK' | 'RNKC'
 type ScriptChunkPlatformUTF8 = 'lotusia' | 'twitter'
@@ -121,9 +121,9 @@ const SCRIPT_CHUNK_LOKAD: ScriptChunkLokadMap = new Map()
 SCRIPT_CHUNK_LOKAD.set(LOKAD_PREFIX_RANK, 'RANK') // RANK v1
 SCRIPT_CHUNK_LOKAD.set(LOKAD_PREFIX_RNKC, 'RNKC') // RANK Comment
 // SCRIPT_CHUNK_LOKAD.set(0x524e4b32, 'RNK2') // RANK v2
-const RANK_SENTIMENT_NEUTRAL = 0x60 // OP_16
-const RANK_SENTIMENT_POSITIVE = 0x51 // OP_1 | OP_TRUE
-const RANK_SENTIMENT_NEGATIVE = 0x00 // OP_0 | OP_FALSE
+const RANK_SENTIMENT_NEUTRAL = opcodes.OP_16
+const RANK_SENTIMENT_POSITIVE = opcodes.OP_1
+const RANK_SENTIMENT_NEGATIVE = opcodes.OP_0
 /** Sentiment chunk map */
 const SCRIPT_CHUNK_SENTIMENT: ScriptChunkSentimentMap = new Map()
 SCRIPT_CHUNK_SENTIMENT.set(RANK_SENTIMENT_NEUTRAL, 'neutral')
@@ -469,33 +469,44 @@ const API = {
 
 /**
  * Processor for defined LOKAD protocols (RANK, RNKC, etc.)
- * @param scripts - The scripts to process
- * @returns The output of the script or null if required chunks are invalid
+ * @param script - The script to process, as a `Buffer`
  */
 class ScriptProcessor {
-  private chunks: Map<string, ScriptChunk>
+  private chunks: Map<ScriptChunkField, ScriptChunk>
   /** The LOKAD type */
-  public lokadType: ScriptChunkLokadUTF8 | undefined
-  // Scripts for each output index
-  private scripts: Buffer[]
+  public lokad: ScriptChunkLokadUTF8 | undefined
+  /** The script to process, as a `Buffer` */
+  private script: Buffer
+  /** Supplemental scripts, e.g. outIdx 1 and/or 2 for RNKC */
+  private supplementalScripts: Buffer[] = []
 
-  constructor(scripts: Buffer[]) {
-    this.scripts = scripts
-    this.lokadType = this.processLokad()
-    if (!this.lokadType) {
-      throw new Error('Invalid LOKAD type')
-    }
-    switch (this.lokadType) {
+  constructor(script: Buffer) {
+    this.script = script
+    this.lokad = this.processLokad()
+    switch (this.lokad) {
       case 'RANK':
         this.chunks = ScriptChunksRANKMap
         break
       case 'RNKC':
         this.chunks = ScriptChunksRNKCMap
+        break
+      default:
+        throw new Error(
+          `Invalid LOKAD type for script: ${this.script.toString('hex')}`,
+        )
     }
   }
 
   /**
-   * Process the RANK script
+   * Add a supplemental script to the processor
+   * @param script - The script to add, as a `Buffer`
+   */
+  addScript(script: Buffer) {
+    this.supplementalScripts.push(script)
+  }
+
+  /**
+   * Process the RANK script and return the output
    * @returns The processed RANK output or null if invalid
    */
   get outputRANK(): TransactionOutputRANK | null {
@@ -503,10 +514,19 @@ class ScriptProcessor {
   }
 
   /**
-   * Process the RNKC script
+   * Process the RNKC script and return the output
    * @returns The processed RNKC output or null if invalid
    */
   get outputRNKC(): TransactionOutputRNKC | null {
+    // RNKC must have 1 or 2 supplemental scripts
+    if (
+      this.supplementalScripts.length === 0 ||
+      this.supplementalScripts.length > 2
+    ) {
+      throw new Error(
+        'RNKC must have 1 or 2 supplemental OP_RETURN scripts (outIdx 1 and/or 2)',
+      )
+    }
     return this.processScriptRNKC()
   }
 
@@ -515,8 +535,8 @@ class ScriptProcessor {
    * @param outIdx - The output index to check
    * @returns true if the output is an OP_RETURN, false otherwise
    */
-  isOpReturn(outIdx: number): boolean {
-    return this.scripts[outIdx].readUInt8(0) === 0x6a // OP_RETURN
+  isOpReturn(script: Buffer): boolean {
+    return script.readUInt8(0) === 0x6a // OP_RETURN
   }
 
   /**
@@ -525,11 +545,11 @@ class ScriptProcessor {
    */
   processLokad(): ScriptChunkLokadUTF8 | undefined {
     // Always check the first output index for OP_RETURN
-    if (!this.isOpReturn(0)) {
+    if (!this.isOpReturn(this.script)) {
       return undefined
     }
     // LOKAD is 4 bytes at offset 2 (OP_RETURN <PUSH OP> <4-byte LOKAD>)
-    const lokadBuf = this.scripts[0].subarray(2, 6)
+    const lokadBuf = this.script.subarray(2, 6)
     const lokad = SCRIPT_CHUNK_LOKAD.get(lokadBuf.readUInt32BE(0))
     if (!lokad) {
       return undefined
@@ -542,8 +562,11 @@ class ScriptProcessor {
    * @returns The sentiment value or undefined if invalid
    */
   processSentiment(): ScriptChunkSentimentUTF8 | undefined {
-    const chunk = this.chunks.get('sentiment') as ScriptChunk
-    const sentimentBuf = this.scripts[0].subarray(
+    const chunk = this.chunks.get('sentiment')
+    if (!chunk || chunk.offset === null) {
+      return undefined
+    }
+    const sentimentBuf = this.script.subarray(
       chunk.offset!,
       chunk.offset! + chunk.len!,
     )
@@ -555,8 +578,11 @@ class ScriptProcessor {
    * @returns The platform value or undefined if invalid
    */
   processPlatform(): ScriptChunkPlatformUTF8 | undefined {
-    const chunk = this.chunks.get('platform') as ScriptChunk
-    const platformBuf = this.scripts[0].subarray(
+    const chunk = this.chunks.get('platform')
+    if (!chunk || chunk.offset === null) {
+      return undefined
+    }
+    const platformBuf = this.script.subarray(
       chunk.offset!,
       chunk.offset! + chunk.len!,
     )
@@ -583,7 +609,7 @@ class ScriptProcessor {
     }
 
     const profileIdSpec = platformSpec.profileId
-    const profileIdBuf = this.scripts[0].subarray(
+    const profileIdBuf = this.script.subarray(
       chunk.offset,
       chunk.offset + profileIdSpec.len,
     )
@@ -618,7 +644,7 @@ class ScriptProcessor {
     // Calculate postId offset: profileId offset + profileId length + push opcode (1 byte)
     const postIdSpec = platformSpec.postId
     const postIdOffset = profileIdChunk.offset + platformSpec.profileId.len + 1
-    const postIdBuf = this.scripts[0].subarray(
+    const postIdBuf = this.script.subarray(
       postIdOffset,
       postIdOffset + postIdSpec.len,
     )
@@ -639,13 +665,29 @@ class ScriptProcessor {
 
   /**
    * Process the RNKC comment chunks (outIdx 1 and 2)
+   * @param scripts - outIdx 1 and 2 scripts, if outIdx 0 is RNKC
    * @returns The comment value or null if invalid
    */
-  processComment(): string | null {
+  processComment(scripts: Buffer[]): string | null {
     // If there are 3 scripts, concatenate outIdx 1 and 2, otherwise just use outIdx 1
     let commentBuf: Buffer = Buffer.alloc(0)
-    for (let i = 1; i < this.scripts.length; i++) {
-      commentBuf = Buffer.concat([commentBuf, this.scripts[i].subarray(3)])
+    for (let i = 0; i < scripts.length; i++) {
+      const script = scripts[i]
+      // Comment output scripts must be OP_RETURN
+      if (!this.isOpReturn(script)) {
+        return null
+      }
+      // OP_RETURN must be followed by OP_PUSHDATA1 (1 byte)
+      if (script.readUInt8(1) !== opcodes.OP_PUSHDATA1) {
+        return null
+      }
+      // OP_PUSHDATA1 must be followed by the data size (1 byte)
+      const dataSize = script.readUInt8(2)
+      if (isNaN(dataSize) || dataSize > MAX_OP_RETURN_DATA) {
+        return null
+      }
+      // Concatenate the comment buffer with the script data
+      commentBuf = Buffer.concat([commentBuf, script.subarray(3, 3 + dataSize)])
     }
     if (!commentBuf) {
       return null
@@ -715,7 +757,7 @@ class ScriptProcessor {
     }
 
     // Process comment and set it in the output if it exists
-    const comment = this.processComment()
+    const comment = this.processComment(this.supplementalScripts)
     if (!comment) {
       return null
     }
