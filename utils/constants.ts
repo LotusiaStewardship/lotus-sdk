@@ -37,9 +37,12 @@ const NNG_SOCKET_TYPES = ['sub', 'req']
 /**
  * Lotus constants
  */
-/** Maximum relay size of an OP_RETURN transaction output, in bytes (OP_RETURN + pushdata ops + data) */
+/** Maximum relay size of an OP_RETURN payload, in bytes (OP_RETURN + OP_PUSHDATA1 + data) */
 const MAX_OP_RETURN_RELAY = 223
+/** Maximum data size of the OP_RETURN payload, in bytes (OP_PUSHDATA1 + data) */
 const MAX_OP_RETURN_DATA = 220
+/** Maximum number of OP_RETURN outputs allowed in a transaction by consensus */
+const MAX_OP_RETURN_OUTPUTS = 3
 
 /**
  * RANK script configuration
@@ -80,28 +83,28 @@ const PlatformURL: {
 /**
  * Opcode constants
  */
-const opcodes = {
-  OP_RETURN: 0x6a,
-  OP_PUSHDATA1: 0x4c,
+enum OpCodes {
+  OP_RETURN = 0x6a,
+  OP_PUSHDATA1 = 0x4c,
   // RANK sentiments
-  OP_0: 0x00, // negative
-  OP_1: 0x51, // positive
-  OP_2: 0x52,
-  OP_3: 0x53,
-  OP_4: 0x54,
-  OP_5: 0x55,
-  OP_6: 0x56,
-  OP_7: 0x57,
-  OP_8: 0x58,
-  OP_9: 0x59,
-  OP_10: 0x5a,
-  OP_11: 0x5b,
-  OP_12: 0x5c,
-  OP_13: 0x5d,
-  OP_14: 0x5e,
-  OP_15: 0x5f,
-  OP_16: 0x60, // neutral
-} as const
+  OP_0 = 0x00, // negative
+  OP_1 = 0x51, // positive
+  OP_2 = 0x52,
+  OP_3 = 0x53,
+  OP_4 = 0x54,
+  OP_5 = 0x55,
+  OP_6 = 0x56,
+  OP_7 = 0x57,
+  OP_8 = 0x58,
+  OP_9 = 0x59,
+  OP_10 = 0x5a,
+  OP_11 = 0x5b,
+  OP_12 = 0x5c,
+  OP_13 = 0x5d,
+  OP_14 = 0x5e,
+  OP_15 = 0x5f,
+  OP_16 = 0x60, // neutral
+}
 
 export {
   // API URLs
@@ -121,7 +124,8 @@ export {
   // Lotus constants
   MAX_OP_RETURN_RELAY,
   MAX_OP_RETURN_DATA,
-  opcodes,
+  MAX_OP_RETURN_OUTPUTS,
+  OpCodes,
   // RANK script configuration
   RANK_OUTPUT_MIN_VALID_SATS,
   RANK_BLOCK_GENESIS_V1,

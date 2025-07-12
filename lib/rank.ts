@@ -3,7 +3,8 @@
  * Github: https://github.com/LotusiaStewardship
  * License: MIT
  */
-import { MAX_OP_RETURN_DATA, opcodes } from '../utils/constants'
+import { MAX_OP_RETURN_DATA, OpCodes } from '../utils/constants'
+import { toHex } from '../utils/functions'
 // RANK script types
 type ScriptChunkLokadUTF8 = 'RANK' | 'RNKC'
 type ScriptChunkPlatformUTF8 = 'lotusia' | 'twitter'
@@ -121,9 +122,9 @@ const SCRIPT_CHUNK_LOKAD: ScriptChunkLokadMap = new Map()
 SCRIPT_CHUNK_LOKAD.set(LOKAD_PREFIX_RANK, 'RANK') // RANK v1
 SCRIPT_CHUNK_LOKAD.set(LOKAD_PREFIX_RNKC, 'RNKC') // RANK Comment
 // SCRIPT_CHUNK_LOKAD.set(0x524e4b32, 'RNK2') // RANK v2
-const RANK_SENTIMENT_NEUTRAL = opcodes.OP_16
-const RANK_SENTIMENT_POSITIVE = opcodes.OP_1
-const RANK_SENTIMENT_NEGATIVE = opcodes.OP_0
+const RANK_SENTIMENT_NEUTRAL = OpCodes.OP_16
+const RANK_SENTIMENT_POSITIVE = OpCodes.OP_1
+const RANK_SENTIMENT_NEGATIVE = OpCodes.OP_0
 /** Sentiment chunk map */
 const SCRIPT_CHUNK_SENTIMENT: ScriptChunkSentimentMap = new Map()
 SCRIPT_CHUNK_SENTIMENT.set(RANK_SENTIMENT_NEUTRAL, 'neutral')
@@ -193,30 +194,28 @@ ScriptChunksOptionalRANKMap.set('instanceId', {
   len: null,
 })
 /** Platform configuration */
-const PLATFORMS: {
-  [name in ScriptChunkPlatformUTF8]: Partial<PlatformParameters>
-} = {
-  lotusia: {
-    profileId: {
-      len: 20, // 20-byte P2PKH address
-    },
-    postId: {
-      len: 32, // 32-byte sha256 hash
-      regex: /^[0-9a-f]{64}$/,
-      type: 'String',
-    },
+const PlatformConfiguration: Map<ScriptChunkPlatformUTF8, PlatformParameters> =
+  new Map()
+PlatformConfiguration.set('lotusia', {
+  profileId: {
+    len: 20, // 20-byte P2PKH address
   },
-  twitter: {
-    profileId: {
-      len: 16,
-    },
-    postId: {
-      len: 8, // 64-bit uint: https://developer.x.com/en/docs/x-ids
-      regex: /^[0-9]+$/,
-      type: 'BigInt',
-    },
+  postId: {
+    len: 32, // 32-byte sha256 hash
+    regex: /^[0-9a-f]{64}$/,
+    type: 'String',
   },
-}
+})
+PlatformConfiguration.set('twitter', {
+  profileId: {
+    len: 16,
+  },
+  postId: {
+    len: 8, // 64-bit uint: https://developer.x.com/en/docs/x-ids
+    regex: /^[0-9]+$/,
+    type: 'BigInt',
+  },
+})
 
 /**
  * RANK script utilities
@@ -232,7 +231,7 @@ function toProfileIdBuf(
   platform: ScriptChunkPlatformUTF8,
   profileId: string,
 ): Buffer | null {
-  const platformSpec = PLATFORMS[platform]
+  const platformSpec = PlatformConfiguration.get(platform)
   if (!platformSpec) {
     return null
   }
@@ -339,33 +338,32 @@ function toScriptRANK(
   if (!sentiment || !platform || !profileId) {
     throw new Error('Must specify sentiment, platform, and profileId')
   }
-  if (!PLATFORMS[platform]) {
-    throw new Error('Invalid platform specified')
-  }
-  const platformSpec = PLATFORMS[platform]
-  if (!platformSpec.profileId) {
+  const platformSpec = PlatformConfiguration.get(platform)
+  if (!platformSpec || !platformSpec.profileId) {
     throw new Error('No platform profileId specification defined')
   }
   // create the script (OP_RETURN + push op + LOKAD prefix)
-  let script = '6a' + '04' + LOKAD_PREFIX_RANK.toString(16)
+  const OP_RETURN = toHex(OpCodes.OP_RETURN)
+  const LOKAD_PREFIX = toHex(LOKAD_PREFIX_RANK)
+  let script = OP_RETURN + toHex(4) + LOKAD_PREFIX
   // Append the sentiment op code
   switch (sentiment) {
     case 'neutral':
-      script += RANK_SENTIMENT_NEUTRAL.toString(16)
+      script += toHex(RANK_SENTIMENT_NEUTRAL)
       break
     case 'positive':
-      script += RANK_SENTIMENT_POSITIVE.toString(16)
+      script += toHex(RANK_SENTIMENT_POSITIVE)
       break
     case 'negative':
-      script += RANK_SENTIMENT_NEGATIVE.toString(16)
+      script += toHex(RANK_SENTIMENT_NEGATIVE)
       break
   }
   // Append the push op and platform byte
-  script += '01' + toPlatformBuf(platform)!.toString('hex')
+  script += toHex(1) + toHex(toPlatformBuf(platform)!)
   // Append the push op for profileId length
-  script += platformSpec.profileId.len.toString(16).padStart(2, '0')
+  script += toHex(platformSpec.profileId.len)
   // Append the padded profileId
-  script += toProfileIdBuf(platform, profileId)!.toString('hex') // push profileId
+  script += toHex(toProfileIdBuf(platform, profileId)!) // push profileId
   // If postId is provided, append the postId according to the platform specification
   if (postId) {
     if (!platformSpec.postId) {
@@ -374,9 +372,9 @@ function toScriptRANK(
       )
     }
     // Append the push op for postId length
-    script += platformSpec.postId.len.toString(16).padStart(2, '0')
+    script += toHex(platformSpec.postId.len)
     // Append the postId
-    script += toPostIdBuf(platform, postId)!.toString('hex')
+    script += toHex(toPostIdBuf(platform, postId)!)
   }
   return Buffer.from(script, 'hex')
 }
@@ -402,11 +400,8 @@ function toScriptRNKC(
   if (!platform || !profileId) {
     throw new Error('Must specify platform and profileId')
   }
-  if (!PLATFORMS[platform]) {
-    throw new Error('Invalid platform specified')
-  }
-  const platformSpec = PLATFORMS[platform]
-  if (!platformSpec.profileId) {
+  const platformSpec = PlatformConfiguration.get(platform)
+  if (!platformSpec || !platformSpec.profileId) {
     throw new Error('No platform profileId specification defined')
   }
   if (!platformSpec.postId) {
@@ -419,52 +414,45 @@ function toScriptRNKC(
   }
   const scriptBufs: Buffer[] = []
   // create the script (OP_RETURN + push op + LOKAD prefix)
-  let scriptRNKC = '6a' + '04' + LOKAD_PREFIX_RNKC.toString(16)
+  const OP_RETURN = toHex(OpCodes.OP_RETURN)
+  const OP_PUSHDATA1 = toHex(OpCodes.OP_PUSHDATA1)
+  const LOKAD_PREFIX = toHex(LOKAD_PREFIX_RNKC)
+  let scriptRNKC = OP_RETURN + toHex(4) + LOKAD_PREFIX
   // Append the push op and platform byte
-  scriptRNKC += '01' + toPlatformBuf(platform)!.toString('hex')
+  scriptRNKC += toHex(1) + toHex(toPlatformBuf(platform)!)
   // Append the push op for profileId length
-  scriptRNKC += platformSpec.profileId.len.toString(16).padStart(2, '0')
+  scriptRNKC += toHex(platformSpec.profileId.len)
   // Append the padded profileId
-  scriptRNKC += toProfileIdBuf(platform, profileId)!.toString('hex')
+  scriptRNKC += toHex(toProfileIdBuf(platform, profileId)!)
   // Append the push op for postId length
-  scriptRNKC += platformSpec.postId.len.toString(16).padStart(2, '0')
+  scriptRNKC += toHex(platformSpec.postId.len)
   // Append the postId
-  scriptRNKC += toPostIdBuf(platform, postId)!.toString('hex')
+  scriptRNKC += toHex(toPostIdBuf(platform, postId)!)
   scriptBufs.push(Buffer.from(scriptRNKC, 'hex'))
 
   // create the comment script(s)
   const commentBuf = Buffer.from(comment, 'utf8')
   const commentBuf1 = commentBuf.subarray(0, MAX_OP_RETURN_DATA)
   // create the first comment script
-  let scriptComment = '6a' + '4c'
+  let scriptComment = OP_RETURN + OP_PUSHDATA1
   // Append the push op for comment length
-  scriptComment += commentBuf1.length.toString(16).padStart(2, '0')
+  scriptComment += toHex(commentBuf1.length)
   // Append the comment
-  scriptComment += commentBuf1.toString('hex')
+  scriptComment += toHex(commentBuf1)
   scriptBufs.push(Buffer.from(scriptComment, 'hex'))
 
   // create the second comment script if necessary
   if (commentBuf.length > MAX_OP_RETURN_DATA) {
     const commentBuf2 = commentBuf.subarray(MAX_OP_RETURN_DATA)
-    let scriptComment2 = '6a' + '4c'
+    let scriptComment2 = OP_RETURN + OP_PUSHDATA1
     // Append the push op for comment length
-    scriptComment2 += commentBuf2.length.toString(16).padStart(2, '0')
+    scriptComment2 += toHex(commentBuf2.length)
     // Append the comment
-    scriptComment2 += commentBuf2.toString('hex')
+    scriptComment2 += toHex(commentBuf2)
     scriptBufs.push(Buffer.from(scriptComment2, 'hex'))
   }
 
   return scriptBufs
-}
-
-/**
- * API operations
- */
-const API = {
-  auth: {
-    scheme: 'BlockDataSig',
-    param: ['blockhash', 'blockheight'],
-  },
 }
 
 /**
@@ -473,17 +461,20 @@ const API = {
  */
 class ScriptProcessor {
   private chunks: Map<ScriptChunkField, ScriptChunk>
-  /** The LOKAD type */
-  public lokad: ScriptChunkLokadUTF8 | undefined
   /** The script to process, as a `Buffer` */
   private script: Buffer
   /** Supplemental scripts, e.g. outIdx 1 and/or 2 for RNKC */
   private supplementalScripts: Buffer[] = []
 
   constructor(script: Buffer) {
+    // Script must be OP_RETURN
+    if (!this.isOpReturn(script)) {
+      throw new Error('Script must be OP_RETURN')
+    }
+    // Accept the script for further processing
     this.script = script
-    this.lokad = this.processLokad()
-    switch (this.lokad) {
+    // Set chunk definitions based on LOKAD type
+    switch (this.lokadType) {
       case 'RANK':
         this.chunks = ScriptChunksRANKMap
         break
@@ -491,18 +482,27 @@ class ScriptProcessor {
         this.chunks = ScriptChunksRNKCMap
         break
       default:
-        throw new Error(
-          `Invalid LOKAD type for script: ${this.script.toString('hex')}`,
-        )
+        throw new Error(`Invalid or undefined LOKAD type for script`)
     }
   }
 
   /**
-   * Add a supplemental script to the processor
+   * Add a supplemental OP_RETURN script to the processor
    * @param script - The script to add, as a `Buffer`
    */
   addScript(script: Buffer) {
+    if (!this.isOpReturn(script)) {
+      throw new Error('Script must be OP_RETURN')
+    }
     this.supplementalScripts.push(script)
+  }
+
+  /**
+   * Get the LOKAD type from the script
+   * @returns The LOKAD type or undefined if invalid
+   */
+  get lokadType(): ScriptChunkLokadUTF8 | undefined {
+    return this.processLokad()
   }
 
   /**
@@ -544,10 +544,6 @@ class ScriptProcessor {
    * @returns The LOKAD value or undefined if invalid
    */
   processLokad(): ScriptChunkLokadUTF8 | undefined {
-    // Always check the first output index for OP_RETURN
-    if (!this.isOpReturn(this.script)) {
-      return undefined
-    }
     // LOKAD is 4 bytes at offset 2 (OP_RETURN <PUSH OP> <4-byte LOKAD>)
     const lokadBuf = this.script.subarray(2, 6)
     const lokad = SCRIPT_CHUNK_LOKAD.get(lokadBuf.readUInt32BE(0))
@@ -603,8 +599,8 @@ class ScriptProcessor {
       return undefined
     }
 
-    const platformSpec = PLATFORMS[platform]
-    if (!platformSpec?.profileId) {
+    const platformSpec = PlatformConfiguration.get(platform)
+    if (!platformSpec || !platformSpec.profileId) {
       return undefined
     }
 
@@ -631,8 +627,8 @@ class ScriptProcessor {
       return null
     }
 
-    const platformSpec = PLATFORMS[platform]
-    if (!platformSpec.postId || !platformSpec.profileId) {
+    const platformSpec = PlatformConfiguration.get(platform)
+    if (!platformSpec || !platformSpec.postId || !platformSpec.profileId) {
       return null
     }
 
@@ -678,7 +674,7 @@ class ScriptProcessor {
         return null
       }
       // OP_RETURN must be followed by OP_PUSHDATA1 (1 byte)
-      if (script.readUInt8(1) !== opcodes.OP_PUSHDATA1) {
+      if (script.readUInt8(1) !== OpCodes.OP_PUSHDATA1) {
         return null
       }
       // OP_PUSHDATA1 must be followed by the data size (1 byte)
@@ -798,7 +794,7 @@ export type {
 
 export {
   // Constants
-  PLATFORMS,
+  PlatformConfiguration,
   SCRIPT_CHUNK_LOKAD,
   SCRIPT_CHUNK_PLATFORM,
   SCRIPT_CHUNK_SENTIMENT,
@@ -826,8 +822,6 @@ export {
   toCommentUTF8,
   toScriptRANK,
   toScriptRNKC,
-  // API
-  API,
   // Classes
   ScriptProcessor,
 }

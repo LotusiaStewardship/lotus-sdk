@@ -37,6 +37,12 @@ type IndexedPostRanking = IndexedProfileRanking & {
   postMeta?: PostMeta
 }
 
+/** Authentication header parameters provided to client for authorization to API */
+const AuthenticateHeader = {
+  scheme: 'BlockDataSig',
+  param: ['blockhash', 'blockheight'],
+}
+
 export type {
   InstanceData,
   AuthorizationData,
@@ -44,4 +50,6 @@ export type {
   RankAPIParams,
   IndexedProfileRanking,
   IndexedPostRanking,
+  // Authentication headers
+  AuthenticateHeader,
 }
