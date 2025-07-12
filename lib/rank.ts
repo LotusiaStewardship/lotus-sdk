@@ -67,6 +67,7 @@ type TransactionOutputRNKC = {
 /**  */
 type RankTransaction = TransactionOutputRANK & {
   txid: string
+  outIdx: number // index of the output that contains the RANK data
   firstSeen: bigint // time first seen by indexer, only for new mempool transactions
   scriptPayload: string
   height?: number // undefined if mempool
@@ -98,7 +99,7 @@ type Profile = RankTarget & {
 type Post = RankTarget & {
   profileId: string
   /** The hash of the post content (i.e. RankOutput['postHash']) */
-  hash: string
+  // hash: string
 }
 
 /** Platform parameters */
