@@ -6,6 +6,7 @@
 export * from './lib/rpc'
 export * from './lib/rank'
 export * from './lib/nng'
+export * from './lib/api'
 export * from './utils/constants'
 export * from './utils/functions'
 //export * from './utils/settings'

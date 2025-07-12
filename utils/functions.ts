@@ -13,7 +13,7 @@ import { ScriptChunkPlatformUTF8, ScriptChunkSentimentUTF8 } from '../lib/rank'
  * @param collection - The collection to convert
  * @returns The async iterable
  */
-async function* toAsyncIterable<T>(collection: Iterable<T>) {
+export async function* toAsyncIterable<T>(collection: Iterable<T>) {
   for (const item of collection) {
     yield item
   }
@@ -24,7 +24,7 @@ async function* toAsyncIterable<T>(collection: Iterable<T>) {
  * @param ip - The IP address to get the GeoIP data for
  * @returns The GeoIP data for the IP address
  */
-async function getGeoIP(ip: string) {
+export async function getGeoIP(ip: string) {
   const response = await fetch(`${NODE_GEOIP_URL}/${ip}`)
   const json = (await response.json()) as GeoIPResponse
   return json.success ? json.data : {}
@@ -35,7 +35,7 @@ async function getGeoIP(ip: string) {
  * @param str - The sha256 hash to validate
  * @returns Whether the sha256 hash is valid
  */
-function isSha256(str: string) {
+export function isSha256(str: string) {
   return str.match(/^[a-f0-9]{64}$/)
 }
 
@@ -44,7 +44,7 @@ function isSha256(str: string) {
  * @param data - The data to convert
  * @returns The hex string
  */
-function toHex(data: number | string | Buffer) {
+export function toHex(data: number | string | Buffer) {
   switch (typeof data) {
     case 'number':
       return data.toString(16).padStart(2, '0')
@@ -63,7 +63,7 @@ function toHex(data: number | string | Buffer) {
  * @param sats - The number of sats to convert
  * @returns The number of XPI
  */
-function toXPIFromSats(sats: number | string) {
+export function toXPIFromSats(sats: number | string) {
   return Number(sats) / 1_000_000
 }
 
@@ -72,7 +72,7 @@ function toXPIFromSats(sats: number | string) {
  * @param xpi - The number of XPI to convert
  * @returns The number of sats
  */
-function toSatsFromXPI(xpi: number | string) {
+export function toSatsFromXPI(xpi: number | string) {
   return Number(xpi) * 1_000_000
 }
 
@@ -81,7 +81,7 @@ function toSatsFromXPI(xpi: number | string) {
  * @param sha256 - The sha256 hash to truncate
  * @returns The truncated sha256 hash
  */
-function truncateSha256(sha256: string) {
+export function truncateSha256(sha256: string) {
   return sha256.slice(0, 16) + '...' + sha256.slice(-6)
 }
 
@@ -90,7 +90,7 @@ function truncateSha256(sha256: string) {
  * @param txid - The transaction id to truncate
  * @returns The truncated transaction id
  */
-function truncateTxid(txid: string) {
+export function truncateTxid(txid: string) {
   return txid.slice(0, 16) + '...' + txid.slice(-6)
 }
 
@@ -99,7 +99,7 @@ function truncateTxid(txid: string) {
  * @param address - The address to truncate
  * @returns The truncated address
  */
-function truncateAddress(address: string) {
+export function truncateAddress(address: string) {
   return address.slice(0, 17) + '...' + address.slice(-6)
 }
 
@@ -108,7 +108,7 @@ function truncateAddress(address: string) {
  * @param blockHash - The block hash to truncate
  * @returns The truncated block hash
  */
-function truncateBlockHash(blockHash: string) {
+export function truncateBlockHash(blockHash: string) {
   return blockHash.slice(0, 1) + '...' + blockHash.slice(-16)
 }
 
@@ -118,7 +118,7 @@ function truncateBlockHash(blockHash: string) {
  * @param blockHeight - The height of the block
  * @returns The number of blocks from the tip to the block height
  */
-function numBlocksFromTip(tipHeight: number, blockHeight: number) {
+export function numBlocksFromTip(tipHeight: number, blockHeight: number) {
   return tipHeight - blockHeight + 1
 }
 
@@ -127,7 +127,7 @@ function numBlocksFromTip(tipHeight: number, blockHeight: number) {
  * @param timestamp - The timestamp to format
  * @returns The formatted timestamp
  */
-function formatTimestamp(timestamp: number | string) {
+export function formatTimestamp(timestamp: number | string) {
   const date = new Date(Number(timestamp) * 1000)
   return (
     date.toLocaleString('en-US', {
@@ -148,7 +148,7 @@ function formatTimestamp(timestamp: number | string) {
  * @param negative - The number of negative votes, in sats
  * @returns The minified percentage
  */
-function toMinifiedPercent(positive: string, negative: string): string {
+export function toMinifiedPercent(positive: string, negative: string): string {
   const positiveNum = BigInt(positive)
   const negativeNum = BigInt(negative)
   if (positiveNum === 0n && negativeNum === 0n) {
@@ -170,7 +170,7 @@ function toMinifiedPercent(positive: string, negative: string): string {
  * @param percentage - The percentage to convert
  * @returns The color
  */
-function toPercentColor(percentage: string): string {
+export function toPercentColor(percentage: string): string {
   const num = parseFloat(percentage)
   if (num <= 100 && num >= 90) {
     return 'green'
@@ -192,7 +192,7 @@ function toPercentColor(percentage: string): string {
  * @param number - The networkhashps to convert
  * @returns The minified hashrate
  */
-function toMinifiedNumber(
+export function toMinifiedNumber(
   type: 'hashrate' | 'blocksize',
   number: number | string,
 ): string {
@@ -231,7 +231,7 @@ function toMinifiedNumber(
  * @param time - The time to convert
  * @returns The minified time
  */
-function toMinifiedTime(seconds: number | string): string {
+export function toMinifiedTime(seconds: number | string): string {
   const num = Number(seconds)
   if (isNaN(num)) {
     return seconds.toString()
@@ -251,7 +251,7 @@ function toMinifiedTime(seconds: number | string): string {
  * @param change - The change to determine the color for
  * @returns The color
  */
-function getRankingColor(change: number): string {
+export function getRankingColor(change: number): string {
   return change > 0 ? 'green' : change < 0 ? 'red' : 'gray'
 }
 
@@ -260,7 +260,7 @@ function getRankingColor(change: number): string {
  * @param sentiment - The sentiment to get the color for
  * @returns The color
  */
-function getSentimentColor(sentiment: ScriptChunkSentimentUTF8): string {
+export function getSentimentColor(sentiment: ScriptChunkSentimentUTF8): string {
   switch (sentiment) {
     case 'positive':
       return 'green'
@@ -278,7 +278,7 @@ function getSentimentColor(sentiment: ScriptChunkSentimentUTF8): string {
  * @param divisor - The divisor to use
  * @returns The rate
  */
-function calculateRate(
+export function calculateRate(
   current: number,
   previous: number,
   divisor: number = 1_000_000,
@@ -291,7 +291,7 @@ function calculateRate(
  * @param rate - The rate to format
  * @returns The formatted rate
  */
-function formatRate(rate: number) {
+export function formatRate(rate: number) {
   if (!isFinite(rate)) return 'New'
   return `${Math.abs(rate).toFixed(1)}%`
 }
@@ -301,7 +301,7 @@ function formatRate(rate: number) {
  * @param str - The string to convert
  * @returns The string with the first letter converted to uppercase
  */
-function toUppercaseFirstLetter(str: string) {
+export function toUppercaseFirstLetter(str: string) {
   return str.charAt(0).toUpperCase() + str.slice(1)
 }
 
@@ -310,7 +310,7 @@ function toUppercaseFirstLetter(str: string) {
  * @param sentiment - The sentiment to convert
  * @returns The trending icon
  */
-function toTrendingIcon(sentiment: ScriptChunkSentimentUTF8) {
+export function toTrendingIcon(sentiment: ScriptChunkSentimentUTF8) {
   return sentiment === 'positive'
     ? 'i-mdi-arrow-up-thin'
     : 'i-mdi-arrow-down-thin'
@@ -322,7 +322,7 @@ function toTrendingIcon(sentiment: ScriptChunkSentimentUTF8) {
  * @param profileId - The profile ID to convert
  * @returns The profile URL
  */
-function toProfileUrl(platform: string, profileId: string) {
+export function toProfileUrl(platform: string, profileId: string) {
   return `/${platform}/${profileId}`
 }
 
@@ -333,7 +333,7 @@ function toProfileUrl(platform: string, profileId: string) {
  * @param postId - The post ID to convert
  * @returns The post URL
  */
-function toPostUrl(
+export function toPostUrl(
   platform: ScriptChunkPlatformUTF8,
   profileId: string,
   postId: string,
@@ -348,7 +348,7 @@ function toPostUrl(
  * @param postId - The post ID to convert
  * @returns The external post URL
  */
-function toExternalPostUrl(
+export function toExternalPostUrl(
   platform: ScriptChunkPlatformUTF8,
   profileId: string,
   postId: string,
@@ -362,7 +362,7 @@ function toExternalPostUrl(
  * @param divisor - The divisor to use
  * @returns The minified stat count
  */
-function toMinifiedStatCount(
+export function toMinifiedStatCount(
   number: number | string,
   divisor: number = 1_000_000,
 ) {
@@ -388,14 +388,14 @@ function toMinifiedStatCount(
  * @param postId - The post ID to truncate
  * @returns The truncated post ID
  */
-function truncatePostId(postId: string) {
+export function truncatePostId(postId: string) {
   return postId.length > 8 ? `${postId.substring(0, 8)}...` : postId
 }
 
 /**
  * Utility functions
  */
-const Util = {
+export const Util = {
   /** NNG operations */
   nng: {
     /**
@@ -481,37 +481,4 @@ const Util = {
       return crypto.randomUUID()
     },
   },
-}
-
-export {
-  // Functions
-  toAsyncIterable,
-  getGeoIP,
-  isSha256,
-  toHex,
-  toXPIFromSats,
-  toSatsFromXPI,
-  truncateSha256,
-  truncateTxid,
-  truncateAddress,
-  truncateBlockHash,
-  numBlocksFromTip,
-  formatTimestamp,
-  toMinifiedPercent,
-  toPercentColor,
-  toMinifiedNumber,
-  toMinifiedTime,
-  getRankingColor,
-  getSentimentColor,
-  calculateRate,
-  formatRate,
-  toUppercaseFirstLetter,
-  toTrendingIcon,
-  toProfileUrl,
-  toPostUrl,
-  toExternalPostUrl,
-  toMinifiedStatCount,
-  truncatePostId,
-  // Utilities
-  Util,
 }

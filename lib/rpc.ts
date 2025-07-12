@@ -8,7 +8,7 @@ import { RPC as settings } from '../utils/settings'
 /**
  * Individual JSON-RPC result types
  */
-type JSONRPCResult =
+export type JSONRPCResult =
   | string
   | string[]
   | number
@@ -22,7 +22,7 @@ type JSONRPCResult =
 /**
  * Raw JSON-RPC response from the RPC daemon
  */
-type JSONRPCResponse = {
+export type JSONRPCResponse = {
   result: JSONRPCResult
   error: null | {
     code: number
@@ -33,7 +33,7 @@ type JSONRPCResponse = {
 /**
  * Network information returned by the RPC daemon
  */
-type NetworkInfo = {
+export type NetworkInfo = {
   /** Subversion string */
   subversion: string
   /** Whether local relay is enabled */
@@ -49,7 +49,7 @@ type NetworkInfo = {
 /**
  * Mining information returned by the RPC daemon
  */
-type MiningInfo = {
+export type MiningInfo = {
   /** Current block height */
   blocks: number
   /** Current network difficulty */
@@ -67,7 +67,7 @@ type MiningInfo = {
 /**
  * Mempool information returned by the RPC daemon
  */
-type MempoolInfo = {
+export type MempoolInfo = {
   /** Whether the mempool is loaded */
   loaded: boolean
   /** Number of transactions in mempool */
@@ -89,7 +89,7 @@ type MempoolInfo = {
 /**
  * Peer connection information returned by the RPC daemon
  */
-type PeerInfo = {
+export type PeerInfo = {
   /** Peer address and port */
   addr: string
   /** Peer services as hex string */
@@ -142,7 +142,7 @@ type PeerInfo = {
 /**
  * Block statistics returned by the RPC daemon
  */
-type BlockStats = {
+export type BlockStats = {
   /** Average fee in the block */
   avgfee: number
   /** Average fee rate in the block */
@@ -198,7 +198,7 @@ type BlockStats = {
 /**
  * Block information returned by the RPC daemon
  */
-type BlockInfo = {
+export type BlockInfo = {
   /** Block hash */
   hash: string
   /** Number of confirmations */
@@ -224,7 +224,7 @@ type BlockInfo = {
 /**
  * Transaction input information
  */
-type TransactionInput = {
+export type TransactionInput = {
   /** Transaction ID */
   txid: string
   /** Output index */
@@ -236,7 +236,7 @@ type TransactionInput = {
 /**
  * Transaction output information
  */
-type TransactionOutput = {
+export type TransactionOutput = {
   /** Output value in coins */
   value: number
   /** Script public key information */
@@ -253,7 +253,7 @@ type TransactionOutput = {
 /**
  * Raw transaction information returned by the RPC daemon
  */
-type RawTransaction = {
+export type RawTransaction = {
   /** Transaction ID */
   txid: string
   /** Transaction size in bytes */
@@ -281,7 +281,7 @@ const rpcUrl = `http://${address}:${port}`
  * @param params - Array of parameters to pass to the RPC method
  * @returns Promise that resolves to the JSON response from the RPC daemon
  */
-async function sendRPCRequest(
+export async function sendRPCRequest(
   method: string,
   params: unknown[],
 ): Promise<JSONRPCResult> {
@@ -308,7 +308,7 @@ async function sendRPCRequest(
  * RPC command - `getmininginfo`
  * @returns {Promise<MiningInfo>} Raw mining information
  */
-async function getMiningInfo(): Promise<MiningInfo> {
+export async function getMiningInfo(): Promise<MiningInfo> {
   const result = await sendRPCRequest('getmininginfo', [])
   return result as MiningInfo
 }
@@ -317,7 +317,7 @@ async function getMiningInfo(): Promise<MiningInfo> {
  * RPC command - `getnetworkinfo`
  * @returns {Promise<NetworkInfo>} Network information
  */
-async function getNetworkInfo(): Promise<NetworkInfo> {
+export async function getNetworkInfo(): Promise<NetworkInfo> {
   const result = await sendRPCRequest('getnetworkinfo', [])
   return result as NetworkInfo
 }
@@ -326,7 +326,7 @@ async function getNetworkInfo(): Promise<NetworkInfo> {
  * RPC command - `getpeerinfo`
  * @returns {Promise<PeerInfo[]>} Array of peer connection information
  */
-async function getPeerInfo(): Promise<PeerInfo[]> {
+export async function getPeerInfo(): Promise<PeerInfo[]> {
   const result = await sendRPCRequest('getpeerinfo', [])
   return result as PeerInfo[]
 }
@@ -335,7 +335,7 @@ async function getPeerInfo(): Promise<PeerInfo[]> {
  * RPC command - `getblockcount`
  * @returns {Promise<number>} Current block count
  */
-async function getBlockCount(): Promise<number> {
+export async function getBlockCount(): Promise<number> {
   const result = await sendRPCRequest('getblockcount', [])
   return result as number
 }
@@ -345,7 +345,7 @@ async function getBlockCount(): Promise<number> {
  * @param {number} height - Block height
  * @returns {Promise<string>} Block hash for the given height
  */
-async function getBlockHash(height: number): Promise<string> {
+export async function getBlockHash(height: number): Promise<string> {
   const result = await sendRPCRequest('getblockhash', [height])
   return result as string
 }
@@ -355,7 +355,7 @@ async function getBlockHash(height: number): Promise<string> {
  * @param {string} hash - Block hash
  * @returns {Promise<BlockStats>} Block statistics
  */
-async function getBlockStats(hash: string): Promise<BlockStats> {
+export async function getBlockStats(hash: string): Promise<BlockStats> {
   const result = await sendRPCRequest('getblockstats', [hash])
   return result as BlockStats
 }
@@ -365,7 +365,7 @@ async function getBlockStats(hash: string): Promise<BlockStats> {
  * @param {string} hash - Block hash
  * @returns {Promise<Block>} Block information
  */
-async function getBlock(hash: string): Promise<BlockInfo> {
+export async function getBlock(hash: string): Promise<BlockInfo> {
   const result = await sendRPCRequest('getblock', [hash])
   return result as BlockInfo
 }
@@ -375,7 +375,7 @@ async function getBlock(hash: string): Promise<BlockInfo> {
  * @param {string} txid - Transaction ID
  * @returns {Promise<RawTransaction>} Raw transaction information
  */
-async function getRawTransaction(txid: string): Promise<RawTransaction> {
+export async function getRawTransaction(txid: string): Promise<RawTransaction> {
   const result = await sendRPCRequest('getrawtransaction', [txid, true])
   return result as RawTransaction
 }
@@ -384,7 +384,7 @@ async function getRawTransaction(txid: string): Promise<RawTransaction> {
  * RPC command - `getrawmempool`
  * @returns {Promise<string[]>} Array of transaction IDs in mempool
  */
-async function getRawMemPool(): Promise<string[]> {
+export async function getRawMemPool(): Promise<string[]> {
   const result = await sendRPCRequest('getrawmempool', [])
   return result as string[]
 }
@@ -393,34 +393,7 @@ async function getRawMemPool(): Promise<string[]> {
  * RPC command - `getmempoolinfo`
  * @returns {Promise<MempoolInfo>} Mempool information
  */
-async function getMempoolInfo(): Promise<MempoolInfo> {
+export async function getMempoolInfo(): Promise<MempoolInfo> {
   const result = await sendRPCRequest('getmempoolinfo', [])
   return result as MempoolInfo
-}
-
-export type {
-  JSONRPCResult,
-  JSONRPCResponse,
-  NetworkInfo,
-  MiningInfo,
-  MempoolInfo,
-  PeerInfo,
-  BlockStats,
-  BlockInfo,
-  TransactionInput,
-  TransactionOutput,
-  RawTransaction,
-}
-
-export {
-  getMiningInfo,
-  getNetworkInfo,
-  getPeerInfo,
-  getBlockCount,
-  getBlockHash,
-  getBlockStats,
-  getBlock,
-  getRawTransaction,
-  getRawMemPool,
-  getMempoolInfo,
 }

@@ -30,20 +30,20 @@ import {
 import { NNG as settings } from '../utils/settings'
 
 /** NNG types */
-type NNGSocketParameters = {
+export type NNGSocketParameters = {
   type: NNGSocketType
   path?: string
   channels?: Array<NNGMessageType>
 }
-type NNGSocketType = 'pub' | 'sub' | 'req' | 'rep'
-type NNGMessageType =
+export type NNGSocketType = 'pub' | 'sub' | 'req' | 'rep'
+export type NNGMessageType =
   | 'mempooltxadd'
   | 'mempooltxrem'
   | 'blkconnected'
   | 'blkdisconctd'
-type NNGMessageProcessor = (bb: ByteBuffer) => Promise<void>
-type NNGPendingMessage = [NNGMessageType, ByteBuffer]
-type NNGQueue = {
+export type NNGMessageProcessor = (bb: ByteBuffer) => Promise<void>
+export type NNGPendingMessage = [NNGMessageType, ByteBuffer]
+export type NNGQueue = {
   busy: boolean
   pending: NNGPendingMessage[]
 }
@@ -51,7 +51,7 @@ type NNGQueue = {
 /**
  * Error codes
  */
-enum ERR {
+export enum ERR {
   NNG_CONNECT = 1,
   NNG_RECEIVE_MESSAGE,
   NNG_PROCESS_MESSAGE,
@@ -66,7 +66,7 @@ enum ERR {
 /**
  * Lotus NNG interface
  */
-class NNG extends EventEmitter {
+export class NNG extends EventEmitter {
   private queue: NNGQueue
   private sockets: Record<NNGSocketType, Socket>
   private registeredProcessors: Partial<
@@ -356,14 +356,3 @@ class NNG extends EventEmitter {
     })
   }
 }
-
-export type {
-  NNGSocketParameters,
-  NNGSocketType,
-  NNGMessageProcessor,
-  NNGMessageType,
-  NNGPendingMessage,
-  NNGQueue,
-}
-
-export { NNG }

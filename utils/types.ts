@@ -4,7 +4,7 @@
  * License: MIT
  */
 /** */
-type Block = {
+export type Block = {
   hash: string
   height: number
   timestamp: bigint
@@ -12,27 +12,15 @@ type Block = {
   prevhash?: string // for reorg checks only; does not get saved to database
 }
 
-type GeoIPData = {
+export type GeoIPData = {
   country: string
   city: string
 }
 
-type GeoIPResponse = {
+export type GeoIPResponse = {
   success: boolean
   status: string
   ip: string
   data: GeoIPData
   type: 'unicast'
-}
-
-/**
- * RPC types
- */
-
-export type {
-  // Indexer types
-  Block,
-  // Dashboard types
-  GeoIPData,
-  GeoIPResponse,
 }
