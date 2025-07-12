@@ -3,7 +3,7 @@
  * Github: https://github.com/LotusiaStewardship
  * License: MIT
  */
-import { MAX_OP_RETURN_DATA, opcodes } from '../utils/constants'
+import { MAX_OP_RETURN_DATA, OpCodes } from '../utils/constants'
 // RANK script types
 type ScriptChunkLokadUTF8 = 'RANK' | 'RNKC'
 type ScriptChunkPlatformUTF8 = 'lotusia' | 'twitter'
@@ -121,9 +121,9 @@ const SCRIPT_CHUNK_LOKAD: ScriptChunkLokadMap = new Map()
 SCRIPT_CHUNK_LOKAD.set(LOKAD_PREFIX_RANK, 'RANK') // RANK v1
 SCRIPT_CHUNK_LOKAD.set(LOKAD_PREFIX_RNKC, 'RNKC') // RANK Comment
 // SCRIPT_CHUNK_LOKAD.set(0x524e4b32, 'RNK2') // RANK v2
-const RANK_SENTIMENT_NEUTRAL = opcodes.OP_16
-const RANK_SENTIMENT_POSITIVE = opcodes.OP_1
-const RANK_SENTIMENT_NEGATIVE = opcodes.OP_0
+const RANK_SENTIMENT_NEUTRAL = OpCodes.OP_16
+const RANK_SENTIMENT_POSITIVE = OpCodes.OP_1
+const RANK_SENTIMENT_NEGATIVE = OpCodes.OP_0
 /** Sentiment chunk map */
 const SCRIPT_CHUNK_SENTIMENT: ScriptChunkSentimentMap = new Map()
 SCRIPT_CHUNK_SENTIMENT.set(RANK_SENTIMENT_NEUTRAL, 'neutral')
@@ -668,7 +668,7 @@ class ScriptProcessor {
         return null
       }
       // OP_RETURN must be followed by OP_PUSHDATA1 (1 byte)
-      if (script.readUInt8(1) !== opcodes.OP_PUSHDATA1) {
+      if (script.readUInt8(1) !== OpCodes.OP_PUSHDATA1) {
         return null
       }
       // OP_PUSHDATA1 must be followed by the data size (1 byte)
