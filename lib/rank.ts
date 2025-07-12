@@ -474,29 +474,40 @@ const API = {
  */
 class ScriptProcessor {
   private chunks: Map<string, ScriptChunk>
-  private platform: ScriptChunkPlatformUTF8 | undefined
   /** The LOKAD type */
-  private type: ScriptChunkLokadUTF8 | undefined
+  public lokadType: ScriptChunkLokadUTF8 | undefined
   // Scripts for each output index
   private scripts: Buffer[]
-  private processedOutput:
-    | TransactionOutputRNKC
-    | TransactionOutputRANK
-    | null = null
 
   constructor(scripts: Buffer[]) {
     this.scripts = scripts
-    this.type = this.processLokad()
-    if (!this.type) {
+    this.lokadType = this.processLokad()
+    if (!this.lokadType) {
       throw new Error('Invalid LOKAD type')
     }
-    switch (this.type) {
+    switch (this.lokadType) {
       case 'RANK':
         this.chunks = ScriptChunksRANKMap
         break
       case 'RNKC':
         this.chunks = ScriptChunksRNKCMap
     }
+  }
+
+  /**
+   * Process the RANK script
+   * @returns The processed RANK output or null if invalid
+   */
+  get outputRANK(): TransactionOutputRANK | null {
+    return this.processScriptRANK()
+  }
+
+  /**
+   * Process the RNKC script
+   * @returns The processed RNKC output or null if invalid
+   */
+  get outputRNKC(): TransactionOutputRNKC | null {
+    return this.processScriptRNKC()
   }
 
   /**
@@ -553,7 +564,6 @@ class ScriptProcessor {
     if (!platform) {
       return undefined
     }
-    this.platform = platform
     return platform
   }
 
@@ -561,13 +571,13 @@ class ScriptProcessor {
    * Process the profileId chunk
    * @returns The profileId value or undefined if invalid
    */
-  processProfileId(): string | undefined {
+  processProfileId(platform: ScriptChunkPlatformUTF8): string | undefined {
     const chunk = this.chunks.get('profileId')
-    if (!chunk || chunk.offset === null || !this.platform) {
+    if (!chunk || chunk.offset === null) {
       return undefined
     }
 
-    const platformSpec = PLATFORMS[this.platform]
+    const platformSpec = PLATFORMS[platform]
     if (!platformSpec?.profileId) {
       return undefined
     }
@@ -590,12 +600,12 @@ class ScriptProcessor {
    * Process the postId chunk
    * @returns The postId value or undefined if invalid
    */
-  processPostId(): string | null {
-    if (!this.platform) {
+  processPostId(platform: ScriptChunkPlatformUTF8): string | null {
+    if (!platform) {
       return null
     }
 
-    const platformSpec = PLATFORMS[this.platform]
+    const platformSpec = PLATFORMS[platform]
     if (!platformSpec.postId || !platformSpec.profileId) {
       return null
     }
@@ -614,7 +624,7 @@ class ScriptProcessor {
     )
 
     try {
-      switch (this.platform) {
+      switch (platform) {
         case 'lotusia':
           return postIdBuf.toString('hex')
         case 'twitter':
@@ -647,107 +657,76 @@ class ScriptProcessor {
    * Validate the required RANK chunks and store the processed output
    * @returns true if all required chunks are valid, false otherwise
    */
-  validateRequiredChunksRANK(): boolean {
+  processScriptRANK(): TransactionOutputRANK | null {
     // Check sentiment (positive/negative)
     const sentiment = this.processSentiment()
     if (!sentiment) {
-      return false
+      return null
     }
 
     // Check platform (twitter, etc)
     const platform = this.processPlatform()
     if (!platform) {
-      return false
+      return null
     }
 
     // Check profileId (must exist and be valid for the platform)
-    const profileId = this.processProfileId()
+    const profileId = this.processProfileId(platform)
     if (!profileId) {
-      return false
+      return null
     }
 
     // Store the processed output for future use
-    this.processedOutput = {
+    const output = {
       sentiment,
       platform,
       profileId,
     } as TransactionOutputRANK
 
-    return true
+    // Process postId and set it in the output if it exists
+    const postId = this.processPostId(platform)
+    if (postId) {
+      output.postId = postId
+    }
+
+    return output
   }
   /**
    * Validate the required RNKC chunks and store the processed output
    * @returns true if all required chunks are valid, false otherwise
    */
-  validateRequiredChunksRNKC(): boolean {
+  processScriptRNKC(): TransactionOutputRNKC | null {
     // Check platform (twitter, etc)
     const platform = this.processPlatform()
     if (!platform) {
-      return false
+      return null
     }
 
     // Check profileId (must exist and be valid for the platform)
-    const profileId = this.processProfileId()
+    const profileId = this.processProfileId(platform)
     if (!profileId) {
-      return false
+      return null
     }
 
     // Check postId (must exist and be valid for the platform)
-    const postId = this.processPostId()
+    const postId = this.processPostId(platform)
     if (!postId) {
-      return false
+      return null
     }
 
     // Process comment and set it in the output if it exists
     const comment = this.processComment()
     if (!comment) {
-      return false
+      return null
     }
 
     // Store the processed output for future use
-    this.processedOutput = {
+    const output = {
       platform,
       profileId,
       postId,
       comment,
     } as TransactionOutputRNKC
-
-    return true
-  }
-  /**
-   * Process the output of the script
-   * @param type - The type of script to process
-   * @returns The output of the script or null if required chunks are invalid
-   */
-  processOutput(): TransactionOutputRNKC | TransactionOutputRANK | null {
-    // If we already have processed output, return it
-    if (this.processedOutput) {
-      return this.processedOutput
-    }
-    let output: TransactionOutputRNKC | TransactionOutputRANK | null = null
-
-    switch (this.type) {
-      case 'RANK': {
-        if (!this.validateRequiredChunksRANK()) {
-          return null
-        }
-        output = this.processedOutput! as TransactionOutputRANK
-
-        // Process postId and set it in the output if it exists
-        const postId = this.processPostId()
-        if (postId) {
-          output.postId = postId
-        }
-        break
-      }
-      case 'RNKC': {
-        if (!this.validateRequiredChunksRNKC()) {
-          return null
-        }
-        output = this.processedOutput! as TransactionOutputRNKC
-        break
-      }
-    }
 
     return output
   }
@@ -767,6 +746,7 @@ export type {
   ScriptChunksOptionalRANK,
   ScriptChunk,
   TransactionOutputRANK,
+  TransactionOutputRNKC,
   RankTransaction,
   ProfileMap,
   PostMap,
