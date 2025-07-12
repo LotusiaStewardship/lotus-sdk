@@ -31,6 +31,15 @@ async function getGeoIP(ip: string) {
 }
 
 /**
+ * Validate a sha256 hash
+ * @param str - The sha256 hash to validate
+ * @returns Whether the sha256 hash is valid
+ */
+function isSha256(str: string) {
+  return str.match(/^[a-f0-9]{64}$/)
+}
+
+/**
  * Convert sats to XPI
  * @param sats - The number of sats to convert
  * @returns The number of XPI
@@ -459,6 +468,7 @@ export {
   // Functions
   toAsyncIterable,
   getGeoIP,
+  isSha256,
   toXPIFromSats,
   toSatsFromXPI,
   truncateSha256,
