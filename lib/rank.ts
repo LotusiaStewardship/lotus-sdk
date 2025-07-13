@@ -51,22 +51,33 @@ export type ScriptChunksOptionalRANK = {
 }
 /** OP_RETURN \<RANK\> \<sentiment\> \<profileId\> [\<postId\> \<postHash\> [\<instanceId\>]] */
 export type TransactionOutputRANK = {
-  sentiment: ScriptChunkSentimentUTF8 // positive or negative sentiment (can support more)
-  platform: ScriptChunkPlatformUTF8 // e.g. Twitter/X.com, etc.
-  profileId: string // who the ranking is for
-  postId?: string // optional post ID if ranking specific content
-  // postHash?: string // optional hash of the post content (required if postId is provided)
-  // instanceId?: string // ID of the registered extension instance
+  /** positive or negative sentiment (can support more) */
+  sentiment: ScriptChunkSentimentUTF8
+  /** e.g. Twitter/X.com, etc. */
+  platform: ScriptChunkPlatformUTF8
+  /** who the ranking is for */
+  profileId: string
+  /** optional post ID if ranking specific content */
+  postId?: string
+  /** optional hash of the post content (required if postId is provided) */
+  //postHash?: string
+  /** ID of the registered extension instance */
+  //instanceId?: string
 }
-/** OP_RETURN \<RNKC\> \<platform\> \<profileId\> \<postId\> \<comment\> */
+/** OP_RETURN \<RNKC\> \<platform\> \<profileId\> \<postId\> */
 export type TransactionOutputRNKC = {
-  platform: ScriptChunkPlatformUTF8 // e.g. Twitter/X.com, etc.
-  profileId: string // who the ranking is for
-  postId: string // post ID if ranking specific content
-  comment: string // outIdx 1 and 2 concatenated
+  /** outIdx 1 and 2 concatenated as comment data in UTF-8 encoding */
+  comment: string
+  /** e.g. Twitter/X.com, etc. */
+  platform: ScriptChunkPlatformUTF8
+  /** who the ranking is for */
+  profileId: string
+  /** ID of the post being replied to (valid for platforms except lotusia) */
+  inReplyToPostId?: string
+  /** ID of the comment being replied to (only valid for lotusia platform) */
+  inReplyToCommentId?: string
 }
-/**  */
-export type RankTransaction = TransactionOutputRANK & {
+export type IndexedTransaction = {
   txid: string
   outIdx: number // index of the output that contains the RANK data
   firstSeen: bigint // time first seen by indexer, only for new mempool transactions
@@ -75,18 +86,21 @@ export type RankTransaction = TransactionOutputRANK & {
   sats: bigint
   timestamp: bigint // unix timestamp
 }
+/**  */
+export type IndexedTransactionRANK = TransactionOutputRANK & IndexedTransaction
+export type IndexedTransactionRNKC = TransactionOutputRNKC & IndexedTransaction
 export type RankTarget = {
   id: string // profileId, postId, etc
   platform: string
   ranking: bigint
-  ranks: Omit<RankTransaction, 'profileId' | 'platform'>[] // omit the database relation fields
+  ranks: Omit<IndexedTransactionRANK, 'profileId' | 'platform'>[] // omit the database relation fields
   satsPositive: bigint
   satsNegative: bigint
   votesPositive: number
   votesNegative: number
 }
 /**
- * `RankTransaction` objects are converted to a `ProfileMap` for database ops
+ * `IndexedTransactionRANK` objects are converted to a `ProfileMap` for database ops
  *
  * `string` is `profileId`
  */
