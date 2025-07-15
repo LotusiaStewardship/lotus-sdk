@@ -481,17 +481,13 @@ export function toScriptRNKC(
  * @param script - The script to process, as a `Buffer`
  */
 export class ScriptProcessor {
-  private chunks: Map<ScriptChunkField, ScriptChunk>
+  private chunks: Map<ScriptChunkField, ScriptChunk> | null = null
   /** The script to process, as a `Buffer` */
   private script: Buffer
   /** Supplemental scripts, e.g. outIdx 1 and/or 2 for RNKC */
   private supplementalScripts: Buffer[] = []
 
   constructor(script: Buffer) {
-    // Script must be OP_RETURN
-    if (!this.isOpReturn(script)) {
-      throw new Error('Script must be OP_RETURN')
-    }
     // Accept the script for further processing
     this.script = script
     // Set chunk definitions based on LOKAD type
@@ -511,11 +507,12 @@ export class ScriptProcessor {
    * Add a supplemental OP_RETURN script to the processor
    * @param script - The script to add, as a `Buffer`
    */
-  addScript(script: Buffer) {
+  addScript(script: Buffer): boolean {
     if (!this.isOpReturn(script)) {
-      throw new Error('Script must be OP_RETURN')
+      return false
     }
     this.supplementalScripts.push(script)
+    return true
   }
 
   /**
@@ -525,46 +522,21 @@ export class ScriptProcessor {
   get lokadType(): ScriptChunkLokadUTF8 | undefined {
     return this.processLokad()
   }
-
+  
   /**
-   * Process the RANK script and return the output
-   * @returns The processed RANK output or null if invalid
-   */
-  get outputRANK(): TransactionOutputRANK | null {
-    return this.processScriptRANK()
-  }
-
-  /**
-   * Process the RNKC script and return the output
-   * @returns The processed RNKC output or null if invalid
-   */
-  get outputRNKC(): TransactionOutputRNKC | null {
-    // RNKC must have 1 or 2 supplemental scripts
-    if (
-      this.supplementalScripts.length === 0 ||
-      this.supplementalScripts.length > 2
-    ) {
-      throw new Error(
-        'RNKC must have 1 or 2 supplemental OP_RETURN scripts (outIdx 1 and/or 2)',
-      )
-    }
-    return this.processScriptRNKC()
-  }
-
-  /**
-   * Check if the output is an OP_RETURN
-   * @param outIdx - The output index to check
+   * Check provided script for OP_RETURN op code, or check the script provided in constructor
+   * if no script is provided
+   * @param script - The script to check, as a `Buffer`
    * @returns true if the output is an OP_RETURN, false otherwise
    */
-  isOpReturn(script: Buffer): boolean {
-    return script.readUInt8(0) === 0x6a // OP_RETURN
+  isOpReturn(script?: Buffer): boolean {
+    return (script ?? this.script).readUInt8(0) === OpCodes.OP_RETURN
   }
-
   /**
    * Process the LOKAD chunk
    * @returns The LOKAD value or undefined if invalid
    */
-  processLokad(): ScriptChunkLokadUTF8 | undefined {
+  private processLokad(): ScriptChunkLokadUTF8 | undefined {
     // LOKAD is 4 bytes at offset 2 (OP_RETURN <PUSH OP> <4-byte LOKAD>)
     const lokadBuf = this.script.subarray(2, 6)
     const lokad = SCRIPT_CHUNK_LOKAD.get(lokadBuf.readUInt32BE(0))
@@ -578,8 +550,8 @@ export class ScriptProcessor {
    * Process the sentiment chunk (RANK)
    * @returns The sentiment value or undefined if invalid
    */
-  processSentiment(): ScriptChunkSentimentUTF8 | undefined {
-    const chunk = this.chunks.get('sentiment')
+  private processSentiment(): ScriptChunkSentimentUTF8 | undefined {
+    const chunk = this.chunks?.get('sentiment')
     if (!chunk || chunk.offset === null) {
       return undefined
     }
@@ -594,8 +566,8 @@ export class ScriptProcessor {
    * Process the platform chunk
    * @returns The platform value or undefined if invalid
    */
-  processPlatform(): ScriptChunkPlatformUTF8 | undefined {
-    const chunk = this.chunks.get('platform')
+  private processPlatform(): ScriptChunkPlatformUTF8 | undefined {
+    const chunk = this.chunks?.get('platform')
     if (!chunk || chunk.offset === null) {
       return undefined
     }
@@ -614,8 +586,10 @@ export class ScriptProcessor {
    * Process the profileId chunk
    * @returns The profileId value or undefined if invalid
    */
-  processProfileId(platform: ScriptChunkPlatformUTF8): string | undefined {
-    const chunk = this.chunks.get('profileId')
+  private processProfileId(
+    platform: ScriptChunkPlatformUTF8,
+  ): string | undefined {
+    const chunk = this.chunks?.get('profileId')
     if (!chunk || chunk.offset === null) {
       return undefined
     }
@@ -643,7 +617,7 @@ export class ScriptProcessor {
    * Process the postId chunk
    * @returns The postId value or undefined if invalid
    */
-  processPostId(platform: ScriptChunkPlatformUTF8): string | null {
+  private processPostId(platform: ScriptChunkPlatformUTF8): string | null {
     if (!platform) {
       return null
     }
@@ -653,7 +627,7 @@ export class ScriptProcessor {
       return null
     }
 
-    const profileIdChunk = this.chunks.get('profileId')
+    const profileIdChunk = this.chunks?.get('profileId')
     if (!profileIdChunk?.offset) {
       return null
     }
@@ -685,15 +659,11 @@ export class ScriptProcessor {
    * @param scripts - outIdx 1 and 2 scripts, if outIdx 0 is RNKC
    * @returns The comment value or null if invalid
    */
-  processComment(scripts: Buffer[]): string | null {
+  private processComment(scripts: Buffer[]): string | null {
     // If there are 3 scripts, concatenate outIdx 1 and 2, otherwise just use outIdx 1
     let commentBuf: Buffer = Buffer.alloc(0)
     for (let i = 0; i < scripts.length; i++) {
       const script = scripts[i]
-      // Comment output scripts must be OP_RETURN
-      if (!this.isOpReturn(script)) {
-        return null
-      }
       // OP_RETURN must be followed by OP_PUSHDATA1 (1 byte)
       if (script.readUInt8(1) !== OpCodes.OP_PUSHDATA1) {
         return null
@@ -755,6 +725,16 @@ export class ScriptProcessor {
    * @returns true if all required chunks are valid, false otherwise
    */
   processScriptRNKC(): TransactionOutputRNKC | null {
+    // RNKC must have 1 or 2 supplemental scripts
+    if (
+      this.supplementalScripts.length === 0 ||
+      this.supplementalScripts.length > 2
+    ) {
+      // throw new Error(
+      //   'RNKC must have 1 or 2 supplemental OP_RETURN scripts (outIdx 1 and/or 2)',
+      // )
+      return null
+    }
     // Check platform (twitter, etc)
     const platform = this.processPlatform()
     if (!platform) {
