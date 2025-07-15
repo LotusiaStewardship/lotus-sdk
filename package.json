@@ -30,9 +30,7 @@
   "homepage": "https://github.com/LotusiaStewardship/lotus-lib#readme",
   "dependencies": {
     "dotenv": "17.0.1",
-    "dotenv-cli": "8.0.0",
-    "flatbuffers": "25.2.10",
-    "nanomsg": "file:submodules/nanomsg"
+    "dotenv-cli": "8.0.0"
   },
   "devDependencies": {
     "@types/nanomsg": "4.2.3",
@@ -40,5 +38,9 @@
     "prettier": "3.6.2",
     "typescript": "5.8.3",
     "typescript-eslint": "8.35.1"
+  },
+  "optionalDependencies": {
+    "flatbuffers": "25.2.10",
+    "nanomsg": "file:submodules/nanomsg"
   }
 }
