@@ -67,10 +67,10 @@ export type TransactionOutputRANK = {
 /** OP_RETURN \<RNKC\> \<platform\> \<profileId\> \<postId\> */
 export type TransactionOutputRNKC = {
   /** outIdx 1 and 2 concatenated as comment data in UTF-8 encoding */
-  comment: string
+  data: string
   /** e.g. Twitter/X.com, etc. */
   platform: ScriptChunkPlatformUTF8
-  /** who the ranking is for */
+  /** who the comment is replying to */
   profileId: string
   /** ID of the post being replied to (valid for platforms except lotusia) */
   inReplyToPostId?: string
@@ -94,6 +94,7 @@ export type RankTarget = {
   platform: string
   ranking: bigint
   ranks: Omit<IndexedTransactionRANK, 'profileId' | 'platform'>[] // omit the database relation fields
+  comments: Omit<IndexedTransactionRNKC, 'profileId' | 'platform'>[] // omit the database relation fields
   satsPositive: bigint
   satsNegative: bigint
   votesPositive: number
@@ -506,6 +507,7 @@ export class ScriptProcessor {
   /**
    * Add a supplemental OP_RETURN script to the processor
    * @param script - The script to add, as a `Buffer`
+   * @returns true if the script was added, false otherwise
    */
   addScript(script: Buffer): boolean {
     if (!this.isOpReturn(script)) {
@@ -522,7 +524,7 @@ export class ScriptProcessor {
   get lokadType(): ScriptChunkLokadUTF8 | undefined {
     return this.processLokad()
   }
-  
+
   /**
    * Check provided script for OP_RETURN op code, or check the script provided in constructor
    * if no script is provided
@@ -617,19 +619,19 @@ export class ScriptProcessor {
    * Process the postId chunk
    * @returns The postId value or undefined if invalid
    */
-  private processPostId(platform: ScriptChunkPlatformUTF8): string | null {
+  private processPostId(platform: ScriptChunkPlatformUTF8): string | undefined {
     if (!platform) {
-      return null
+      return undefined
     }
 
     const platformSpec = PlatformConfiguration.get(platform)
     if (!platformSpec || !platformSpec.postId || !platformSpec.profileId) {
-      return null
+      return undefined
     }
 
     const profileIdChunk = this.chunks?.get('profileId')
     if (!profileIdChunk?.offset) {
-      return null
+      return undefined
     }
 
     // Calculate postId offset: profileId offset + profileId length + push opcode (1 byte)
@@ -647,10 +649,10 @@ export class ScriptProcessor {
         case 'twitter':
           return postIdBuf.readBigUInt64BE(0).toString()
         default:
-          return null
+          return undefined
       }
     } catch (e) {
-      return null
+      return undefined
     }
   }
 
@@ -666,12 +668,12 @@ export class ScriptProcessor {
       const script = scripts[i]
       // OP_RETURN must be followed by OP_PUSHDATA1 (1 byte)
       if (script.readUInt8(1) !== OpCodes.OP_PUSHDATA1) {
-        return null
+        break
       }
       // OP_PUSHDATA1 must be followed by the data size (1 byte)
       const dataSize = script.readUInt8(2)
       if (isNaN(dataSize) || dataSize > MAX_OP_RETURN_DATA) {
-        return null
+        break
       }
       // Concatenate the comment buffer with the script data
       commentBuf = Buffer.concat([commentBuf, script.subarray(3, 3 + dataSize)])
@@ -679,7 +681,7 @@ export class ScriptProcessor {
     if (!commentBuf) {
       return null
     }
-    return toCommentUTF8(commentBuf) || null
+    return toCommentUTF8(commentBuf) ?? null
   }
 
   /**
@@ -754,18 +756,29 @@ export class ScriptProcessor {
     }
 
     // Process comment and set it in the output if it exists
-    const comment = this.processComment(this.supplementalScripts)
-    if (!comment) {
+    const data = this.processComment(this.supplementalScripts)
+    if (!data) {
       return null
     }
 
     // Store the processed output for future use
-    const output = {
+    const output: TransactionOutputRNKC = {
       platform,
       profileId,
-      postId,
-      comment,
-    } as TransactionOutputRNKC
+      inReplyToPostId: undefined,
+      inReplyToCommentId: undefined,
+      data,
+    }
+
+    switch (platform) {
+      case 'lotusia':
+        output.inReplyToCommentId = postId
+        break
+      // Add more platforms here as needed
+      case 'twitter':
+        output.inReplyToPostId = postId
+        break
+    }
 
     return output
   }
