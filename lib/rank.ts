@@ -67,7 +67,7 @@ export type TransactionOutputRANK = {
 /** OP_RETURN \<RNKC\> \<platform\> \<profileId\> \<postId\> */
 export type TransactionOutputRNKC = {
   /** outIdx 1 and 2 concatenated as comment data in UTF-8 encoding */
-  data: Buffer
+  data: Uint8Array
   /** fee rate in satoshis per byte, requires full transaction data to calculate */
   feeRate?: bigint
   /** e.g. Twitter/X.com, etc. */
@@ -661,7 +661,7 @@ export class ScriptProcessor {
    * @param scripts - outIdx 1 and 2 scripts, if outIdx 0 is RNKC
    * @returns The comment value or null if invalid
    */
-  private processComment(scripts: Buffer[]): Buffer | null {
+  private processComment(scripts: Buffer[]): Uint8Array | null {
     // If there are 3 scripts, concatenate outIdx 1 and 2, otherwise just use outIdx 1
     let commentBuf: Buffer = Buffer.alloc(0)
     for (let i = 0; i < scripts.length; i++) {
@@ -681,7 +681,7 @@ export class ScriptProcessor {
     if (!commentBuf) {
       return null
     }
-    return commentBuf
+    return new Uint8Array(commentBuf)
   }
 
   /**
