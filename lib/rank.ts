@@ -749,22 +749,21 @@ export class ScriptProcessor {
 
     // Store the processed output for future use
     const output: TransactionOutputRNKC = {
+      data,
       platform,
       inReplyToProfileId: undefined,
       inReplyToPostId: undefined,
-      data,
     }
 
     // Check profileId (must exist and be valid for the platform)
     const profileId = this.processProfileId(platform)
     if (profileId) {
       output.inReplyToProfileId = profileId
-    }
-
-    // Check postId (must exist and be valid for the platform)
-    const postId = this.processPostId(platform)
-    if (postId) {
-      output.inReplyToPostId = postId
+      // Check for postId (only valid if profileId is valid)
+      const postId = this.processPostId(platform)
+      if (postId) {
+        output.inReplyToPostId = postId
+      }
     }
 
     return output
