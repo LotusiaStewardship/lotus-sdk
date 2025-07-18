@@ -68,6 +68,8 @@ export type TransactionOutputRANK = {
 export type TransactionOutputRNKC = {
   /** outIdx 1 and 2 concatenated as comment data in UTF-8 encoding */
   data: Buffer
+  /** fee rate in satoshis per byte, requires full transaction data to calculate */
+  feeRate?: bigint
   /** e.g. Twitter/X.com, etc. */
   platform: ScriptChunkPlatformUTF8
   /** who the comment is replying to */
