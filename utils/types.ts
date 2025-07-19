@@ -9,6 +9,7 @@ export type Block = {
   height: number
   timestamp: bigint
   ranksLength: number // default is 0 if a block is cringe
+  rnkcsLength: number // default is 0 if a block is cringe
   prevhash?: string // for reorg checks only; does not get saved to database
 }
 
