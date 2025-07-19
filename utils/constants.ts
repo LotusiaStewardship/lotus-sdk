@@ -54,6 +54,10 @@ export const RANK_BLOCK_GENESIS_V1: Partial<Block> = {
   hash: '0000000000c974cb635064bec0db8cc64a75526871f581ea5dbeca7a98551546',
   height: 952169,
 }
+/** Minimum RNKC burn value in sats */
+export const RNKC_MIN_FEE_RATE = 10_000_000 // minimum RNKC burn value in sats
+/** Minimum RNKC comment length in bytes */
+export const RNKC_MIN_DATA_LENGTH = 1 // minimum RNKC comment length in bytes
 
 /**
  * Dashboard configuration

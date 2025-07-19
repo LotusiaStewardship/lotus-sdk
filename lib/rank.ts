@@ -4,6 +4,7 @@
  * License: MIT
  */
 import { MAX_OP_RETURN_DATA, OpCodes } from '../utils/constants'
+import { RNKC } from '../utils/settings'
 import { toHex } from '../utils/functions'
 // RANK script types
 export type ScriptChunkLokadUTF8 = 'RANK' | 'RNKC'
@@ -68,8 +69,8 @@ export type TransactionOutputRANK = {
 export type TransactionOutputRNKC = {
   /** outIdx 1 and 2 concatenated as comment data in UTF-8 encoding */
   data: Uint8Array
-  /** fee rate in satoshis per byte, requires full transaction data to calculate */
-  feeRate?: bigint
+  /** Minimum fee rate for accepting RNKC transaction, in satoshis per byte */
+  feeRate: number
   /** e.g. Twitter/X.com, etc. */
   platform: ScriptChunkPlatformUTF8
   /** who the comment is replying to */
@@ -726,7 +727,7 @@ export class ScriptProcessor {
    * Validate the required RNKC chunks and store the processed output
    * @returns true if all required chunks are valid, false otherwise
    */
-  processScriptRNKC(): TransactionOutputRNKC | null {
+  processScriptRNKC(burnedSats: number): TransactionOutputRNKC | null {
     // RNKC must have 1 or 2 supplemental scripts
     if (
       this.supplementalScripts.length === 0 ||
@@ -749,9 +750,22 @@ export class ScriptProcessor {
       return null
     }
 
+    // Validate the comment length of the RNKC transaction
+    // If the comment length is too short, return null
+    if (data.length < RNKC.minDataLength) {
+      return null
+    }
+
+    // Validate the fee rate of the RNKC transaction
+    // If the fee rate is too low, return null
+    if (burnedSats < RNKC.minFeeRate * data.length) {
+      return null
+    }
+
     // Store the processed output for future use
     const output: TransactionOutputRNKC = {
       data,
+      feeRate: Math.floor(burnedSats / data.length),
       platform,
       inReplyToProfileId: undefined,
       inReplyToPostId: undefined,
