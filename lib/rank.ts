@@ -299,6 +299,14 @@ export function toProfileIdUTF8(profileIdBuf: Buffer) {
   )
 }
 /**
+ * Convert the `OP_RETURN` profile name to a hex string
+ * @param profileIdBuf - The profile ID buffer to convert
+ * @returns The hex profile ID
+ */
+export function toProfileIdHex(profileIdBuf: Buffer) {
+  return profileIdBuf.toString('hex')
+}
+/**
  * Convert the post ID to a buffer
  * @param platform - The platform to convert the post ID for
  * @param postId - The post ID to convert
@@ -636,7 +644,14 @@ export class ScriptProcessor {
       return undefined
     }
 
-    return toProfileIdUTF8(profileIdBuf)
+    switch (platform) {
+      case 'lotusia':
+        return toProfileIdHex(profileIdBuf)
+      case 'twitter':
+        return toProfileIdUTF8(profileIdBuf)
+      default:
+        return undefined
+    }
   }
 
   /**
