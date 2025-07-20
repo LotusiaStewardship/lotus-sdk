@@ -125,6 +125,7 @@ export type Post = RankTarget & {
 export type PlatformParameters = {
   profileId: {
     len: number
+    regex?: RegExp
   }
   postId: {
     len: number
@@ -222,6 +223,7 @@ export const PlatformConfiguration: Map<
 PlatformConfiguration.set('lotusia', {
   profileId: {
     len: 20, // 20-byte P2PKH address
+    regex: /^[0-9a-fA-F]{40}$/,
   },
   postId: {
     len: 32, // 32-byte sha256 hash
@@ -232,6 +234,7 @@ PlatformConfiguration.set('lotusia', {
 PlatformConfiguration.set('twitter', {
   profileId: {
     len: 16,
+    regex: /^[a-f0-9_]{16}$/,
   },
   postId: {
     len: 8, // 64-bit uint: https://developer.x.com/en/docs/x-ids
@@ -262,9 +265,23 @@ export function toProfileIdBuf(
   if (!profileIdSpec) {
     return null
   }
-  const profileBuf = Buffer.alloc(profileIdSpec.len)
-  profileBuf.write(profileId, profileIdSpec.len - profileId.length, 'utf8')
 
+  if (profileIdSpec.regex && !profileIdSpec.regex.test(profileId)) {
+    return null
+  }
+  const profileBuf = Buffer.alloc(profileIdSpec.len)
+  let encoding: BufferEncoding
+  switch (platform) {
+    case 'lotusia':
+      encoding = 'hex'
+      break
+    case 'twitter':
+      encoding = 'utf8'
+      break
+    default:
+      return null
+  }
+  profileBuf.write(profileId, profileIdSpec.len - profileId.length, encoding)
   return profileBuf
 }
 /**
