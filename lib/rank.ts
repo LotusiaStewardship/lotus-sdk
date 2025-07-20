@@ -270,13 +270,18 @@ export function toProfileIdBuf(
     return null
   }
   const profileBuf = Buffer.alloc(profileIdSpec.len)
-  let encoding: BufferEncoding
   switch (platform) {
-    case 'lotusia':
-      encoding = 'hex'
+    case 'lotusia': {
+      const profileIdHex = Buffer.from(profileId, 'hex')
+      profileBuf.write(
+        profileId,
+        profileIdSpec.len - profileIdHex.length,
+        'hex',
+      )
       break
+    }
     case 'twitter':
-      encoding = 'utf8'
+      profileBuf.write(profileId, profileIdSpec.len - profileId.length, 'utf8')
       break
     default:
       return null
