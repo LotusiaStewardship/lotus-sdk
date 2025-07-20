@@ -777,10 +777,11 @@ export class ScriptProcessor {
     // Check profileId (must exist and be valid for the platform)
     const profileId = this.processProfileId(platform)
     if (profileId) {
-      output.inReplyToProfileId = profileId
       // Check for postId (only valid if profileId is valid)
       const postId = this.processPostId(platform)
-      if (postId) {
+      if (!postId) {
+        output.inReplyToProfileId = profileId
+      } else {
         switch (platform) {
           case 'lotusia':
             output.inReplyToCommentId = postId
