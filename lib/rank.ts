@@ -77,8 +77,6 @@ export type TransactionOutputRNKC = {
   inReplyToProfileId?: string
   /** ID of the post being replied to */
   inReplyToPostId?: string
-  /** ID of the comment being replied to */
-  inReplyToCommentId?: string
 }
 export type IndexedTransaction = {
   txid: string
@@ -801,7 +799,6 @@ export class ScriptProcessor {
       platform,
       inReplyToProfileId: undefined,
       inReplyToPostId: undefined,
-      inReplyToCommentId: undefined,
     }
 
     // Check profileId (must exist and be valid for the platform)
@@ -811,14 +808,7 @@ export class ScriptProcessor {
       // Check for postId (only valid if profileId is valid)
       const postId = this.processPostId(platform)
       if (postId) {
-        switch (platform) {
-          case 'lotusia':
-            output.inReplyToCommentId = postId
-            break
-          default:
-            output.inReplyToPostId = postId
-            break
-        }
+        output.inReplyToPostId = postId
       }
     }
 
