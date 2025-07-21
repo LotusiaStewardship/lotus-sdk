@@ -117,6 +117,8 @@ export type Profile = RankTarget & {
 /**  */
 export type Post = RankTarget & {
   profileId: string
+  /** The post text, if applicable (decoded from UTF-8) */
+  data?: Uint8Array
   /** The hash of the post content (i.e. RankOutput['postHash']) */
   // hash: string
 }
