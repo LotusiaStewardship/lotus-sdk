@@ -123,7 +123,7 @@ export type Post = RankTarget & {
 export type PlatformParameters = {
   profileId: {
     len: number
-    regex?: RegExp
+    regex: RegExp
   }
   postId: {
     len: number
@@ -232,7 +232,7 @@ PlatformConfiguration.set('lotusia', {
 PlatformConfiguration.set('twitter', {
   profileId: {
     len: 16,
-    regex: /^[a-f0-9_]{16}$/,
+    regex: /^[a-z0-9_]{1,16}$/,
   },
   postId: {
     len: 8, // 64-bit uint: https://developer.x.com/en/docs/x-ids
@@ -434,12 +434,17 @@ export function toScriptRANK(
  * @param comment - The comment to use
  * @returns The hex-encoded RANK Comment script
  */
-export function toScriptRNKC(
-  platform: ScriptChunkPlatformUTF8,
-  profileId: string,
-  postId: string,
-  comment: string,
-): Buffer[] {
+export function toScriptRNKC({
+  platform,
+  profileId,
+  postId,
+  comment,
+}: {
+  platform: ScriptChunkPlatformUTF8
+  profileId: string
+  postId?: string
+  comment: string
+}): Buffer[] {
   // validate platform and profileId
   if (!platform || !profileId) {
     throw new Error('Must specify platform and profileId')
@@ -448,10 +453,16 @@ export function toScriptRNKC(
   if (!platformSpec || !platformSpec.profileId) {
     throw new Error('No platform profileId specification defined')
   }
-  if (!platformSpec.postId) {
-    throw new Error('No platform postId specification defined')
+  // validate profileId
+  if (!platformSpec.profileId.regex.test(profileId)) {
+    throw new Error(`Invalid profileId: ${profileId}`)
   }
-  if (comment.length < 1 || comment.length > MAX_OP_RETURN_DATA * 2) {
+  // validate postId, if available
+  if (postId && !platformSpec.postId.regex.test(postId)) {
+    throw new Error(`Invalid postId: ${postId}`)
+  }
+  const commentBuf = Buffer.from(comment, 'utf8')
+  if (commentBuf.length < 1 || commentBuf.length > MAX_OP_RETURN_DATA * 2) {
     throw new Error(
       `Comment must be between 1 and ${MAX_OP_RETURN_DATA * 2} bytes`,
     )
@@ -468,14 +479,15 @@ export function toScriptRNKC(
   scriptRNKC += toHex(platformSpec.profileId.len)
   // Append the padded profileId
   scriptRNKC += toHex(toProfileIdBuf(platform, profileId)!)
-  // Append the push op for postId length
-  scriptRNKC += toHex(platformSpec.postId.len)
-  // Append the postId
-  scriptRNKC += toHex(toPostIdBuf(platform, postId)!)
+  // Append the postId, if available
+  if (postId) {
+    // Append the push op for postId length
+    scriptRNKC += toHex(platformSpec.postId.len)
+    scriptRNKC += toHex(toPostIdBuf(platform, postId)!)
+  }
   scriptBufs.push(Buffer.from(scriptRNKC, 'hex'))
 
   // create the comment script(s)
-  const commentBuf = Buffer.from(comment, 'utf8')
   const commentBuf1 = commentBuf.subarray(0, MAX_OP_RETURN_DATA)
   // create the first comment script
   let scriptComment = OP_RETURN + OP_PUSHDATA1
