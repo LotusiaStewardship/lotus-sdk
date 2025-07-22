@@ -3,9 +3,11 @@
  * Github: https://github.com/LotusiaStewardship
  * License: MIT
  */
-import { MAX_OP_RETURN_DATA, OpCodes } from '../utils/constants'
+import { MAX_OP_RETURN_DATA } from '../utils/constants'
 import { RNKC } from '../utils/settings'
 import { toHex } from '../utils/functions'
+import OpCodes from '../utils/opcodes'
+import { isOpReturn } from './script'
 // RANK script types
 export type ScriptChunkLokadUTF8 = 'RANK' | 'RNKC'
 export type ScriptChunkPlatformUTF8 = 'lotusia' | 'twitter'
@@ -544,7 +546,7 @@ export class ScriptProcessor {
    * @returns true if the script was added, false otherwise
    */
   addScript(script: Buffer): boolean {
-    if (!this.isOpReturn(script)) {
+    if (!isOpReturn(script)) {
       return false
     }
     this.supplementalScripts.push(script)
@@ -557,16 +559,6 @@ export class ScriptProcessor {
    */
   get lokadType(): ScriptChunkLokadUTF8 | undefined {
     return this.processLokad()
-  }
-
-  /**
-   * Check provided script for OP_RETURN op code, or check the script provided in constructor
-   * if no script is provided
-   * @param script - The script to check, as a `Buffer`
-   * @returns true if the output is an OP_RETURN, false otherwise
-   */
-  isOpReturn(script?: Buffer): boolean {
-    return (script ?? this.script).readUInt8(0) === OpCodes.OP_RETURN
   }
   /**
    * Process the LOKAD chunk
