@@ -543,7 +543,10 @@ export class ScriptProcessor {
    * @param script - The script to add, as a `Buffer`
    * @returns true if the script was added, false otherwise
    */
-  addScript(script: Buffer): boolean {
+  addScript(script: string | Buffer): boolean {
+    if (!(script instanceof Buffer)) {
+      script = Buffer.from(script as string, 'hex')
+    }
     if (!isOpReturn(script)) {
       return false
     }
