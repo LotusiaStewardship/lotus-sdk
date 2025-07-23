@@ -535,8 +535,6 @@ export class ScriptProcessor {
       case 'RNKC':
         this.chunks = ScriptChunksRNKCMap
         break
-      default:
-        throw new Error(`Invalid or undefined LOKAD type for script`)
     }
   }
 
