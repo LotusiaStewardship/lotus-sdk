@@ -1,4 +1,9 @@
-import OpCodes from '../utils/opcodes'
+/**
+ * Copyright 2025 The Lotusia Stewardship
+ * Github: https://github.com/LotusiaStewardship
+ * License: MIT
+ */
+import OpCode from './opcode'
 
 /**
  * Check provided script for OP_RETURN op code
@@ -6,5 +11,5 @@ import OpCodes from '../utils/opcodes'
  * @returns true if the output is an OP_RETURN, false otherwise
  */
 export function isOpReturn(script: Buffer | undefined): boolean {
-  return script ? script.readUInt8(0) === OpCodes.OP_RETURN : false
+  return script ? script.readUInt8(0) === OpCode.OP_RETURN : false
 }

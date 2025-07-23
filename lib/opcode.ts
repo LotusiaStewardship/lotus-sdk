@@ -1,7 +1,8 @@
 /**
- * Opcode constants
+ * Opcode definitions
+ * @see https://en.bitcoin.it/wiki/Script
  */
-enum OpCodes {
+enum OpCode {
   OP_RETURN = 0x6a,
   OP_PUSHDATA1 = 0x4c,
   // RANK sentiments
@@ -24,4 +25,4 @@ enum OpCodes {
   OP_16 = 0x60, // neutral
 }
 
-export default OpCodes
+export default OpCode

@@ -6,7 +6,7 @@
 import { MAX_OP_RETURN_DATA } from '../utils/constants'
 import { RNKC } from '../utils/settings'
 import { toHex } from '../utils/functions'
-import OpCodes from '../utils/opcodes'
+import OpCode from './opcode'
 import { isOpReturn } from './script'
 // RANK script types
 export type ScriptChunkLokadUTF8 = 'RANK' | 'RNKC'
@@ -141,9 +141,9 @@ export const SCRIPT_CHUNK_LOKAD: ScriptChunkLokadMap = new Map()
 SCRIPT_CHUNK_LOKAD.set(LOKAD_PREFIX_RANK, 'RANK') // RANK v1
 SCRIPT_CHUNK_LOKAD.set(LOKAD_PREFIX_RNKC, 'RNKC') // RANK Comment
 // SCRIPT_CHUNK_LOKAD.set(0x524e4b32, 'RNK2') // RANK v2
-export const RANK_SENTIMENT_NEUTRAL = OpCodes.OP_16
-export const RANK_SENTIMENT_POSITIVE = OpCodes.OP_1
-export const RANK_SENTIMENT_NEGATIVE = OpCodes.OP_0
+export const RANK_SENTIMENT_NEUTRAL = OpCode.OP_16
+export const RANK_SENTIMENT_POSITIVE = OpCode.OP_1
+export const RANK_SENTIMENT_NEGATIVE = OpCode.OP_0
 /** Sentiment chunk map */
 export const SCRIPT_CHUNK_SENTIMENT: ScriptChunkSentimentMap = new Map()
 SCRIPT_CHUNK_SENTIMENT.set(RANK_SENTIMENT_NEUTRAL, 'neutral')
@@ -389,7 +389,7 @@ export function toScriptRANK(
     throw new Error('No platform profileId specification defined')
   }
   // create the script (OP_RETURN + push op + LOKAD prefix)
-  const OP_RETURN = toHex(OpCodes.OP_RETURN)
+  const OP_RETURN = toHex(OpCode.OP_RETURN)
   const LOKAD_PREFIX = toHex(LOKAD_PREFIX_RANK)
   let script = OP_RETURN + toHex(4) + LOKAD_PREFIX
   // Append the sentiment op code
@@ -471,8 +471,8 @@ export function toScriptRNKC({
   }
   const scriptBufs: Buffer[] = []
   // create the script (OP_RETURN + push op + LOKAD prefix)
-  const OP_RETURN = toHex(OpCodes.OP_RETURN)
-  const OP_PUSHDATA1 = toHex(OpCodes.OP_PUSHDATA1)
+  const OP_RETURN = toHex(OpCode.OP_RETURN)
+  const OP_PUSHDATA1 = toHex(OpCode.OP_PUSHDATA1)
   const LOKAD_PREFIX = toHex(LOKAD_PREFIX_RNKC)
   let scriptRNKC = OP_RETURN + toHex(4) + LOKAD_PREFIX
   // Append the push op and platform byte
@@ -701,7 +701,7 @@ export class ScriptProcessor {
     for (let i = 0; i < scripts.length; i++) {
       const script = scripts[i]
       // OP_RETURN must be followed by OP_PUSHDATA1 (1 byte)
-      if (script.readUInt8(1) !== OpCodes.OP_PUSHDATA1) {
+      if (script.readUInt8(1) !== OpCode.OP_PUSHDATA1) {
         break
       }
       // OP_PUSHDATA1 must be followed by the data size (1 byte)
