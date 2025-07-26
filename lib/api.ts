@@ -34,6 +34,8 @@ export type IndexedProfileRanking = RankAPIParams & {
 export type IndexedPostRanking = IndexedProfileRanking & {
   profile: IndexedProfileRanking
   postId: string
+  /** Comment data as a UTF-8 string, if available */
+  data?: string
   postMeta?: PostMeta
 }
 
