@@ -4,8 +4,7 @@
  * License: MIT
  */
 import { NODE_GEOIP_URL, PlatformURL } from './constants'
-import * as NNGInterface from '../lib/nng-interface'
-import type { Block, GeoIPResponse } from './types'
+import type { GeoIPResponse } from './types'
 import { ScriptChunkPlatformUTF8, ScriptChunkSentimentUTF8 } from '../lib/rank'
 
 /**
@@ -396,51 +395,6 @@ export function truncatePostId(postId: string) {
  * Utility functions
  */
 export const Util = {
-  /** NNG operations */
-  nng: {
-    /**
-     * Parse raw `NNG.Hash` flatbuffer for the 32-byte block hash or txid
-     * @param hash - The raw `NNG.Hash` flatbuffer
-     * @returns The blockhash or txid
-     */
-    toBlockhashOrTxid(hash: NNGInterface.Hash) {
-      // assume that the hash is valid
-      const { bb_pos, bb } = hash
-      return Buffer.from(
-        bb!
-          .bytes()
-          .subarray(bb_pos, bb_pos + 32)
-          .reverse(),
-      ).toString('hex')
-    },
-    /**
-     * Parse raw `NNG.BlockHeader` flatbuffer for the nHeight
-     * (https://docs.givelotus.org/specs/blockheader)
-     * @param header - The raw `NNG.BlockHeader` flatbuffer
-     * @returns The block height
-     */
-    toBlockHeight(header: NNGInterface.BlockHeader) {
-      // assume that the rawArray of the header is valid
-      const nHeight = header.rawArray()!.subarray(60, 64)
-      return Buffer.from(nHeight).readUInt32LE()
-    },
-    /**
-     * Parse raw `NNG.BlockHeader` flatbuffer into a `Block` object
-     * @param header - The raw `NNG.BlockHeader` flatbuffer
-     * @param includePrevHash - Whether to include the previous block hash
-     * @returns The block
-     */
-    toBlock(header: NNGInterface.BlockHeader, includePrevhash = false): Block {
-      const height = this.toBlockHeight(header)
-      const timestamp = header.timestamp()
-      const hash = this.toBlockhashOrTxid(header.blockHash()!.hash()!)
-      const block: Block = { hash, height, timestamp } as Block
-      if (includePrevhash) {
-        block.prevhash = this.toBlockhashOrTxid(header.prevBlockHash()!.hash()!)
-      }
-      return block
-    },
-  },
   /** Sha256 operations */
   sha256: {
     /**

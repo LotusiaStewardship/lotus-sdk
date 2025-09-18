@@ -5,7 +5,6 @@
  */
 export * from './lib/rpc'
 export * from './lib/rank'
-export * from './lib/nng'
 export * from './lib/api'
 export * from './lib/script'
 export * from './lib/opcode'

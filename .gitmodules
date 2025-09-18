@@ -1,4 +1,0 @@
-[submodule "submodules/nanomsg"]
-	path = submodules/nanomsg
-	url = https://github.com/zboszor/node-nanomsg
-	branch = master

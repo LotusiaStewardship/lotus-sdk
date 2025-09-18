@@ -4,12 +4,7 @@
  * License: MIT
  */
 import { config } from 'dotenv'
-import {
-  NNG_SUB_SOCKET_PATH_DEFAULT,
-  NNG_REQ_SOCKET_PATH_DEFAULT,
-  RNKC_MIN_DATA_LENGTH,
-  RNKC_MIN_FEE_RATE,
-} from '../utils/constants'
+import { RNKC_MIN_DATA_LENGTH, RNKC_MIN_FEE_RATE } from '../utils/constants'
 
 const parsed = config({ path: '.env' }).parsed
 
@@ -22,11 +17,6 @@ export const RPC = {
   password: parsed.NODE_RPC_PASS,
   address: parsed.NODE_RPC_HOST,
   port: parsed.NODE_RPC_PORT,
-}
-
-export const NNG = {
-  subSocketPath: parsed.NNG_SUB_SOCKET_PATH || NNG_SUB_SOCKET_PATH_DEFAULT,
-  reqSocketPath: parsed.NNG_REQ_SOCKET_PATH || NNG_REQ_SOCKET_PATH_DEFAULT,
 }
 
 export const RNKC = {
