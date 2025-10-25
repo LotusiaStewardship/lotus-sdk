@@ -355,6 +355,19 @@ export class BitcoreError extends Error {
     CantDeriveAddress: new (script: string) => BitcoreError
     InvalidScriptString: new (script: string) => BitcoreError
   }
+  static Precondition: {
+    InvalidState: new (message: string) => BitcoreError
+    InvalidArgument: new (
+      argumentName: string,
+      message?: string,
+      docsPath?: string,
+    ) => BitcoreError
+    InvalidArgumentType: new (
+      argument: unknown,
+      type: string | Function,
+      argumentName?: string,
+    ) => BitcoreError
+  }
   static Transaction: {
     Input: {
       MissingScript: new () => BitcoreError

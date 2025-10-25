@@ -8,7 +8,7 @@ import { BitcoreError } from '../errors.js'
 export class Preconditions {
   static checkState(condition: boolean, message: string): void {
     if (!condition) {
-      throw new BitcoreError.InvalidState(message)
+      throw new BitcoreError.Precondition.InvalidState(message)
     }
   }
 
@@ -19,32 +19,40 @@ export class Preconditions {
     docsPath?: string,
   ): void {
     if (!condition) {
-      throw new BitcoreError.InvalidArgument(argumentName, message, docsPath)
+      throw new BitcoreError.Precondition.InvalidArgument(
+        argumentName,
+        message,
+        docsPath,
+      )
     }
   }
 
   static checkArgumentType(
     argument: unknown,
-    type: string | Function,
+    type: string | ((...args: unknown[]) => unknown),
     argumentName?: string,
   ): void {
     argumentName = argumentName || '(unknown name)'
     if (typeof type === 'string') {
       if (type === 'Buffer') {
         if (!Buffer.isBuffer(argument)) {
-          throw new BitcoreError.InvalidArgumentType(
+          throw new BitcoreError.Precondition.InvalidArgumentType(
             argument,
             type,
             argumentName,
           )
         }
       } else if (typeof argument !== type) {
-        throw new BitcoreError.InvalidArgumentType(argument, type, argumentName)
+        throw new BitcoreError.Precondition.InvalidArgumentType(
+          argument,
+          type,
+          argumentName,
+        )
       }
     } else {
       // Handle constructor/class type checking
       if (!(argument instanceof type)) {
-        throw new BitcoreError.InvalidArgumentType(
+        throw new BitcoreError.Precondition.InvalidArgumentType(
           argument,
           type.name,
           argumentName,

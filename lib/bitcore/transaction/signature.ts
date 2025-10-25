@@ -52,11 +52,11 @@ export class TransactionSignature extends Signature {
   }
 
   // Factory function to allow calling TransactionSignature() without 'new'
-  static create(
+  /* static create(
     arg?: TransactionSignatureData | TransactionSignature | string,
   ): TransactionSignature {
     return new TransactionSignature(arg)
-  }
+  } */
 
   private _fromObject(arg: TransactionSignatureData): TransactionSignature {
     this._checkObjectArgs(arg)
