@@ -3,7 +3,7 @@
  * Github: https://github.com/LotusiaStewardship
  * License: MIT
  */
-import { RPC as settings } from '../utils/settings'
+import { RPC as settings } from '../utils/settings.js'
 
 /**
  * Individual JSON-RPC result types

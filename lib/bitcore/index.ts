@@ -34,7 +34,7 @@ export { BitcoreError } from './errors.js'
 export { Base58 } from './encoding/base58.js'
 export { Base58Check } from './encoding/base58check.js'
 export { BufferReader } from './encoding/bufferreader.js'
-export { BufferWriter } from './encoding/bufferwriter.js'
+export { BufferWriter, BufferWriterFactory } from './encoding/bufferwriter.js'
 export { Varint } from './encoding/varint.js'
 
 // Network modules
@@ -42,9 +42,12 @@ export {
   Network,
   livenet,
   testnet,
+  regtest,
   networks,
   defaultNetwork,
   get as getNetwork,
+  add as addNetwork,
+  remove as removeNetwork,
   Networks,
 } from './networks.js'
 
@@ -83,15 +86,93 @@ export { URI } from './uri.js'
 // Transaction components
 export {
   Input,
+  MultisigInput,
+  MultisigScriptHashInput,
+  PublicKeyInput,
+  PublicKeyHashInput,
   Output,
   UnspentOutput,
   sighash,
+  sign,
+  verify,
   TransactionSignature,
   Transaction,
 } from './transaction/index.js'
+
+// Sighash constants
+export {
+  DEFAULT_SIGN_FLAGS,
+  SIGHASH_SINGLE_BUG,
+  BITS_64_ON,
+} from './transaction/sighash.js'
 
 // Block components
 export { Block, BlockHeader } from './block/index.js'
 
 // Mnemonic components
 export { Mnemonic, MnemonicError, pbkdf2, Words } from './mnemonic/index.js'
+
+// TypeScript type exports
+export type {
+  InputData,
+  InputObject,
+  OutputData,
+  OutputObject,
+  UnspentOutputData,
+  UnspentOutputObject,
+  TransactionSignatureData,
+  TransactionSignatureObject,
+  TransactionData,
+  TransactionObject,
+} from './transaction/index.js'
+
+export type {
+  BlockData,
+  BlockObject,
+  BlockHeaderData,
+  BlockHeaderObject,
+} from './block/index.js'
+
+// Additional interface exports for commonly used types
+export type { NetworkConfig } from './networks.js'
+
+export type {
+  PrivateKeyData,
+  PrivateKeyObject,
+  PrivateKeySerialized,
+} from './privatekey.js'
+
+export type {
+  PublicKeyData,
+  PublicKeyExtra,
+  PublicKeyObject,
+  PublicKeySerialized,
+} from './publickey.js'
+
+export type {
+  HDPrivateKeyData,
+  HDPrivateKeyObject,
+  HDPrivateKeyBuffers,
+} from './hdprivatekey.js'
+
+export type {
+  HDPublicKeyData,
+  HDPublicKeyObject,
+  HDPublicKeyBuffers,
+} from './hdpublickey.js'
+
+export type {
+  AddressData,
+  AddressObject,
+  CashAddressDecoding,
+} from './address.js'
+
+export type { XAddressData, XAddressObject } from './xaddress.js'
+
+export type { ScriptData } from './script.js'
+
+export type { URIParams } from './uri.js'
+
+export type { UnitData } from './unit.js'
+
+export type { TransactionLike } from './transaction/sighash.js'

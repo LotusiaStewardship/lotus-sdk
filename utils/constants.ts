@@ -3,7 +3,7 @@
  * Github: https://github.com/LotusiaStewardship
  * License: MIT
  */
-import type { ScriptChunkPlatformUTF8 } from '../lib/rank'
+import type { ScriptChunkPlatformUTF8 } from '../lib/rank/index.js'
 
 /**
  * API URLs

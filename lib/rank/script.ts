@@ -3,7 +3,8 @@
  * Github: https://github.com/LotusiaStewardship
  * License: MIT
  */
-import OpCode from './opcode'
+import OpCode from './opcode.js'
+import { Script } from '../bitcore/script.js'
 
 /**
  * Check provided script for OP_RETURN op code

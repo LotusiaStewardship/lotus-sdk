@@ -3,9 +3,12 @@
  * Github: https://github.com/LotusiaStewardship
  * License: MIT
  */
-import { NODE_GEOIP_URL, PlatformURL } from './constants'
-import type { GeoIPResponse } from './types'
-import { ScriptChunkPlatformUTF8, ScriptChunkSentimentUTF8 } from '../lib/rank'
+import { NODE_GEOIP_URL, PlatformURL } from './constants.js'
+import type { GeoIPResponse } from './types.js'
+import {
+  ScriptChunkPlatformUTF8,
+  ScriptChunkSentimentUTF8,
+} from '../lib/rank/index.js'
 
 /**
  * Convert an iterable to an async iterable

@@ -17,51 +17,65 @@ export type PostMeta = {
   txidsUpvoted: string[]
   txidsDownvoted: string[]
 }
-/** Comment data returned from RANK backend API */
-export type RankCommentAPI = {
+/** Transaction data returned from RANK backend API */
+export type TransactionAPI = {
   txid: string
   outIdx: number
   sats: string
   firstSeen: string
   scriptPayload: string
-  instanceId: string
-  height: number
+  instanceId?: string
+  height?: number
+  timestamp?: string
+}
+export type TransactionRANKAPI = TransactionAPI & {
+  sentiment: string
+  platform: string
+  profileId: string
+  postId?: string
+}
+/** Comment data returned from RANK backend API */
+export type TransactionRNKCAPI = TransactionAPI & {
   data: string
   feeRate: number
   platform: string
   inReplyToProfileId?: string
   inReplyToPostId?: string
-  repliedProfile?: IndexedProfileRanking
-  repliedPost?: IndexedPostRanking
+  repliedProfile?: ProfileAPI
+  repliedPost?: PostAPI
 }
 /** */
-export type RankAPIParams = {
+export type ParametersAPI = {
   platform: string
   profileId: string
 }
 /** Profile ranking returned from RANK backend API */
-export type IndexedProfileRanking = RankAPIParams & {
+export type ProfileAPI = ParametersAPI & {
   ranking: string
   satsPositive: string
   satsNegative: string
   votesPositive: number
   votesNegative: number
+  /** RANK transactions associated with the profile */
+  ranks?: TransactionRANKAPI[]
   /** Comments associated with the profile */
-  comments?: RankCommentAPI[]
+  comments?: TransactionRNKCAPI[]
   /** Posts associated with the profile */
-  posts?: IndexedPostRanking[]
+  posts?: PostAPI[]
 }
 /** Post ranking returned from RANK backend API */
-export type IndexedPostRanking = RankAPIParams & {
+export type PostAPI = ParametersAPI & {
   ranking: string
   satsPositive: string
   satsNegative: string
   votesPositive: number
   votesNegative: number
-  profile: IndexedProfileRanking
+  profile: ProfileAPI
   postId: string
+  /** RANK transactions associated with the post */
+  ranks?: TransactionRANKAPI[]
   /** Comments associated with the post */
-  comments?: RankCommentAPI[]
+  comments?: TransactionRNKCAPI[]
   /** Comment data as a UTF-8 string, if available */
   data?: string
   postMeta?: PostMeta

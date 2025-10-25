@@ -3,11 +3,11 @@
  * Github: https://github.com/LotusiaStewardship
  * License: MIT
  */
-import { MAX_OP_RETURN_DATA } from '../utils/constants'
-import { RNKC } from '../utils/settings'
-import { toHex } from '../utils/functions'
-import OpCode from './opcode'
-import { isOpReturn } from './script'
+import { MAX_OP_RETURN_DATA } from '../../utils/constants.js'
+import { RNKC } from '../../utils/settings.js'
+import { toHex } from '../../utils/functions.js'
+import OpCode from './opcode.js'
+import { isOpReturn } from './script.js'
 // RANK script types
 export type ScriptChunkLokadUTF8 = 'RANK' | 'RNKC'
 export type ScriptChunkPlatformUTF8 = 'lotusia' | 'twitter'
@@ -766,7 +766,10 @@ export class ScriptProcessor {
    * Validate the required RNKC chunks and store the processed output
    * @returns true if all required chunks are valid, false otherwise
    */
-  processScriptRNKC(burnedSats: number): TransactionOutputRNKC | null {
+  processScriptRNKC(burnedSats: number | bigint): TransactionOutputRNKC | null {
+    if (typeof burnedSats === 'bigint') {
+      burnedSats = Number(burnedSats)
+    }
     // RNKC must have 1 or 2 supplemental scripts
     if (
       this.supplementalScripts.length === 0 ||
