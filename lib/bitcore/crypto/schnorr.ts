@@ -63,8 +63,8 @@ export class Schnorr {
    * Sign the hash using Schnorr
    */
   sign(): Schnorr {
-    const hashbuf = this.hashbuf!
-    const privkey = this.privkey!
+    const hashbuf = this.hashbuf
+    const privkey = this.privkey
     const d = privkey.bn
 
     if (!hashbuf || !privkey || !d) {
@@ -170,9 +170,7 @@ export class Schnorr {
     }
 
     const hashbuf =
-      this.endian === 'little'
-        ? this.reverseBuffer(this.hashbuf!)
-        : this.hashbuf!
+      this.endian === 'little' ? this.reverseBuffer(this.hashbuf) : this.hashbuf
     const P = this.pubkey.point
     const G = Point.getG()
 
@@ -214,11 +212,8 @@ export class Schnorr {
    * Verify signature
    */
   verify(): Schnorr {
-    if (!this.sigError()) {
-      this.verified = true
-    } else {
-      this.verified = false
-    }
+    // eslint-disable-next-line no-extra-boolean-cast
+    this.verified = !!!this.sigError()
     return this
   }
 
@@ -292,7 +287,7 @@ export class Schnorr {
         endian: endian,
         privkey: privkey,
       })
-      .sign().sig!
+      .sign().sig
   }
 
   /**
@@ -311,7 +306,7 @@ export class Schnorr {
         sig: sig,
         pubkey: pubkey,
       })
-      .verify().verified!
+      .verify().verified
   }
 
   /**

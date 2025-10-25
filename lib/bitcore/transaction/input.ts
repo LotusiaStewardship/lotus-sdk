@@ -13,7 +13,7 @@ import { PublicKey } from '../publickey.js'
 import { Signature } from '../crypto/signature.js'
 import { TransactionSignature } from './signature.js'
 import { Transaction } from './transaction.js'
-import { sighash, sign, verify, TransactionLike } from './sighash.js'
+import { sign, verify, TransactionLike } from './sighash.js'
 import { Hash } from '../crypto/hash.js'
 
 export interface InputData {
@@ -49,6 +49,14 @@ export class Input {
   static readonly SEQUENCE_LOCKTIME_MASK = 0xffff
   static readonly SEQUENCE_LOCKTIME_GRANULARITY = 512 // 512 seconds
   static readonly SEQUENCE_BLOCKDIFF_LIMIT = 0xffff // 16 bits
+
+  // Subclasses
+  static PublicKey: typeof PublicKeyInput
+  static PublicKeyHash: typeof PublicKeyHashInput
+  static Multisig: typeof MultisigInput
+  static MultisigScriptHash: typeof MultisigScriptHashInput
+  static P2PKH: typeof PublicKeyHashInput
+  static P2SH: typeof MultisigScriptHashInput
 
   // Instance properties
   /**
@@ -1287,3 +1295,11 @@ export class PublicKeyHashInput extends Input {
     return PublicKeyHashInput.SCRIPT_MAX_SIZE
   }
 }
+
+// Add subclass constructors as input types
+Input.PublicKey = PublicKeyInput
+Input.PublicKeyHash = PublicKeyHashInput
+Input.Multisig = MultisigInput
+Input.MultisigScriptHash = MultisigScriptHashInput
+Input.P2PKH = PublicKeyHashInput
+Input.P2SH = MultisigScriptHashInput

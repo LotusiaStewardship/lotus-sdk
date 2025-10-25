@@ -97,7 +97,13 @@ export class HDPrivateKey {
     if (typeof data === 'string') {
       return HDPrivateKey._transformString(data)
     } else if (Buffer.isBuffer(data)) {
-      return HDPrivateKey._transformBuffer(data)
+      // Check if the buffer is a valid Base58Check-encoded string
+      const str = data.toString()
+      if (HDPrivateKey.isValidSerialized(str)) {
+        return HDPrivateKey._transformSerialized(str)
+      } else {
+        return HDPrivateKey._transformBuffer(data)
+      }
     } else if (typeof data === 'object' && data !== null) {
       if ('xprivkey' in data) {
         return HDPrivateKey._transformObject(data as HDPrivateKeyObject)
@@ -136,11 +142,11 @@ export class HDPrivateKey {
     const parentFingerPrint = buf.subarray(5, 9)
     const childIndex = buf.readUInt32BE(9)
     const chainCode = buf.subarray(13, 45)
-    const privateKeyBuffer = buf.subarray(45, 78)
+    const privateKeyBuffer = buf.subarray(46, 78) // Skip the 1-byte gap at position 45
 
-    // Check for compressed flag
-    const compressed = privateKeyBuffer[32] === 0x01
-    const privateKeyData = privateKeyBuffer.subarray(0, 32)
+    // Check for compressed flag (should be 0x01 at position 45)
+    const compressed = buf[45] === 0x01
+    const privateKeyData = privateKeyBuffer
 
     return {
       network,
@@ -332,7 +338,7 @@ export class HDPrivateKey {
   /**
    * Check if serialized data is valid
    */
-  isValidSerialized(
+  static isValidSerialized(
     data: string | Buffer,
     network?: Network | string,
   ): boolean {
