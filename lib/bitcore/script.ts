@@ -224,7 +224,10 @@ export class Script {
     return new Script(Buffer.from(str, 'hex'))
   }
 
-  static fromAddress(address: Address): Script {
+  static fromAddress(address: Address | string): Script {
+    if (typeof address === 'string') {
+      address = Address.fromString(address)
+    }
     if (address.isPayToScriptHash()) {
       return Script.buildScriptHashOut(address)
     } else if (address.isPayToPublicKeyHash()) {

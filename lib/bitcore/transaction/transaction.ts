@@ -95,7 +95,7 @@ export class Transaction {
   // Instance properties
   inputs: Input[] = []
   outputs: Output[] = []
-  version: number = CURRENT_VERSION
+  _version: number = CURRENT_VERSION
   nLockTime: number = DEFAULT_NLOCKTIME
   private _inputAmount?: number
   private _outputAmount?: number
@@ -208,6 +208,47 @@ export class Transaction {
    */
   get outputAmount(): number {
     return this._getOutputAmount()
+  }
+
+  get version(): number {
+    return this._version
+  }
+
+  /** Satoshi-per-byte ratio for transaction fee calculation */
+  set feePerByte(feePerByte: number) {
+    this._feePerByte = feePerByte
+    this._updateChangeOutput()
+  }
+
+  /**
+   * Set change address
+   */
+  set change(address: Address | string) {
+    this._changeScript = Script.fromAddress(address)
+    this._updateChangeOutput()
+  }
+
+  /**
+   * Set fee
+   */
+  set fee(amount: number) {
+    this._fee = amount
+    this._updateChangeOutput()
+  }
+
+  /**
+   * Set fee per KB
+   */
+  set feePerKb(amount: number) {
+    this._feePerKb = amount
+    this._updateChangeOutput()
+  }
+
+  /**
+   * Set version
+   */
+  set version(version: number) {
+    this._version = version
   }
 
   /**
@@ -689,8 +730,8 @@ export class Transaction {
    * Add an output to the transaction
    */
   addOutput(output: Output): Transaction {
-    this.outputs.push(output)
-    this._outputAmount = undefined // Reset cached amount
+    this._addOutput(output)
+    this._updateChangeOutput()
     return this
   }
 
@@ -775,55 +816,6 @@ export class Transaction {
         satoshis: amount,
       }),
     )
-    return this
-  }
-
-  /**
-   * Set change address
-   */
-  change(address: Address | string): Transaction {
-    Preconditions.checkArgument(!!address, 'address is required')
-    this._changeScript = Script.fromAddress(new Address(address))
-    this._updateChangeOutput()
-    return this
-  }
-
-  /**
-   * Set fee
-   */
-  fee(amount: number): Transaction {
-    Preconditions.checkArgument(
-      typeof amount === 'number',
-      'amount must be a number',
-    )
-    this._fee = amount
-    this._updateChangeOutput()
-    return this
-  }
-
-  /**
-   * Set fee per KB
-   */
-  feePerKb(amount: number): Transaction {
-    Preconditions.checkArgument(
-      typeof amount === 'number',
-      'amount must be a number',
-    )
-    this._feePerKb = amount
-    this._updateChangeOutput()
-    return this
-  }
-
-  /**
-   * Set fee per byte
-   */
-  feePerByte(amount: number): Transaction {
-    Preconditions.checkArgument(
-      typeof amount === 'number',
-      'amount must be a number',
-    )
-    this._feePerByte = amount
-    this._updateChangeOutput()
     return this
   }
 
@@ -1091,21 +1083,22 @@ export class Transaction {
    * Sort outputs
    */
   sortOutputs(sortingFunction: (outputs: Output[]) => Output[]): Transaction {
-    this.outputs = sortingFunction(this.outputs)
-    return this
+    const sortedOutputs = sortingFunction(this.outputs)
+    return this._newOutputOrder(sortedOutputs)
   }
 
   /**
    * Shuffle outputs
    */
   shuffleOutputs(): Transaction {
-    const shuffled = [...this.outputs]
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1))
-      ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
-    }
-    this.outputs = shuffled
-    return this
+    return this.sortOutputs(outputs => {
+      const shuffled = [...outputs]
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1))
+        ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
+      }
+      return shuffled
+    })
   }
 
   /**
@@ -1114,14 +1107,6 @@ export class Transaction {
   removeInput(index: number): void {
     this.inputs.splice(index, 1)
     this._inputAmount = undefined
-  }
-
-  /**
-   * Set version
-   */
-  setVersion(version: number): Transaction {
-    this.version = version
-    return this
   }
 
   /**
@@ -1200,6 +1185,28 @@ export class Transaction {
   }
 
   // Private helper methods
+  private _newOutputOrder(newOutputs: Output[]): Transaction {
+    const isInvalidSorting =
+      this.outputs.length !== newOutputs.length ||
+      this.outputs.some((output, index) => output !== newOutputs[index])
+
+    if (isInvalidSorting) {
+      throw new BitcoreError(
+        'Invalid sorting: outputs must contain the same elements',
+      )
+    }
+
+    if (this._changeIndex !== undefined) {
+      const changeOutput = this.outputs[this._changeIndex]
+      this._changeIndex = newOutputs.findIndex(
+        output => output === changeOutput,
+      )
+    }
+
+    this.outputs = newOutputs
+    return this
+  }
+
   private _fromNonP2SH(utxo: UnspentOutput): void {
     let clazz: typeof Input
     const unspentOutput = new UnspentOutput(utxo)
