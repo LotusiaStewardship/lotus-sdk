@@ -4,6 +4,8 @@
  * License: MIT
  */
 import { NODE_GEOIP_URL, PlatformURL } from './constants.js'
+import * as RPC from '../lib/rpc.js'
+import * as Bitcore from '../lib/bitcore/index.js'
 import type { GeoIPResponse } from './types.js'
 import {
   ScriptChunkPlatformUTF8,
@@ -38,7 +40,7 @@ export async function getGeoIP(ip: string) {
  * @returns Whether the sha256 hash is valid
  */
 export function isSha256(str: string) {
-  return str.match(/^[a-f0-9]{64}$/)
+  return isHex(str, 64)
 }
 
 /**
@@ -58,6 +60,51 @@ export function toHex(data: number | string | Buffer) {
       }
   }
   throw new Error('Invalid data type')
+}
+
+/**
+ * Check if a string is hex-encoded, with optional `length` limit
+ * @param str The string to check
+ * @param length The length of the hex string to check. If not defined, checks the full string
+ * @returns `true` if the string is hex-encoded, `false` otherwise
+ */
+export function isHex(str: string, length?: number): boolean {
+  const regexStr = length ? `^[a-fA-F0-9]{${length}}$` : '^[a-fA-F0-9]+$'
+  return new RegExp(regexStr).test(str)
+}
+
+/**
+ * Check if a string is base64 encoded
+ * @param str The string to check
+ * @returns `true` if the string is base64 encoded, `false` otherwise
+ */
+export function isBase64(str: string): boolean {
+  return new RegExp('^[a-zA-Z0-9+/]+={0,2}$').test(str)
+}
+
+/**
+ * Decode a base64-encoded string
+ * @param str The base64 encoded string to decode
+ * @returns The decoded string
+ */
+export function decodeBase64(str: string) {
+  if (!isBase64(str)) {
+    throw new Error('Invalid base64 string')
+  }
+  return Buffer.from(str, 'base64').toString('utf8')
+}
+
+/**
+ * Encode a UTF-8 string to a base64-encoded string. Optionally provide a different
+ * encoding scheme for the input string
+ * @param str The string to encode
+ * @returns The base64 encoded string
+ */
+export function encodeBase64(str: string, encoding: BufferEncoding = 'utf8') {
+  if (!new TextDecoder('utf8').decode(Buffer.from(str, encoding))) {
+    throw new Error('Not a valid UTF-8 string')
+  }
+  return Buffer.from(str, encoding).toString('base64')
 }
 
 /**
@@ -425,6 +472,9 @@ export const Util = {
      * @returns The decoded string
      */
     decode(str: string) {
+      if (!isBase64(str)) {
+        throw new Error('Invalid base64 string')
+      }
       return Buffer.from(str, 'base64').toString('utf8')
     },
   },
