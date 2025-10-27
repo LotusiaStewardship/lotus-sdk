@@ -48,7 +48,7 @@ export interface TransactionObject {
 // Constants
 const CURRENT_VERSION = 2
 const DEFAULT_NLOCKTIME = 0
-const MAX_BLOCK_SIZE = 1000000
+const MAX_BLOCK_SIZE = 32_000_000
 
 // Minimum amount for an output for it not to be considered a dust output
 const DUST_AMOUNT = 546
@@ -56,8 +56,9 @@ const DUST_AMOUNT = 546
 // Margin of error to allow fees in the vecinity of the expected value but doesn't allow a big difference
 const FEE_SECURITY_MARGIN = 150
 
-// max amount of satoshis in circulation
-const MAX_MONEY = 21000000 * 1e8
+// MAX_MONEY = 2,100,000,000,000,000 satoshis (2,100,000 LOTUS)
+// see lotusd/src/amount.h
+const MAX_MONEY = 2_100_000_000_000_000
 
 // nlocktime limit to be considered block height rather than a timestamp
 const NLOCKTIME_BLOCKHEIGHT_LIMIT = 5e8
@@ -66,7 +67,7 @@ const NLOCKTIME_BLOCKHEIGHT_LIMIT = 5e8
 const NLOCKTIME_MAX_VALUE = 4294967295
 
 // Value used for fee estimation (satoshis per kilobyte)
-const FEE_PER_KB = 100000
+const FEE_PER_KB = 1_000
 
 // Safe upper bound for change address script size in bytes
 const CHANGE_OUTPUT_MAX_SIZE = 20 + 4 + 34 + 4
@@ -84,7 +85,7 @@ export class Transaction {
   // Static constants
   static readonly DUST_AMOUNT = DUST_AMOUNT
   static readonly FEE_SECURITY_MARGIN = FEE_SECURITY_MARGIN
-  static readonly MAX_MONEY = MAX_MONEY
+  //static readonly MAX_MONEY = MAX_MONEY
   static readonly NLOCKTIME_BLOCKHEIGHT_LIMIT = NLOCKTIME_BLOCKHEIGHT_LIMIT
   static readonly NLOCKTIME_MAX_VALUE = NLOCKTIME_MAX_VALUE
   static readonly FEE_PER_KB = FEE_PER_KB
@@ -1110,14 +1111,6 @@ export class Transaction {
   }
 
   /**
-   * Check if transaction has witnesses
-   */
-  hasWitnesses(): boolean {
-    // For now, return false as Lotus doesn't use witness data
-    return false
-  }
-
-  /**
    * Get fee
    */
   getFee(): number {
@@ -1144,18 +1137,107 @@ export class Transaction {
   }
 
   /**
-   * Verify transaction
+   * Verify transaction based on Lotus consensus rules
+   * Based on tx_check.cpp in lotusd
    */
   verify(): string | boolean {
+    // Basic checks that don't depend on any context
+
+    // Check if inputs are empty
+    if (this.inputs.length === 0) {
+      return 'transaction inputs empty'
+    }
+
+    // Check if outputs are empty
+    if (this.outputs.length === 0) {
+      return 'transaction outputs empty'
+    }
+
+    // Size limits - Lotus uses 32MB max block size
+    if (this.toBuffer().length > MAX_BLOCK_SIZE) {
+      return 'transaction over the maximum block size'
+    }
+
+    // Check for negative or overflow output values (see CVE-2010-5139)
+    let totalOutput = 0
+    for (let i = 0; i < this.outputs.length; i++) {
+      const output = this.outputs[i]
+
+      // Check if satoshis is negative
+      if (output.satoshis < 0) {
+        return 'transaction output ' + i + ' satoshis is negative'
+      }
+
+      // Check if individual output exceeds MAX_MONEY
+      if (output.satoshis > MAX_MONEY) {
+        return 'transaction output ' + i + ' greater than MAX_MONEY'
+      }
+
+      // Check total output overflow
+      totalOutput += output.satoshis
+      if (totalOutput > MAX_MONEY) {
+        return (
+          'transaction output ' + i + ' total output greater than MAX_MONEY'
+        )
+      }
+    }
+
+    // Handle coinbase transactions separately
     if (this.isCoinbase()) {
+      // Check coinbase script size (2-100 bytes)
+      const coinbaseScript = this.inputs[0].scriptBuffer
+      if (
+        !coinbaseScript ||
+        coinbaseScript.length < 2 ||
+        coinbaseScript.length > 100
+      ) {
+        return 'coinbase transaction script size invalid'
+      }
       return true
     }
+
+    // For regular transactions:
+
+    // Check for missing previous output information
     if (!this.hasAllUtxoInfo()) {
       return 'Missing previous output information'
     }
-    if (this.invalidSatoshis()) {
-      return 'Invalid satoshis'
+
+    // Input amount MUST NOT be less than output amount
+    if (this.inputAmount < this.outputAmount) {
+      return 'transaction input amount is less than output amount'
     }
+
+    // Enforce minimum transaction fee based on FEE_PER_KB
+    const actualFee = this.inputAmount - this.outputAmount
+    const txSize = this.toBuffer().length
+    // Calculate minimum fee: fee rate per KB / 1000 = per byte
+    const feeRatePerByte = Transaction.FEE_PER_KB / 1000
+    const minRequiredFee = Math.ceil(txSize * feeRatePerByte)
+
+    if (actualFee < minRequiredFee) {
+      return `transaction fee too low: ${actualFee} < ${minRequiredFee} (minimum ${feeRatePerByte} satoshi/byte)`
+    }
+
+    // Check for duplicate inputs (see CVE-2018-17144)
+    const inputSet = new Set<string>()
+    for (let i = 0; i < this.inputs.length; i++) {
+      const input = this.inputs[i]
+
+      // Check for null inputs
+      if (input.prevTxId.equals(Transaction.NULL_HASH)) {
+        return 'transaction input ' + i + ' has null input'
+      }
+
+      // Check for duplicate inputs
+      const inputId =
+        input.prevTxId.toString('hex') + ':' + input.outputIndex.toString()
+      if (inputSet.has(inputId)) {
+        return 'transaction input ' + i + ' duplicate input'
+      }
+      inputSet.add(inputId)
+    }
+
     return true
   }
 
@@ -1332,16 +1414,51 @@ export class Transaction {
     return feeWithChange
   }
 
+  /**
+   * Calculate varint size for a number
+   */
+  private static _getVarintSize(n: number): number {
+    if (n < 253) return 1
+    if (n < 0x10000) return 3
+    if (n < 0x100000000) return 5
+    return 9
+  }
+
   private _estimateSize(): number {
-    let result = Transaction.MAXIMUM_EXTRA_SIZE
+    // Version (4 bytes)
+    let result = 4
+
+    // Input count varint
+    result += Transaction._getVarintSize(this.inputs.length)
+
+    // For each input:
     for (const input of this.inputs) {
+      // prevTxId: 32 bytes (already reversed)
+      // outputIndex: 4 bytes
+      // sequence: 4 bytes
+      result += 40
+
+      // Script length varint + script content
       const scriptSigLen = input._estimateSize()
-      const varintLen = BufferWriter.varintBufNum(scriptSigLen).length
-      result += 36 + varintLen + scriptSigLen
+      result += Transaction._getVarintSize(scriptSigLen)
+      result += scriptSigLen
     }
+
+    // Output count varint
+    result += Transaction._getVarintSize(this.outputs.length)
+
+    // For each output:
     for (const output of this.outputs) {
-      result += output.scriptBuffer.length + 9
+      // Use Output's getSize() method which includes:
+      // - 8 bytes for value (UInt64LE)
+      // - varint for script length
+      // - script content
+      result += output.getSize()
     }
+
+    // LockTime: 4 bytes
+    result += 4
+
     return result
   }
 
