@@ -38,6 +38,8 @@ import { PrivateKey } from '../privatekey.js'
 import { PublicKey } from '../publickey.js'
 import { BN } from '../crypto/bn.js'
 import { TransactionSignature } from './signature.js'
+import type { Point } from '../crypto/point.js'
+import { sighash as computeSighash } from './sighash.js'
 
 export interface TransactionData {
   version?: number
@@ -944,6 +946,168 @@ export class Transaction {
   ): Transaction {
     const sigtype = Signature.SIGHASH_ALL | Signature.SIGHASH_LOTUS
     return this.sign(privateKey, sigtype, 'schnorr')
+  }
+
+  /**
+   * Get all MuSig2 Taproot inputs in this transaction
+   *
+   * Returns an array of MuSigTaprootInput instances that require
+   * multi-party signing coordination.
+   *
+   * @returns Array of MuSig2 Taproot inputs
+   *
+   * @example
+   * ```typescript
+   * const musigInputs = tx.getMuSig2Inputs()
+   * for (const input of musigInputs) {
+   *   // Coordinate signing for each MuSig2 input
+   * }
+   * ```
+   */
+  getMuSig2Inputs(): MuSigTaprootInput[] {
+    return this.inputs.filter(
+      input => input instanceof MuSigTaprootInput,
+    ) as MuSigTaprootInput[]
+  }
+
+  /**
+   * Get sighash for a MuSig2 Taproot input
+   *
+   * Computes the transaction hash that needs to be signed for a specific
+   * MuSig2 Taproot input using SIGHASH_ALL | SIGHASH_LOTUS.
+   *
+   * @param inputIndex - Index of the MuSig2 input
+   * @returns 32-byte sighash buffer to be signed
+   * @throws Error if input is not a MuSigTaprootInput
+   *
+   * @example
+   * ```typescript
+   * const sighash = tx.getMuSig2Sighash(0)
+   * // Use this sighash to coordinate MuSig2 signing
+   * ```
+   */
+  getMuSig2Sighash(inputIndex: number): Buffer {
+    const input = this.inputs[inputIndex]
+    if (!(input instanceof MuSigTaprootInput)) {
+      throw new Error(`Input ${inputIndex} is not a MuSigTaprootInput`)
+    }
+
+    if (!input.output) {
+      throw new Error(`Input ${inputIndex} is missing output information`)
+    }
+
+    const sigtype = Signature.SIGHASH_ALL | Signature.SIGHASH_LOTUS
+
+    return computeSighash(
+      this,
+      sigtype,
+      inputIndex,
+      input.output.script,
+      new BN(input.output.satoshis),
+    )
+  }
+
+  /**
+   * Add a public nonce for a MuSig2 input
+   *
+   * During Round 1 of MuSig2 signing, each signer generates and shares
+   * their public nonces. Use this method to add received nonces to the input.
+   *
+   * @param inputIndex - Index of the MuSig2 input
+   * @param signerIndex - Index of the signer (0-based)
+   * @param nonce - Public nonce pair [R1, R2] from the signer
+   * @returns this transaction (for chaining)
+   * @throws Error if input is not a MuSigTaprootInput
+   *
+   * @example
+   * ```typescript
+   * // Alice adds Bob's nonce
+   * tx.addMuSig2Nonce(0, 1, [bobR1, bobR2])
+   * ```
+   */
+  addMuSig2Nonce(
+    inputIndex: number,
+    signerIndex: number,
+    nonce: [Point, Point],
+  ): Transaction {
+    const input = this.inputs[inputIndex]
+    if (!(input instanceof MuSigTaprootInput)) {
+      throw new Error(`Input ${inputIndex} is not a MuSigTaprootInput`)
+    }
+
+    input.addPublicNonce(signerIndex, nonce)
+    return this
+  }
+
+  /**
+   * Add a partial signature for a MuSig2 input
+   *
+   * During Round 2 of MuSig2 signing, each signer generates and shares
+   * their partial signatures. Use this method to add received partial
+   * signatures to the input.
+   *
+   * @param inputIndex - Index of the MuSig2 input
+   * @param signerIndex - Index of the signer (0-based)
+   * @param partialSig - Partial signature from the signer
+   * @returns this transaction (for chaining)
+   * @throws Error if input is not a MuSigTaprootInput
+   *
+   * @example
+   * ```typescript
+   * // Alice adds Bob's partial signature
+   * tx.addMuSig2PartialSignature(0, 1, bobPartialSig)
+   * ```
+   */
+  addMuSig2PartialSignature(
+    inputIndex: number,
+    signerIndex: number,
+    partialSig: BN,
+  ): Transaction {
+    const input = this.inputs[inputIndex]
+    if (!(input instanceof MuSigTaprootInput)) {
+      throw new Error(`Input ${inputIndex} is not a MuSigTaprootInput`)
+    }
+
+    input.addPartialSignature(signerIndex, partialSig)
+    return this
+  }
+
+  /**
+   * Finalize all MuSig2 inputs
+   *
+   * Aggregates partial signatures for all MuSig2 inputs that have received
+   * all required partial signatures. This creates the final Schnorr signatures
+   * and adds them to the input scripts.
+   *
+   * @returns this transaction (for chaining)
+   * @throws Error if any MuSig2 input is missing partial signatures
+   *
+   * @example
+   * ```typescript
+   * // After all participants have shared partial signatures
+   * tx.finalizeMuSig2Signatures()
+   * console.log('Transaction ready to broadcast:', tx.serialize())
+   * ```
+   */
+  finalizeMuSig2Signatures(): Transaction {
+    const musigInputs = this.getMuSig2Inputs()
+
+    for (let i = 0; i < this.inputs.length; i++) {
+      const input = this.inputs[i]
+      if (input instanceof MuSigTaprootInput) {
+        if (!input.hasAllPartialSignatures()) {
+          throw new Error(
+            `MuSig2 input ${i} is missing partial signatures. ` +
+              `Has ${input.partialSignatures?.size || 0} of ${input.keyAggContext?.pubkeys.length || 0}`,
+          )
+        }
+
+        const sighash = this.getMuSig2Sighash(i)
+        input.finalizeMuSigSignature(this, sighash)
+      }
+    }
+
+    return this
   }
 
   /**
