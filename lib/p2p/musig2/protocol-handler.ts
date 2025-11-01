@@ -188,6 +188,7 @@ export class MuSig2P2PProtocolHandler implements IProtocolHandler {
     await this.coordinator._handleSessionJoin(
       payload.sessionId,
       payload.signerIndex,
+      payload.sequenceNumber,
       deserializePublicKey(payload.publicKey),
       from.peerId,
     )
@@ -207,6 +208,7 @@ export class MuSig2P2PProtocolHandler implements IProtocolHandler {
     await this.coordinator._handleNonceShare(
       payload.sessionId,
       payload.signerIndex,
+      payload.sequenceNumber,
       publicNonce,
       from.peerId,
     )
@@ -226,6 +228,7 @@ export class MuSig2P2PProtocolHandler implements IProtocolHandler {
     await this.coordinator._handlePartialSigShare(
       payload.sessionId,
       payload.signerIndex,
+      payload.sequenceNumber,
       partialSig,
       from.peerId,
     )

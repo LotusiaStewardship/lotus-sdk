@@ -60,14 +60,25 @@ export interface SessionAnnouncementPayload {
     electionMethod?: string
     electionProof: string
   }
+  /** Cryptographic signature by session creator to prevent DHT poisoning */
+  creatorSignature?: string // Schnorr signature as hex
+}
+
+/**
+ * Base interface for session-specific messages
+ * Includes replay protection via sequence numbers
+ */
+export interface SessionMessage {
+  sessionId: string
+  signerIndex: number
+  sequenceNumber: number // Strictly increasing per signer per session
+  timestamp: number // Unix timestamp in milliseconds
 }
 
 /**
  * Session join payload
  */
-export interface SessionJoinPayload {
-  sessionId: string
-  signerIndex: number
+export interface SessionJoinPayload extends SessionMessage {
   publicKey: string // This signer's public key as hex
 }
 
@@ -75,9 +86,7 @@ export interface SessionJoinPayload {
  * Nonce share payload
  * Public nonces are [Point, Point] where each Point is 33 bytes (compressed)
  */
-export interface NonceSharePayload {
-  sessionId: string
-  signerIndex: number
+export interface NonceSharePayload extends SessionMessage {
   publicNonce: {
     R1: string // Compressed point (33 bytes) as hex
     R2: string // Compressed point (33 bytes) as hex
@@ -87,9 +96,7 @@ export interface NonceSharePayload {
 /**
  * Partial signature share payload
  */
-export interface PartialSigSharePayload {
-  sessionId: string
-  signerIndex: number
+export interface PartialSigSharePayload extends SessionMessage {
   partialSig: string // BN as hex string (32 bytes)
 }
 
@@ -143,6 +150,21 @@ export interface MuSig2P2PConfig {
 
   /** Broadcast timeout in milliseconds (default: 5 minutes) */
   broadcastTimeout?: number
+
+  /** Enable message replay protection (default: true) */
+  enableReplayProtection?: boolean
+
+  /** Maximum allowed sequence number gap to detect suspicious activity (default: 100) */
+  maxSequenceGap?: number
+
+  /** Enable automatic session cleanup (default: true) */
+  enableAutoCleanup?: boolean
+
+  /** Session cleanup interval in milliseconds (default: 60000 = 1 minute) */
+  cleanupInterval?: number
+
+  /** Timeout for detecting stuck sessions in milliseconds (default: 600000 = 10 minutes) */
+  stuckSessionTimeout?: number
 }
 
 /**
@@ -155,6 +177,8 @@ export interface ActiveSession {
   phase: MuSigSessionPhase
   createdAt: number
   updatedAt: number
+  /** Last seen sequence number per signer (for replay protection) */
+  lastSequenceNumbers: Map<number, number>
   /** Coordinator election data (optional) */
   election?: {
     coordinatorIndex: number
@@ -189,4 +213,6 @@ export interface SessionAnnouncementData {
     electionMethod?: string
     electionProof: string
   }
+  /** Cryptographic signature by session creator to prevent DHT poisoning */
+  creatorSignature?: Buffer // Schnorr signature
 }

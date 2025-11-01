@@ -41,6 +41,8 @@ import { PrivateKey } from '../../bitcore/privatekey.js'
 import { Signature } from '../../bitcore/crypto/signature.js'
 import { Point } from '../../bitcore/crypto/point.js'
 import { BN } from '../../bitcore/crypto/bn.js'
+import { Schnorr } from '../../bitcore/crypto/schnorr.js'
+import { Hash } from '../../bitcore/crypto/hash.js'
 import {
   electCoordinator,
   ElectionMethod,
@@ -61,6 +63,7 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
   private messageProtocol: P2PProtocol // Renamed to avoid conflict with parent's private 'protocol'
   private activeSessions: Map<string, ActiveSession> = new Map()
   private peerIdToSignerIndex: Map<string, Map<string, number>> = new Map() // sessionId -> peerId -> signerIndex
+  private cleanupIntervalId?: NodeJS.Timeout
   private musig2Config: {
     sessionTimeout: number
     enableSessionDiscovery: boolean
@@ -73,6 +76,11 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       | 'last-signer'
     enableCoordinatorFailover: boolean
     broadcastTimeout: number
+    enableReplayProtection: boolean
+    maxSequenceGap: number
+    enableAutoCleanup: boolean
+    cleanupInterval: number
+    stuckSessionTimeout: number
   }
 
   constructor(p2pConfig: P2PConfig, musig2Config?: Partial<MuSig2P2PConfig>) {
@@ -97,10 +105,36 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
         musig2Config?.enableCoordinatorElection ??
         false,
       broadcastTimeout: musig2Config?.broadcastTimeout || 5 * 60 * 1000, // 5 minutes
+      enableReplayProtection: musig2Config?.enableReplayProtection ?? true,
+      maxSequenceGap: musig2Config?.maxSequenceGap ?? 100,
+      enableAutoCleanup: musig2Config?.enableAutoCleanup ?? true,
+      cleanupInterval: musig2Config?.cleanupInterval || 60000, // 1 minute
+      stuckSessionTimeout: musig2Config?.stuckSessionTimeout || 10 * 60 * 1000, // 10 minutes
     }
 
     // Register protocol handler with parent P2PCoordinator
     this.registerProtocol(this.protocolHandler)
+
+    // Start automatic session cleanup if enabled
+    if (this.musig2Config.enableAutoCleanup) {
+      this.startSessionCleanup()
+    }
+  }
+
+  /**
+   * Stop the coordinator and cleanup
+   *
+   * Overrides base class to ensure cleanup interval is stopped before node shutdown
+   */
+  async stop(): Promise<void> {
+    // Stop automatic cleanup interval first (before node shutdown)
+    if (this.cleanupIntervalId) {
+      clearInterval(this.cleanupIntervalId)
+      this.cleanupIntervalId = undefined
+    }
+
+    // Call parent stop() which will shutdown the libp2p node
+    await super.stop()
   }
 
   /**
@@ -141,6 +175,7 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       phase: session.phase,
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
+      lastSequenceNumbers: new Map(), // Initialize replay protection
     }
 
     // Add election data if enabled
@@ -162,7 +197,7 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
 
     // Announce session to DHT if enabled
     if (this.musig2Config.enableSessionDiscovery) {
-      await this._announceSessionToDHT(session, this.peerId)
+      await this._announceSessionToDHT(session, this.peerId, myPrivateKey)
     }
 
     // Emit event
@@ -229,6 +264,7 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       phase: session.phase,
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
+      lastSequenceNumbers: new Map(), // Initialize replay protection
       election: electionData,
     }
 
@@ -279,6 +315,10 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     // Generate nonces locally
     const publicNonces = this.sessionManager.generateNonces(session, privateKey)
 
+    // Sync phase (generateNonces transitions to NONCE_EXCHANGE)
+    activeSession.phase = session.phase
+    activeSession.updatedAt = Date.now()
+
     // Broadcast nonces to all participants
     await this._broadcastNonceShare(
       sessionId,
@@ -312,6 +352,10 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       session,
       privateKey,
     )
+
+    // Sync phase (createPartialSignature transitions to PARTIAL_SIG_EXCHANGE)
+    activeSession.phase = session.phase
+    activeSession.updatedAt = Date.now()
 
     // Broadcast partial signature to all participants
     await this._broadcastPartialSigShare(
@@ -368,11 +412,21 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
    * Get session data
    *
    * @param sessionId - Session ID
-   * @returns Session data or undefined if not found
+   * @returns Session data or null if not found
    */
-  getSession(sessionId: string): MuSigSession | undefined {
+  getSession(sessionId: string): MuSigSession | null {
     const activeSession = this.activeSessions.get(sessionId)
-    return activeSession?.session
+    return activeSession?.session ?? null
+  }
+
+  /**
+   * Get active session (includes tracking state like sequence numbers)
+   *
+   * @param sessionId - Session ID
+   * @returns ActiveSession or undefined
+   */
+  getActiveSession(sessionId: string): ActiveSession | undefined {
+    return this.activeSessions.get(sessionId)
   }
 
   /**
@@ -427,12 +481,22 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       clearTimeout(activeSession.failover.broadcastTimeoutId)
     }
 
-    // Send abort to all participants
-    await this._broadcastSessionAbort(
-      sessionId,
-      'Session closed',
-      activeSession.participants,
-    )
+    // Send abort to all participants (only if node is still running)
+    if (this.libp2pNode) {
+      try {
+        await this._broadcastSessionAbort(
+          sessionId,
+          'Session closed',
+          activeSession.participants,
+        )
+      } catch (error) {
+        // Ignore errors if node has been stopped
+        console.warn(
+          `[MuSig2P2P] Failed to broadcast session abort for ${sessionId}:`,
+          error instanceof Error ? error.message : String(error),
+        )
+      }
+    }
 
     // Remove session
     this.activeSessions.delete(sessionId)
@@ -477,12 +541,34 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
   async _handleSessionJoin(
     sessionId: string,
     signerIndex: number,
+    sequenceNumber: number,
     publicKey: PublicKey,
     peerId: string,
   ): Promise<void> {
     const activeSession = this.activeSessions.get(sessionId)
     if (!activeSession) {
       throw new Error(`Session ${sessionId} not found`)
+    }
+
+    // Validate protocol phase (must be in INIT to accept JOIN)
+    if (
+      !this._validateProtocolPhase(
+        activeSession,
+        MuSig2MessageType.SESSION_JOIN,
+      )
+    ) {
+      throw new Error(
+        `Protocol violation: SESSION_JOIN not allowed in phase ${activeSession.phase}`,
+      )
+    }
+
+    // Validate sequence number for replay protection
+    if (
+      !this._validateMessageSequence(activeSession, signerIndex, sequenceNumber)
+    ) {
+      throw new Error(
+        `Invalid sequence number for signer ${signerIndex} in session ${sessionId}`,
+      )
     }
 
     // Verify public key matches expected signer
@@ -520,12 +606,31 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
   async _handleNonceShare(
     sessionId: string,
     signerIndex: number,
+    sequenceNumber: number,
     publicNonce: [Point, Point],
     peerId: string,
   ): Promise<void> {
     const activeSession = this.activeSessions.get(sessionId)
     if (!activeSession) {
       throw new Error(`Session ${sessionId} not found`)
+    }
+
+    // Validate protocol phase (must be in NONCE_EXCHANGE to accept NONCE_SHARE)
+    if (
+      !this._validateProtocolPhase(activeSession, MuSig2MessageType.NONCE_SHARE)
+    ) {
+      throw new Error(
+        `Protocol violation: NONCE_SHARE not allowed in phase ${activeSession.phase}`,
+      )
+    }
+
+    // Validate sequence number for replay protection
+    if (
+      !this._validateMessageSequence(activeSession, signerIndex, sequenceNumber)
+    ) {
+      throw new Error(
+        `Invalid sequence number for signer ${signerIndex} in session ${sessionId}`,
+      )
     }
 
     const { session } = activeSession
@@ -574,12 +679,34 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
   async _handlePartialSigShare(
     sessionId: string,
     signerIndex: number,
+    sequenceNumber: number,
     partialSig: BN,
     peerId: string,
   ): Promise<void> {
     const activeSession = this.activeSessions.get(sessionId)
     if (!activeSession) {
       throw new Error(`Session ${sessionId} not found`)
+    }
+
+    // Validate protocol phase (must be in PARTIAL_SIG_EXCHANGE to accept PARTIAL_SIG_SHARE)
+    if (
+      !this._validateProtocolPhase(
+        activeSession,
+        MuSig2MessageType.PARTIAL_SIG_SHARE,
+      )
+    ) {
+      throw new Error(
+        `Protocol violation: PARTIAL_SIG_SHARE not allowed in phase ${activeSession.phase}`,
+      )
+    }
+
+    // Validate sequence number for replay protection
+    if (
+      !this._validateMessageSequence(activeSession, signerIndex, sequenceNumber)
+    ) {
+      throw new Error(
+        `Invalid sequence number for signer ${signerIndex} in session ${sessionId}`,
+      )
     }
 
     const { session } = activeSession
@@ -707,11 +834,245 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
   // Private helper methods for messaging
 
   /**
+   * Sign a session announcement with creator's private key
+   *
+   * Creates a canonical serialization of the announcement and signs it with
+   * Schnorr to prevent DHT poisoning attacks.
+   *
+   * @param announcement - Session announcement payload to sign
+   * @param privateKey - Creator's private key
+   * @returns Schnorr signature as Buffer
+   */
+  private _signSessionAnnouncement(
+    announcement: SessionAnnouncementPayload,
+    privateKey: PrivateKey,
+  ): Buffer {
+    // Create canonical serialization for signing
+    // Order: sessionId | signers | message | creatorIndex | requiredSigners
+    const message = Buffer.concat([
+      Buffer.from(announcement.sessionId),
+      Buffer.concat(announcement.signers.map(s => Buffer.from(s, 'hex'))),
+      Buffer.from(announcement.message, 'hex'),
+      Buffer.from([announcement.creatorIndex]),
+      Buffer.from([announcement.requiredSigners]),
+    ])
+
+    // Hash the message
+    const hashbuf = Hash.sha256(message)
+
+    // Sign with Schnorr (big-endian)
+    const signature = Schnorr.sign(hashbuf, privateKey, 'big')
+
+    // Return signature as buffer (64 bytes: r || s)
+    return signature.toBuffer('schnorr')
+  }
+
+  /**
+   * Verify session announcement signature
+   *
+   * Reconstructs the canonical message and verifies the Schnorr signature
+   * against the creator's public key to prevent DHT poisoning.
+   *
+   * @param announcement - Session announcement data to verify
+   * @returns true if signature is valid, false otherwise
+   */
+  private _verifySessionAnnouncement(
+    announcement: SessionAnnouncementData,
+  ): boolean {
+    // Check if signature exists
+    if (!announcement.creatorSignature) {
+      console.warn(
+        '[MuSig2P2P] Session announcement missing signature:',
+        announcement.sessionId,
+      )
+      return false
+    }
+
+    // Reconstruct canonical message
+    const message = Buffer.concat([
+      Buffer.from(announcement.sessionId),
+      Buffer.concat(announcement.signers.map(pk => pk.toBuffer())),
+      announcement.message,
+      Buffer.from([announcement.creatorIndex]),
+      Buffer.from([announcement.requiredSigners]),
+    ])
+
+    // Hash the message
+    const hashbuf = Hash.sha256(message)
+
+    // Get creator's public key
+    const creatorPubKey = announcement.signers[announcement.creatorIndex]
+
+    // Parse signature
+    let signature: Signature
+    try {
+      // Schnorr signatures are 64 bytes (r || s)
+      if (announcement.creatorSignature.length !== 64) {
+        console.error(
+          '[MuSig2P2P] Invalid signature length:',
+          announcement.creatorSignature.length,
+        )
+        return false
+      }
+
+      // Parse as Schnorr signature (64 bytes)
+      const r = new BN(announcement.creatorSignature.slice(0, 32), 'be')
+      const s = new BN(announcement.creatorSignature.slice(32, 64), 'be')
+      signature = new Signature({ r, s, isSchnorr: true })
+    } catch (error) {
+      console.error('[MuSig2P2P] Failed to parse signature:', error)
+      return false
+    }
+
+    // Verify signature
+    try {
+      return Schnorr.verify(hashbuf, signature, creatorPubKey, 'big')
+    } catch (error) {
+      console.error('[MuSig2P2P] Signature verification failed:', error)
+      return false
+    }
+  }
+
+  /**
+   * Get next sequence number for a signer in a session
+   *
+   * @param activeSession - Active session
+   * @param signerIndex - Signer index
+   * @returns Next sequence number
+   */
+  private _getNextSequenceNumber(
+    activeSession: ActiveSession,
+    signerIndex: number,
+  ): number {
+    const lastSeq = activeSession.lastSequenceNumbers.get(signerIndex) || 0
+    const nextSeq = lastSeq + 1
+    activeSession.lastSequenceNumbers.set(signerIndex, nextSeq)
+    return nextSeq
+  }
+
+  /**
+   * Validate message sequence number for replay protection
+   *
+   * Ensures sequence numbers are strictly increasing per signer and detects
+   * suspicious gaps that might indicate replay attacks or protocol violations.
+   *
+   * @param activeSession - Active session
+   * @param signerIndex - Index of the signer sending the message
+   * @param sequenceNumber - Sequence number from the message
+   * @returns true if sequence is valid, false if replay or suspicious activity detected
+   */
+  private _validateMessageSequence(
+    activeSession: ActiveSession,
+    signerIndex: number,
+    sequenceNumber: number,
+  ): boolean {
+    // Skip validation if replay protection is disabled
+    if (!this.musig2Config.enableReplayProtection) {
+      return true
+    }
+
+    const lastSeq = activeSession.lastSequenceNumbers.get(signerIndex) || 0
+
+    // CHECK 1: Strictly increasing (prevents replay)
+    if (sequenceNumber <= lastSeq) {
+      console.error(
+        `[MuSig2P2P] ⚠️ REPLAY DETECTED in session ${activeSession.sessionId}: ` +
+          `signer ${signerIndex} sent seq ${sequenceNumber} but last was ${lastSeq}`,
+      )
+      return false
+    }
+
+    // CHECK 2: Prevent huge gaps (suspicious activity)
+    const gap = sequenceNumber - lastSeq
+    if (gap > this.musig2Config.maxSequenceGap) {
+      console.error(
+        `[MuSig2P2P] ⚠️ SUSPICIOUS GAP in session ${activeSession.sessionId}: ` +
+          `signer ${signerIndex} jumped from seq ${lastSeq} to ${sequenceNumber} (gap: ${gap})`,
+      )
+      return false
+    }
+
+    // CHECK 3: Update tracking
+    activeSession.lastSequenceNumbers.set(signerIndex, sequenceNumber)
+    return true
+  }
+
+  /**
+   * Validate that a message type is allowed in the current protocol phase
+   *
+   * Enforces strict protocol phase transitions to prevent out-of-order message
+   * acceptance. This ensures messages follow the MuSig2 protocol flow:
+   * INIT → NONCE_EXCHANGE → PARTIAL_SIG_EXCHANGE → COMPLETE
+   *
+   * @param activeSession - Active session
+   * @param messageType - Type of message being received
+   * @returns true if message is allowed in current phase, false otherwise
+   */
+  private _validateProtocolPhase(
+    activeSession: ActiveSession,
+    messageType: MuSig2MessageType,
+  ): boolean {
+    const currentPhase = activeSession.phase
+
+    // Define allowed messages per phase
+    switch (messageType) {
+      case MuSig2MessageType.SESSION_JOIN:
+        // JOIN only allowed in INIT phase
+        if (currentPhase !== MuSigSessionPhase.INIT) {
+          console.error(
+            `[MuSig2P2P] ⚠️ PROTOCOL VIOLATION in session ${activeSession.sessionId}: ` +
+              `SESSION_JOIN not allowed in phase ${currentPhase} (must be INIT)`,
+          )
+          return false
+        }
+        return true
+
+      case MuSig2MessageType.NONCE_SHARE:
+        // NONCE_SHARE only allowed in NONCE_EXCHANGE phase
+        if (currentPhase !== MuSigSessionPhase.NONCE_EXCHANGE) {
+          console.error(
+            `[MuSig2P2P] ⚠️ PROTOCOL VIOLATION in session ${activeSession.sessionId}: ` +
+              `NONCE_SHARE not allowed in phase ${currentPhase} (must be NONCE_EXCHANGE)`,
+          )
+          return false
+        }
+        return true
+
+      case MuSig2MessageType.PARTIAL_SIG_SHARE:
+        // PARTIAL_SIG_SHARE only allowed in PARTIAL_SIG_EXCHANGE phase
+        if (currentPhase !== MuSigSessionPhase.PARTIAL_SIG_EXCHANGE) {
+          console.error(
+            `[MuSig2P2P] ⚠️ PROTOCOL VIOLATION in session ${activeSession.sessionId}: ` +
+              `PARTIAL_SIG_SHARE not allowed in phase ${currentPhase} (must be PARTIAL_SIG_EXCHANGE)`,
+          )
+          return false
+        }
+        return true
+
+      case MuSig2MessageType.SESSION_ABORT:
+        // ABORT allowed in any phase
+        return true
+
+      case MuSig2MessageType.VALIDATION_ERROR:
+        // ERROR messages allowed in any phase
+        return true
+
+      default:
+        // Unknown message types - allow but log warning
+        console.warn(
+          `[MuSig2P2P] Unknown message type for phase validation: ${messageType}`,
+        )
+        return true
+    }
+  }
+
+  /**
    * Announce session to DHT
    */
   private async _announceSessionToDHT(
     session: MuSigSession,
     creatorPeerId: string,
+    creatorPrivateKey: PrivateKey,
   ): Promise<void> {
     // Get election data from active session if enabled
     const activeSession = this.activeSessions.get(session.sessionId)
@@ -751,6 +1112,13 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       election: electionPayload,
     }
 
+    // Sign the announcement to prevent DHT poisoning
+    const signatureBuffer = this._signSessionAnnouncement(
+      data,
+      creatorPrivateKey,
+    )
+    data.creatorSignature = signatureBuffer.toString('hex')
+
     await this.announceResource(
       this.musig2Config.sessionResourceType,
       session.sessionId,
@@ -785,7 +1153,12 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     })
     const message = Buffer.from(data.message, 'hex')
 
-    return {
+    // Deserialize signature if present
+    const creatorSignature = data.creatorSignature
+      ? Buffer.from(data.creatorSignature, 'hex')
+      : undefined
+
+    const announcement: SessionAnnouncementData = {
       sessionId: data.sessionId,
       signers,
       creatorPeerId: resource.creatorPeerId,
@@ -796,7 +1169,19 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       expiresAt: resource.expiresAt,
       metadata: data.metadata,
       election: data.election,
+      creatorSignature,
     }
+
+    // Verify signature to prevent DHT poisoning
+    if (!this._verifySessionAnnouncement(announcement)) {
+      console.error(
+        '[MuSig2P2P] Session announcement signature verification failed:',
+        sessionId,
+      )
+      return null
+    }
+
+    return announcement
   }
 
   /**
@@ -808,9 +1193,16 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     publicKey: PublicKey,
     peerId: string,
   ): Promise<void> {
+    const activeSession = this.activeSessions.get(sessionId)
+    if (!activeSession) {
+      throw new Error(`Session ${sessionId} not found`)
+    }
+
     const payload: SessionJoinPayload = {
       sessionId,
       signerIndex,
+      sequenceNumber: this._getNextSequenceNumber(activeSession, signerIndex),
+      timestamp: Date.now(),
       publicKey: serializePublicKey(publicKey),
     }
 
@@ -830,9 +1222,16 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     publicNonce: [Point, Point],
     participants: Map<number, string>,
   ): Promise<void> {
+    const activeSession = this.activeSessions.get(sessionId)
+    if (!activeSession) {
+      throw new Error(`Session ${sessionId} not found`)
+    }
+
     const payload: NonceSharePayload = {
       sessionId,
       signerIndex,
+      sequenceNumber: this._getNextSequenceNumber(activeSession, signerIndex),
+      timestamp: Date.now(),
       publicNonce: serializePublicNonce(publicNonce),
     }
 
@@ -855,9 +1254,16 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     partialSig: BN,
     participants: Map<number, string>,
   ): Promise<void> {
+    const activeSession = this.activeSessions.get(sessionId)
+    if (!activeSession) {
+      throw new Error(`Session ${sessionId} not found`)
+    }
+
     const payload: PartialSigSharePayload = {
       sessionId,
       signerIndex,
+      sequenceNumber: this._getNextSequenceNumber(activeSession, signerIndex),
+      timestamp: Date.now(),
       partialSig: serializeBN(partialSig),
     }
 
@@ -922,11 +1328,99 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
   }
 
   /**
-   * Cleanup: close all sessions
+   * Cleanup: stop automatic cleanup and close all sessions
    */
   async cleanup(): Promise<void> {
+    // Stop automatic cleanup interval
+    if (this.cleanupIntervalId) {
+      clearInterval(this.cleanupIntervalId)
+      this.cleanupIntervalId = undefined
+    }
+
+    // Close all active sessions
     const sessionIds = Array.from(this.activeSessions.keys())
     await Promise.all(sessionIds.map(id => this.closeSession(id)))
+  }
+
+  /**
+   * Start periodic session cleanup task
+   *
+   * Runs every `cleanupInterval` milliseconds to clean up expired and stuck sessions.
+   * Automatically called by constructor if `enableAutoCleanup` is true.
+   */
+  private startSessionCleanup(): void {
+    this.cleanupIntervalId = setInterval(() => {
+      this.cleanupExpiredSessions()
+    }, this.musig2Config.cleanupInterval)
+  }
+
+  /**
+   * Clean up expired and stuck sessions
+   *
+   * This method is called periodically by the cleanup interval.
+   * It removes sessions that:
+   * - Have exceeded the session timeout
+   * - Are stuck in a phase for too long
+   */
+  private cleanupExpiredSessions(): void {
+    const now = Date.now()
+    const expirationTime = this.musig2Config.sessionTimeout
+
+    for (const [sessionId, activeSession] of this.activeSessions.entries()) {
+      // Check if session has expired
+      const age = now - activeSession.createdAt
+      if (age > expirationTime) {
+        console.log(
+          `[MuSig2P2P] Cleaning up expired session: ${sessionId} (age: ${Math.round(age / 1000)}s)`,
+        )
+        this.closeSession(sessionId).catch(error => {
+          console.error(
+            `[MuSig2P2P] Failed to close expired session ${sessionId}:`,
+            error,
+          )
+        })
+        continue
+      }
+
+      // Check if session is stuck in a phase
+      if (this._isSessionStuck(activeSession, now)) {
+        console.warn(
+          `[MuSig2P2P] Cleaning up stuck session: ${sessionId} (phase: ${activeSession.phase})`,
+        )
+        this.closeSession(sessionId).catch(error => {
+          console.error(
+            `[MuSig2P2P] Failed to close stuck session ${sessionId}:`,
+            error,
+          )
+        })
+      }
+    }
+  }
+
+  /**
+   * Check if a session is stuck in a phase
+   *
+   * A session is considered stuck if it has been in the NONCE_EXCHANGE
+   * or PARTIAL_SIG_EXCHANGE phase for longer than the stuck session timeout.
+   *
+   * @param activeSession - Active session to check
+   * @param now - Current timestamp
+   * @returns true if session is stuck, false otherwise
+   */
+  private _isSessionStuck(activeSession: ActiveSession, now: number): boolean {
+    const stuckTimeout = this.musig2Config.stuckSessionTimeout
+    const timeSinceUpdate = now - activeSession.updatedAt
+
+    // If in nonce exchange or partial sig exchange for too long, it's stuck
+    if (
+      (activeSession.phase === MuSigSessionPhase.NONCE_EXCHANGE ||
+        activeSession.phase === MuSigSessionPhase.PARTIAL_SIG_EXCHANGE) &&
+      timeSinceUpdate > stuckTimeout
+    ) {
+      return true
+    }
+
+    return false
   }
 
   /**
