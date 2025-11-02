@@ -1,6 +1,55 @@
 # MuSig2 Quick Reference for lotus-lib
 
-**TL;DR**: MuSig2 implementation requires ~2000 lines of TypeScript code across 3-4 new files, adapting BIP327 to Lotus Schnorr format.
+**TL;DR**: MuSig2 implementation with P2P three-phase coordination architecture for decentralized peer discovery and dynamic session building.
+
+---
+
+## P2P Coordination (Three-Phase Architecture)
+
+### Quick Start
+
+```typescript
+import { MuSig2P2PCoordinator } from 'lotus-lib/p2p/musig2'
+
+// Create coordinator
+const coordinator = new MuSig2P2PCoordinator({
+  listen: ['/ip4/0.0.0.0/tcp/4001'],
+  enableDHT: true,
+})
+
+await coordinator.start()
+
+// Phase 0: Advertise availability
+await coordinator.advertiseSigner(myPrivateKey, {
+  transactionTypes: ['spend', 'swap'],
+  minAmount: 1_000_000, // 1 XPI
+  maxAmount: 100_000_000, // 100 XPI
+})
+
+// Phase 1: Discover signers
+const signers = await coordinator.findAvailableSigners({
+  transactionType: 'spend',
+  maxAmount: 5_000_000,
+})
+
+// Phase 2: Create signing request (3-of-3 MuSig2)
+const requestId = await coordinator.announceSigningRequest(
+  [myKey, signer1.publicKey, signer2.publicKey],
+  transactionSighash,
+  myPrivateKey,
+)
+
+// Phase 3: Join request (as participant)
+const requests = await coordinator.findSigningRequestsForMe(myPublicKey)
+await coordinator.joinSigningRequest(requestId, myPrivateKey)
+
+// Session auto-created when ALL participants join (n-of-n)
+coordinator.on('session:ready', sessionId => {
+  // Ready for MuSig2 signing protocol
+})
+```
+
+**See [P2P_DHT_ARCHITECTURE.md](P2P_DHT_ARCHITECTURE.md) for complete details**
 
 ---
 

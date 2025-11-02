@@ -23,6 +23,13 @@ import {
   NonceSharePayload,
   PartialSigSharePayload,
   SessionAnnouncementPayload,
+  SignerAdvertisement,
+  SignerAdvertisementPayload,
+  SignerCriteria,
+  SigningRequest,
+  SigningRequestPayload,
+  ParticipantJoinedPayload,
+  ActiveSigningSession,
 } from './types.js'
 import {
   serializePublicNonce,
@@ -62,7 +69,11 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
   private protocolHandler: MuSig2P2PProtocolHandler
   private messageProtocol: P2PProtocol // Renamed to avoid conflict with parent's private 'protocol'
   private activeSessions: Map<string, ActiveSession> = new Map()
+  private activeSigningSessions: Map<string, ActiveSigningSession> = new Map() // New: Dynamic signing sessions
+  private signerAdvertisements: Map<string, SignerAdvertisement> = new Map() // publicKey -> advertisement
+  private signingRequests: Map<string, SigningRequest> = new Map() // requestId -> request
   private peerIdToSignerIndex: Map<string, Map<string, number>> = new Map() // sessionId -> peerId -> signerIndex
+  private myAdvertisement?: SignerAdvertisement // My current advertisement
   private cleanupIntervalId?: NodeJS.Timeout
   private musig2Config: {
     sessionTimeout: number
@@ -115,10 +126,98 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     // Register protocol handler with parent P2PCoordinator
     this.registerProtocol(this.protocolHandler)
 
+    // Setup event handlers for new three-phase architecture
+    this._setupThreePhaseEventHandlers()
+
     // Start automatic session cleanup if enabled
     if (this.musig2Config.enableAutoCleanup) {
       this.startSessionCleanup()
     }
+  }
+
+  /**
+   * Setup event handlers for three-phase architecture
+   */
+  private _setupThreePhaseEventHandlers(): void {
+    // Handle discovered signer advertisements
+    this.on('signer:discovered', (advertisement: SignerAdvertisement) => {
+      // Store in local cache
+      this.signerAdvertisements.set(
+        advertisement.publicKey.toString(),
+        advertisement,
+      )
+    })
+
+    // Handle signer unavailable
+    this.on(
+      'signer:unavailable',
+      (data: { peerId: string; publicKey: PublicKey }) => {
+        // Remove from cache
+        this.signerAdvertisements.delete(data.publicKey.toString())
+      },
+    )
+
+    // Handle received signing requests
+    this.on('signing-request:received', (request: SigningRequest) => {
+      // Store in local cache
+      this.signingRequests.set(request.requestId, request)
+    })
+
+    // Handle participant joined events
+    this.on(
+      'participant:joined',
+      async (data: {
+        requestId: string
+        participantIndex: number
+        participantPeerId: string
+        participantPublicKey: PublicKey
+        timestamp: number
+        signature: Buffer
+      }) => {
+        // Update active session with new participant
+        const activeSession = this.activeSigningSessions.get(data.requestId)
+        if (activeSession) {
+          // Verify participation signature
+          const participationData = Buffer.concat([
+            Buffer.from(data.requestId),
+            Buffer.from(data.participantIndex.toString()),
+            data.participantPublicKey.toBuffer(),
+            Buffer.from(data.participantPeerId),
+          ])
+
+          const hashbuf = Hash.sha256(participationData)
+          const sig = new Signature({
+            r: new BN(data.signature.slice(0, 32), 'be'),
+            s: new BN(data.signature.slice(32, 64), 'be'),
+            isSchnorr: true,
+          })
+
+          if (!Schnorr.verify(hashbuf, sig, data.participantPublicKey, 'big')) {
+            console.warn(
+              '[MuSig2P2P] Invalid participation signature from',
+              data.participantPeerId,
+            )
+            return
+          }
+
+          // Add participant
+          activeSession.participants.set(
+            data.participantIndex,
+            data.participantPeerId,
+          )
+          activeSession.updatedAt = Date.now()
+
+          // Check if ALL participants have joined (MuSig2 = n-of-n)
+          if (
+            activeSession.participants.size ===
+            activeSession.request.requiredPublicKeys.length
+          ) {
+            // All participants joined - create MuSig session
+            await this._createMuSigSessionFromRequest(activeSession)
+          }
+        }
+      },
+    )
   }
 
   /**
@@ -298,33 +397,621 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     // For now, we'll let the creator initiate Round 1
   }
 
+  // ========================================================================
+  // Phase 0: Signer Advertisement Methods
+  // ========================================================================
+
+  /**
+   * Advertise signer availability
+   * Announces your public key and willingness to participate in MuSig2 sessions
+   *
+   * @param myPrivateKey - Your private key
+   * @param criteria - Availability criteria (transaction types, purposes, amounts)
+   * @param options - Optional metadata (nickname, fees, etc.)
+   * @returns void
+   */
+  async advertiseSigner(
+    myPrivateKey: PrivateKey,
+    criteria: SignerCriteria,
+    options?: {
+      ttl?: number
+      metadata?: SignerAdvertisement['metadata']
+    },
+  ): Promise<void> {
+    const myPubKey = myPrivateKey.publicKey
+    const timestamp = Date.now()
+    const ttl = options?.ttl || 24 * 60 * 60 * 1000 // Default: 24 hours
+    const expiresAt = timestamp + ttl
+
+    // Create advertisement data for signing
+    const adData = Buffer.concat([
+      Buffer.from(this.peerId),
+      myPubKey.toBuffer(),
+      Buffer.from(JSON.stringify(criteria)),
+      Buffer.from(timestamp.toString()),
+      Buffer.from(expiresAt.toString()),
+    ])
+
+    // Sign advertisement
+    const hashbuf = Hash.sha256(adData)
+    const signature = Schnorr.sign(hashbuf, myPrivateKey, 'big').toBuffer(
+      'schnorr',
+    )
+
+    const advertisement: SignerAdvertisement = {
+      peerId: this.peerId,
+      publicKey: myPubKey,
+      criteria,
+      metadata: options?.metadata,
+      timestamp,
+      expiresAt,
+      signature,
+    }
+
+    // Store locally
+    this.myAdvertisement = advertisement
+    this.signerAdvertisements.set(myPubKey.toString(), advertisement)
+
+    // Announce to DHT with multiple indexes for discoverability
+    const indexKeys: string[] = []
+
+    // Index by each transaction type
+    for (const txType of criteria.transactionTypes) {
+      indexKeys.push(`musig2-signer:type:${txType}:${myPubKey.toString()}`)
+    }
+
+    // Global index
+    indexKeys.push(`musig2-signer:all:${myPubKey.toString()}`)
+
+    // Announce to DHT for each index
+    for (const indexKey of indexKeys) {
+      await this.announceResource('musig2-signer-advertisement', indexKey, {
+        peerId: this.peerId,
+        publicKey: serializePublicKey(myPubKey),
+        criteria,
+        metadata: options?.metadata,
+        timestamp,
+        expiresAt,
+        signature: signature.toString('hex'),
+      } as SignerAdvertisementPayload)
+    }
+
+    // Broadcast to connected peers
+    await this.broadcast({
+      type: MuSig2MessageType.SIGNER_ADVERTISEMENT,
+      from: this.peerId,
+      payload: {
+        peerId: this.peerId,
+        publicKey: serializePublicKey(myPubKey),
+        criteria,
+        metadata: options?.metadata,
+        timestamp,
+        expiresAt,
+        signature: signature.toString('hex'),
+      } as SignerAdvertisementPayload,
+      timestamp: Date.now(),
+      messageId: this.messageProtocol.createMessage('', {}, this.peerId)
+        .messageId,
+      protocol: 'musig2',
+    })
+
+    this.emit('signer:advertised', advertisement)
+  }
+
+  /**
+   * Withdraw signer advertisement
+   * Removes your advertisement from the network
+   */
+  async withdrawAdvertisement(): Promise<void> {
+    if (!this.myAdvertisement) {
+      return
+    }
+
+    const myPubKey = this.myAdvertisement.publicKey
+
+    // Remove from local storage
+    this.signerAdvertisements.delete(myPubKey.toString())
+    this.myAdvertisement = undefined
+
+    // Broadcast unavailability
+    await this.broadcast({
+      type: MuSig2MessageType.SIGNER_UNAVAILABLE,
+      from: this.peerId,
+      payload: {
+        peerId: this.peerId,
+        publicKey: serializePublicKey(myPubKey),
+      },
+      timestamp: Date.now(),
+      messageId: this.messageProtocol.createMessage('', {}, this.peerId)
+        .messageId,
+      protocol: 'musig2',
+    })
+
+    this.emit('signer:withdrawn')
+  }
+
+  /**
+   * Find available signers matching criteria
+   *
+   * @param filters - Search filters
+   * @returns Array of signer advertisements
+   */
+  async findAvailableSigners(filters: {
+    transactionType?: string
+    minAmount?: number
+    maxAmount?: number
+    minReputation?: number
+    maxResults?: number
+  }): Promise<SignerAdvertisement[]> {
+    const results: SignerAdvertisement[] = []
+
+    // Query local cache first (populated from broadcasts)
+    for (const [, advertisement] of this.signerAdvertisements) {
+      // Skip expired
+      if (advertisement.expiresAt < Date.now()) {
+        continue
+      }
+
+      // Apply filters
+      if (
+        filters.transactionType &&
+        !advertisement.criteria.transactionTypes.includes(
+          filters.transactionType,
+        )
+      ) {
+        continue
+      }
+
+      if (
+        filters.minAmount &&
+        advertisement.criteria.maxAmount &&
+        advertisement.criteria.maxAmount < filters.minAmount
+      ) {
+        continue
+      }
+
+      if (
+        filters.maxAmount &&
+        advertisement.criteria.minAmount &&
+        advertisement.criteria.minAmount > filters.maxAmount
+      ) {
+        continue
+      }
+
+      if (
+        filters.minReputation &&
+        advertisement.metadata?.reputation &&
+        advertisement.metadata.reputation.score < filters.minReputation
+      ) {
+        continue
+      }
+
+      results.push(advertisement)
+
+      if (filters.maxResults && results.length >= filters.maxResults) {
+        break
+      }
+    }
+
+    // TODO: Also query DHT for additional signers
+    // This would involve querying by index keys based on filters
+
+    return results
+  }
+
+  // ========================================================================
+  // Phase 1-2: Signing Request Methods
+  // ========================================================================
+
+  /**
+   * Announce signing request
+   * Creates a request for signatures from specific public keys
+   *
+   * Note: MuSig2 requires ALL participants to sign (n-of-n)
+   * For m-of-n threshold signatures, use FROST protocol or Taproot script paths
+   *
+   * @param requiredPublicKeys - Public keys that must sign (ALL of them)
+   * @param message - Message/transaction to sign
+   * @param myPrivateKey - Creator's private key
+   * @param options - Optional configuration
+   * @returns Request ID
+   */
+  async announceSigningRequest(
+    requiredPublicKeys: PublicKey[],
+    message: Buffer,
+    myPrivateKey: PrivateKey,
+    options?: {
+      metadata?: SigningRequest['metadata']
+    },
+  ): Promise<string> {
+    const myPubKey = myPrivateKey.publicKey
+
+    // Verify creator is in required keys
+    const creatorIndex = requiredPublicKeys.findIndex(
+      pk => pk.toString() === myPubKey.toString(),
+    )
+    if (creatorIndex === -1) {
+      throw new Error('Creator must be one of the required signers')
+    }
+
+    // Generate request ID
+    const requestId = Hash.sha256(
+      Buffer.concat([
+        message,
+        ...requiredPublicKeys.map(pk => pk.toBuffer()),
+        Buffer.from(Date.now().toString()),
+      ]),
+    ).toString('hex')
+
+    const createdAt = Date.now()
+    const expiresAt = createdAt + this.musig2Config.sessionTimeout
+
+    // Create signature data (MuSig2 = n-of-n, all keys required)
+    const requestData = Buffer.concat([
+      Buffer.from(requestId),
+      message,
+      ...requiredPublicKeys.map(pk => pk.toBuffer()),
+      Buffer.from(requiredPublicKeys.length.toString()), // n participants
+    ])
+
+    const hashbuf2 = Hash.sha256(requestData)
+    const creatorSignature = Schnorr.sign(
+      hashbuf2,
+      myPrivateKey,
+      'big',
+    ).toBuffer('schnorr')
+
+    const request: SigningRequest = {
+      requestId,
+      requiredPublicKeys,
+      message,
+      creatorPeerId: this.peerId,
+      creatorPublicKey: myPubKey,
+      createdAt,
+      expiresAt,
+      metadata: options?.metadata,
+      creatorSignature,
+      joinedParticipants: new Map(),
+    }
+
+    // Store locally
+    this.signingRequests.set(requestId, request)
+
+    // Create active signing session
+    const activeSession: ActiveSigningSession = {
+      sessionId: requestId,
+      request,
+      participants: new Map([[creatorIndex, this.peerId]]),
+      myIndex: creatorIndex,
+      myPrivateKey,
+      phase: 'waiting',
+      createdAt,
+      updatedAt: createdAt,
+      lastSequenceNumbers: new Map(),
+    }
+    this.activeSigningSessions.set(requestId, activeSession)
+
+    // Announce to DHT - indexed by each required public key
+    for (const pubKey of requiredPublicKeys) {
+      await this.announceResource(
+        'musig2-signing-request',
+        `${requestId}:${pubKey.toString()}`,
+        {
+          requestId,
+          requiredPublicKeys: requiredPublicKeys.map(pk =>
+            serializePublicKey(pk),
+          ),
+          message: message.toString('hex'),
+          creatorPeerId: this.peerId,
+          creatorPublicKey: serializePublicKey(myPubKey),
+          createdAt,
+          expiresAt,
+          metadata: options?.metadata,
+          creatorSignature: creatorSignature.toString('hex'),
+        } as SigningRequestPayload,
+      )
+    }
+
+    // Broadcast to connected peers
+    await this.broadcast({
+      type: MuSig2MessageType.SIGNING_REQUEST,
+      from: this.peerId,
+      payload: {
+        requestId,
+        requiredPublicKeys: requiredPublicKeys.map(pk =>
+          serializePublicKey(pk),
+        ),
+        message: message.toString('hex'),
+        creatorPeerId: this.peerId,
+        creatorPublicKey: serializePublicKey(myPubKey),
+        createdAt,
+        expiresAt,
+        metadata: options?.metadata,
+        creatorSignature: creatorSignature.toString('hex'),
+      } as SigningRequestPayload,
+      timestamp: Date.now(),
+      messageId: this.messageProtocol.createMessage('', {}, this.peerId)
+        .messageId,
+      protocol: 'musig2',
+    })
+
+    this.emit('signing-request:created', request)
+
+    return requestId
+  }
+
+  /**
+   * Find signing requests that need my public key
+   *
+   * @param myPublicKey - Your public key
+   * @returns Array of signing requests
+   */
+  async findSigningRequestsForMe(
+    myPublicKey: PublicKey,
+  ): Promise<SigningRequest[]> {
+    const results: SigningRequest[] = []
+    const myPubKeyStr = myPublicKey.toString()
+
+    // Query local cache
+    for (const [, request] of this.signingRequests) {
+      // Skip expired
+      if (request.expiresAt < Date.now()) {
+        continue
+      }
+
+      // Check if my key is required
+      if (
+        request.requiredPublicKeys.some(pk => pk.toString() === myPubKeyStr)
+      ) {
+        results.push(request)
+      }
+    }
+
+    // TODO: Also query DHT for requests indexed by my public key
+
+    return results
+  }
+
+  /**
+   * Join a signing request
+   * Announces participation in a signing request
+   *
+   * @param requestId - Request ID
+   * @param myPrivateKey - Your private key
+   */
+  async joinSigningRequest(
+    requestId: string,
+    myPrivateKey: PrivateKey,
+  ): Promise<void> {
+    const myPubKey = myPrivateKey.publicKey
+
+    // Find request (local or DHT)
+    let request = this.signingRequests.get(requestId)
+
+    if (!request) {
+      // Try to discover from DHT
+      const resource = await this.discoverResource(
+        'musig2-signing-request',
+        `${requestId}:${myPubKey.toString()}`,
+        5000,
+      )
+
+      if (resource && resource.data) {
+        const payload = resource.data as SigningRequestPayload
+        // Deserialize and store
+        request = {
+          requestId: payload.requestId,
+          requiredPublicKeys: payload.requiredPublicKeys.map(hex =>
+            PublicKey.fromString(hex),
+          ),
+          message: Buffer.from(payload.message, 'hex'),
+          creatorPeerId: payload.creatorPeerId,
+          creatorPublicKey: PublicKey.fromString(payload.creatorPublicKey),
+          createdAt: payload.createdAt,
+          expiresAt: payload.expiresAt,
+          metadata: payload.metadata,
+          creatorSignature: Buffer.from(payload.creatorSignature, 'hex'),
+        }
+        this.signingRequests.set(requestId, request)
+      }
+    }
+
+    if (!request) {
+      throw new Error(`Signing request ${requestId} not found`)
+    }
+
+    // Verify my key is required
+    const myIndex = request.requiredPublicKeys.findIndex(
+      pk => pk.toString() === myPubKey.toString(),
+    )
+
+    if (myIndex === -1) {
+      throw new Error('Your public key is not required for this request')
+    }
+
+    // Verify request signature
+    const requestData = Buffer.concat([
+      Buffer.from(request.requestId),
+      request.message,
+      ...request.requiredPublicKeys.map(pk => pk.toBuffer()),
+      Buffer.from(request.requiredPublicKeys.length.toString()), // n participants (all required)
+    ])
+    const hashbuf3 = Hash.sha256(requestData)
+
+    // Parse Schnorr signature (64 bytes)
+    if (request.creatorSignature.length !== 64) {
+      throw new Error('Invalid signature length')
+    }
+    const r = new BN(request.creatorSignature.slice(0, 32), 'be')
+    const s = new BN(request.creatorSignature.slice(32, 64), 'be')
+    const sig = new Signature({ r, s, isSchnorr: true })
+
+    if (!Schnorr.verify(hashbuf3, sig, request.creatorPublicKey, 'big')) {
+      throw new Error('Invalid request signature')
+    }
+
+    // Create or update active session
+    let activeSession = this.activeSigningSessions.get(requestId)
+
+    if (!activeSession) {
+      activeSession = {
+        sessionId: requestId,
+        request,
+        participants: new Map(),
+        myIndex,
+        myPrivateKey,
+        phase: 'waiting',
+        createdAt: request.createdAt,
+        updatedAt: Date.now(),
+        lastSequenceNumbers: new Map(),
+      }
+      this.activeSigningSessions.set(requestId, activeSession)
+    }
+
+    // Add myself to participants
+    activeSession.participants.set(myIndex, this.peerId)
+
+    // Create participation signature
+    const participationData = Buffer.concat([
+      Buffer.from(requestId),
+      Buffer.from(myIndex.toString()),
+      myPubKey.toBuffer(),
+      Buffer.from(this.peerId),
+    ])
+    const hashbuf4 = Hash.sha256(participationData)
+    const participationSig = Schnorr.sign(
+      hashbuf4,
+      myPrivateKey,
+      'big',
+    ).toBuffer('schnorr')
+
+    // Broadcast participation
+    await this.broadcast({
+      type: MuSig2MessageType.PARTICIPANT_JOINED,
+      from: this.peerId,
+      payload: {
+        requestId,
+        participantIndex: myIndex,
+        participantPeerId: this.peerId,
+        participantPublicKey: serializePublicKey(myPubKey),
+        timestamp: Date.now(),
+        signature: participationSig.toString('hex'),
+      } as ParticipantJoinedPayload,
+      timestamp: Date.now(),
+      messageId: this.messageProtocol.createMessage('', {}, this.peerId)
+        .messageId,
+      protocol: 'musig2',
+    })
+
+    // Check if ALL participants have joined (MuSig2 = n-of-n)
+    if (activeSession.participants.size === request.requiredPublicKeys.length) {
+      // All participants joined - create MuSig session
+      await this._createMuSigSessionFromRequest(activeSession)
+    }
+
+    this.emit('signing-request:joined', requestId)
+  }
+
+  /**
+   * Internal: Create MuSig session from signing request when ALL participants joined
+   *
+   * MuSig2 requires n-of-n signing (all participants must sign)
+   */
+  private async _createMuSigSessionFromRequest(
+    activeSession: ActiveSigningSession,
+  ): Promise<void> {
+    if (activeSession.phase !== 'waiting') {
+      return // Already created
+    }
+
+    if (!activeSession.myPrivateKey) {
+      throw new Error('Private key not available')
+    }
+
+    const { request } = activeSession
+
+    // Create MuSig session
+    const session = this.sessionManager.createSession(
+      request.requiredPublicKeys,
+      activeSession.myPrivateKey,
+      request.message,
+      request.metadata,
+    )
+
+    activeSession.session = session
+    activeSession.phase = 'ready'
+    activeSession.updatedAt = Date.now()
+
+    // Emit ready event
+    this.emit('session:ready', activeSession.sessionId)
+
+    // Broadcast session ready
+    await this.broadcast({
+      type: MuSig2MessageType.SESSION_READY,
+      from: this.peerId,
+      payload: {
+        requestId: activeSession.sessionId,
+        participantIndex: activeSession.myIndex,
+      },
+      timestamp: Date.now(),
+      messageId: this.messageProtocol.createMessage('', {}, this.peerId)
+        .messageId,
+      protocol: 'musig2',
+    })
+  }
+
   /**
    * Start Round 1: Generate and share nonces
    *
-   * @param sessionId - Session ID
+   * @param sessionId - Session ID (or request ID for new architecture)
    * @param privateKey - This signer's private key
    */
   async startRound1(sessionId: string, privateKey: PrivateKey): Promise<void> {
+    // Support both old and new architecture
     const activeSession = this.activeSessions.get(sessionId)
-    if (!activeSession) {
+    const signingSession = this.activeSigningSessions.get(sessionId)
+
+    if (!activeSession && !signingSession) {
       throw new Error(`Session ${sessionId} not found`)
     }
 
-    const { session } = activeSession
+    // Get session from either architecture
+    let session: MuSigSession
+    let participants: Map<number, string>
+
+    if (signingSession) {
+      // New architecture
+      if (!signingSession.session) {
+        throw new Error('Session not ready - threshold not met')
+      }
+      session = signingSession.session
+      participants = signingSession.participants
+    } else if (activeSession) {
+      // Old architecture
+      session = activeSession.session
+      participants = activeSession.participants
+    } else {
+      throw new Error(`Session ${sessionId} not found`)
+    }
 
     // Generate nonces locally
     const publicNonces = this.sessionManager.generateNonces(session, privateKey)
 
     // Sync phase (generateNonces transitions to NONCE_EXCHANGE)
-    activeSession.phase = session.phase
-    activeSession.updatedAt = Date.now()
+    if (signingSession) {
+      signingSession.phase = session.phase
+      signingSession.updatedAt = Date.now()
+    } else if (activeSession) {
+      activeSession.phase = session.phase
+      activeSession.updatedAt = Date.now()
+    }
 
     // Broadcast nonces to all participants
     await this._broadcastNonceShare(
       sessionId,
       session.myIndex,
       publicNonces,
-      activeSession.participants,
+      participants,
     )
 
     // Check if we already have all nonces (if others sent first)
@@ -336,16 +1023,36 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
   /**
    * Start Round 2: Create and share partial signatures
    *
-   * @param sessionId - Session ID
+   * @param sessionId - Session ID (or request ID for new architecture)
    * @param privateKey - This signer's private key
    */
   async startRound2(sessionId: string, privateKey: PrivateKey): Promise<void> {
+    // Support both old and new architecture
     const activeSession = this.activeSessions.get(sessionId)
-    if (!activeSession) {
+    const signingSession = this.activeSigningSessions.get(sessionId)
+
+    if (!activeSession && !signingSession) {
       throw new Error(`Session ${sessionId} not found`)
     }
 
-    const { session } = activeSession
+    // Get session from either architecture
+    let session: MuSigSession
+    let participants: Map<number, string>
+
+    if (signingSession) {
+      // New architecture
+      if (!signingSession.session) {
+        throw new Error('Session not ready - threshold not met')
+      }
+      session = signingSession.session
+      participants = signingSession.participants
+    } else if (activeSession) {
+      // Old architecture
+      session = activeSession.session
+      participants = activeSession.participants
+    } else {
+      throw new Error(`Session ${sessionId} not found`)
+    }
 
     // Create partial signature
     const partialSig = this.sessionManager.createPartialSignature(
@@ -354,15 +1061,20 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     )
 
     // Sync phase (createPartialSignature transitions to PARTIAL_SIG_EXCHANGE)
-    activeSession.phase = session.phase
-    activeSession.updatedAt = Date.now()
+    if (signingSession) {
+      signingSession.phase = session.phase
+      signingSession.updatedAt = Date.now()
+    } else if (activeSession) {
+      activeSession.phase = session.phase
+      activeSession.updatedAt = Date.now()
+    }
 
     // Broadcast partial signature to all participants
     await this._broadcastPartialSigShare(
       sessionId,
       session.myIndex,
       partialSig,
-      activeSession.participants,
+      participants,
     )
 
     // Check if we already have all partial signatures
@@ -374,16 +1086,20 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
   /**
    * Get final aggregated signature
    *
-   * @param sessionId - Session ID
+   * @param sessionId - Session ID (or request ID for new architecture)
    * @returns Final signature
    */
   getFinalSignature(sessionId: string): Signature {
     const activeSession = this.activeSessions.get(sessionId)
-    if (!activeSession) {
-      throw new Error(`Session ${sessionId} not found`)
+    const signingSession = this.activeSigningSessions.get(sessionId)
+
+    if (signingSession && signingSession.session) {
+      return this.sessionManager.getFinalSignature(signingSession.session)
+    } else if (activeSession) {
+      return this.sessionManager.getFinalSignature(activeSession.session)
     }
 
-    return this.sessionManager.getFinalSignature(activeSession.session)
+    throw new Error(`Session ${sessionId} not found`)
   }
 
   /**
@@ -393,19 +1109,26 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
    * @returns Session status
    */
   getSessionStatus(sessionId: string) {
+    // Support both old and new architecture
     const activeSession = this.activeSessions.get(sessionId)
-    if (!activeSession) {
-      return null
+    const signingSession = this.activeSigningSessions.get(sessionId)
+
+    if (signingSession && signingSession.session) {
+      return this.sessionManager.getSessionStatus(signingSession.session)
+    } else if (activeSession) {
+      return this.sessionManager.getSessionStatus(activeSession.session)
     }
 
-    return this.sessionManager.getSessionStatus(activeSession.session)
+    return null
   }
 
   /**
-   * Get all active session IDs
+   * Get all active session IDs (includes both old and new architecture sessions)
    */
   getActiveSessions(): string[] {
-    return Array.from(this.activeSessions.keys())
+    const oldSessions = Array.from(this.activeSessions.keys())
+    const newSessions = Array.from(this.activeSigningSessions.keys())
+    return [...oldSessions, ...newSessions]
   }
 
   /**
@@ -610,7 +1333,31 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     publicNonce: [Point, Point],
     peerId: string,
   ): Promise<void> {
-    const activeSession = this.activeSessions.get(sessionId)
+    // Support both old and new architecture
+    let activeSession = this.activeSessions.get(sessionId)
+    const signingSession = this.activeSigningSessions.get(sessionId)
+
+    if (!activeSession && !signingSession) {
+      throw new Error(`Session ${sessionId} not found`)
+    }
+
+    // Use activeSession for validation (create wrapper if using new architecture)
+    if (signingSession && !activeSession) {
+      // Create temporary ActiveSession wrapper for validation
+      activeSession = {
+        sessionId: signingSession.sessionId,
+        session: signingSession.session!,
+        participants: signingSession.participants,
+        phase:
+          signingSession.phase === 'ready' || signingSession.phase === 'waiting'
+            ? MuSigSessionPhase.INIT
+            : signingSession.phase,
+        createdAt: signingSession.createdAt,
+        updatedAt: signingSession.updatedAt,
+        lastSequenceNumbers: signingSession.lastSequenceNumbers,
+      }
+    }
+
     if (!activeSession) {
       throw new Error(`Session ${sessionId} not found`)
     }
@@ -657,20 +1404,30 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
    */
   private async _handleAllNoncesReceived(sessionId: string): Promise<void> {
     const activeSession = this.activeSessions.get(sessionId)
-    if (!activeSession) {
+    const signingSession = this.activeSigningSessions.get(sessionId)
+
+    if (!activeSession && !signingSession) {
       return
     }
 
-    const { session } = activeSession
+    let session: MuSigSession
+
+    if (signingSession && signingSession.session) {
+      session = signingSession.session
+      signingSession.phase = session.phase
+      signingSession.updatedAt = Date.now()
+    } else if (activeSession) {
+      session = activeSession.session
+      activeSession.phase = session.phase
+      activeSession.updatedAt = Date.now()
+    } else {
+      return
+    }
 
     // Nonces are automatically aggregated by session manager
     // Now we can start Round 2 (partial signatures)
     // For now, we'll emit an event and let the caller decide when to start Round 2
     this.emit('session:nonces-complete', sessionId)
-
-    // Update phase tracking
-    activeSession.phase = session.phase
-    activeSession.updatedAt = Date.now()
   }
 
   /**
@@ -683,7 +1440,30 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     partialSig: BN,
     peerId: string,
   ): Promise<void> {
-    const activeSession = this.activeSessions.get(sessionId)
+    // Support both old and new architecture
+    let activeSession = this.activeSessions.get(sessionId)
+    const signingSession = this.activeSigningSessions.get(sessionId)
+
+    if (!activeSession && !signingSession) {
+      throw new Error(`Session ${sessionId} not found`)
+    }
+
+    // Use activeSession for validation (create wrapper if using new architecture)
+    if (signingSession && !activeSession) {
+      activeSession = {
+        sessionId: signingSession.sessionId,
+        session: signingSession.session!,
+        participants: signingSession.participants,
+        phase:
+          signingSession.phase === 'ready' || signingSession.phase === 'waiting'
+            ? MuSigSessionPhase.INIT
+            : signingSession.phase,
+        createdAt: signingSession.createdAt,
+        updatedAt: signingSession.updatedAt,
+        lastSequenceNumbers: signingSession.lastSequenceNumbers,
+      }
+    }
+
     if (!activeSession) {
       throw new Error(`Session ${sessionId} not found`)
     }
@@ -731,21 +1511,34 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     sessionId: string,
   ): Promise<void> {
     const activeSession = this.activeSessions.get(sessionId)
-    if (!activeSession) {
+    const signingSession = this.activeSigningSessions.get(sessionId)
+
+    if (!activeSession && !signingSession) {
       return
     }
 
-    const { session } = activeSession
+    let session: MuSigSession
+    let election: ActiveSession['election'] | undefined
+
+    if (signingSession && signingSession.session) {
+      session = signingSession.session
+      signingSession.phase = session.phase
+      signingSession.updatedAt = Date.now()
+      election = signingSession.election
+    } else if (activeSession) {
+      session = activeSession.session
+      activeSession.phase = session.phase
+      activeSession.updatedAt = Date.now()
+      election = activeSession.election
+    } else {
+      return
+    }
 
     // Signature is automatically finalized by session manager
     this.emit('session:complete', sessionId)
 
-    // Update phase tracking
-    activeSession.phase = session.phase
-    activeSession.updatedAt = Date.now()
-
     // Initialize coordinator failover if enabled and election is active
-    if (this.musig2Config.enableCoordinatorFailover && activeSession.election) {
+    if (this.musig2Config.enableCoordinatorFailover && election) {
       await this._initializeCoordinatorFailover(sessionId)
     }
   }

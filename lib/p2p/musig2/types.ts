@@ -11,6 +11,7 @@
  */
 
 import { PublicKey } from '../../bitcore/publickey.js'
+import { PrivateKey } from '../../bitcore/privatekey.js'
 import {
   MuSigSession,
   MuSigSessionPhase,
@@ -20,11 +21,19 @@ import {
  * MuSig2-specific message types
  */
 export enum MuSig2MessageType {
-  // Session lifecycle
-  SESSION_ANNOUNCE = 'musig2:session-announce',
-  SESSION_JOIN = 'musig2:session-join',
+  // Phase 0: Signer advertisement
+  SIGNER_ADVERTISEMENT = 'musig2:signer-advertisement',
+  SIGNER_UNAVAILABLE = 'musig2:signer-unavailable',
+
+  // Phase 1-2: Signing request lifecycle
+  SIGNING_REQUEST = 'musig2:signing-request',
+  PARTICIPANT_JOINED = 'musig2:participant-joined',
   SESSION_READY = 'musig2:session-ready',
   SESSION_ABORT = 'musig2:session-abort',
+
+  // Legacy: Session lifecycle (deprecated, kept for compatibility)
+  SESSION_ANNOUNCE = 'musig2:session-announce',
+  SESSION_JOIN = 'musig2:session-join',
 
   // Round 1: Nonce exchange
   NONCE_SHARE = 'musig2:nonce-share',
@@ -215,4 +224,215 @@ export interface SessionAnnouncementData {
   }
   /** Cryptographic signature by session creator to prevent DHT poisoning */
   creatorSignature?: Buffer // Schnorr signature
+}
+
+// ============================================================================
+// Phase 0: Signer Advertisement Types
+// ============================================================================
+
+/**
+ * Signer availability criteria
+ * Defines what types of transactions a signer is willing to participate in
+ */
+export interface SignerCriteria {
+  /** Types of transactions willing to sign */
+  transactionTypes: string[] // e.g., ['spend', 'swap', 'coinjoin', 'custody']
+
+  /** Minimum XPI amount (in satoshis) */
+  minAmount?: number
+
+  /** Maximum XPI amount (in satoshis) */
+  maxAmount?: number
+
+  /** Trust requirements */
+  trustRequirements?: {
+    /** Minimum reputation score (0-100) */
+    reputation?: number
+    /** Requires identity verification */
+    requiresVerification?: boolean
+  }
+}
+
+/**
+ * Signer advertisement
+ * Announces availability and public key to the network
+ */
+export interface SignerAdvertisement {
+  /** Peer ID */
+  peerId: string
+
+  /** Public key available for signing */
+  publicKey: PublicKey
+
+  /** Availability criteria */
+  criteria: SignerCriteria
+
+  /** Optional metadata */
+  metadata?: {
+    /** User-friendly nickname */
+    nickname?: string
+    /** Description of services */
+    description?: string
+    /** Fee for signing (satoshis) */
+    fees?: number
+    /** Average response time (milliseconds) */
+    responseTime?: number
+    /** Reputation data */
+    reputation?: {
+      score: number // 0-100
+      completedSignings: number
+      failedSignings: number
+      averageResponseTime: number
+      verifiedIdentity: boolean
+    }
+  }
+
+  /** Creation timestamp */
+  timestamp: number
+
+  /** Expiration timestamp (advertisement TTL) */
+  expiresAt: number
+
+  /** Self-signed proof of public key ownership */
+  signature: Buffer
+}
+
+/**
+ * Signer advertisement payload (for P2P messages)
+ */
+export interface SignerAdvertisementPayload {
+  peerId: string
+  publicKey: string // Hex-encoded
+  criteria: SignerCriteria
+  metadata?: SignerAdvertisement['metadata']
+  timestamp: number
+  expiresAt: number
+  signature: string // Hex-encoded
+}
+
+// ============================================================================
+// Phase 1-2: Signing Request Types
+// ============================================================================
+
+/**
+ * Signing request
+ * Announces need for signatures from specific public keys
+ *
+ * Note: MuSig2 requires ALL participants (n-of-n signing)
+ * For m-of-n threshold signatures, use FROST protocol or Taproot script paths
+ */
+export interface SigningRequest {
+  /** Unique request ID */
+  requestId: string
+
+  /** Public keys that must sign (ALL required - MuSig2 is n-of-n) */
+  requiredPublicKeys: PublicKey[]
+
+  /** Message/transaction to sign */
+  message: Buffer
+
+  /** Creator's peer ID */
+  creatorPeerId: string
+
+  /** Creator's public key (should be in requiredPublicKeys) */
+  creatorPublicKey: PublicKey
+
+  /** Creation timestamp */
+  createdAt: number
+
+  /** Expiration timestamp */
+  expiresAt: number
+
+  /** Optional metadata */
+  metadata?: {
+    /** Full transaction hex (for context) */
+    transactionHex?: string
+    /** Transaction amount (satoshis) */
+    amount?: number
+    /** Transaction type */
+    transactionType?: string
+    /** Purpose description */
+    purpose?: string
+    /** Any additional context */
+    [key: string]: unknown
+  }
+
+  /** Creator signature (proves legitimacy) */
+  creatorSignature: Buffer
+
+  /** Current participants (dynamically built) */
+  joinedParticipants?: Map<number, string> // index -> peerId
+}
+
+/**
+ * Signing request payload (for P2P messages)
+ */
+export interface SigningRequestPayload {
+  requestId: string
+  requiredPublicKeys: string[] // Hex-encoded (ALL must sign - n-of-n)
+  message: string // Hex-encoded
+  creatorPeerId: string
+  creatorPublicKey: string // Hex-encoded
+  createdAt: number
+  expiresAt: number
+  metadata?: SigningRequest['metadata']
+  creatorSignature: string // Hex-encoded
+}
+
+/**
+ * Participant joined payload
+ */
+export interface ParticipantJoinedPayload {
+  requestId: string
+  participantIndex: number
+  participantPeerId: string
+  participantPublicKey: string // Hex-encoded
+  timestamp: number
+  signature: string // Participant's signature proving ownership
+}
+
+// ============================================================================
+// Updated Active Session (supports dynamic building)
+// ============================================================================
+
+/**
+ * Active session tracking (updated for dynamic building)
+ */
+export interface ActiveSigningSession {
+  /** Request/Session ID */
+  sessionId: string
+
+  /** Original signing request */
+  request: SigningRequest
+
+  /** Local MuSig session (created when threshold met) */
+  session?: MuSigSession
+
+  /** Participants who have joined (index -> peerId) */
+  participants: Map<number, string>
+
+  /** My index in the signers list */
+  myIndex: number
+
+  /** My private key */
+  myPrivateKey?: PrivateKey
+
+  /** Current phase */
+  phase: 'waiting' | 'ready' | MuSigSessionPhase
+
+  /** Creation timestamp */
+  createdAt: number
+
+  /** Last updated timestamp */
+  updatedAt: number
+
+  /** Last seen sequence number per signer (for replay protection) */
+  lastSequenceNumbers: Map<number, number>
+
+  /** Coordinator election data (optional) */
+  election?: {
+    coordinatorIndex: number
+    coordinatorPeerId?: string
+    electionProof: string
+  }
 }

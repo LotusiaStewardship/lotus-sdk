@@ -1,21 +1,37 @@
 # MuSig2 P2P Coordination Layer
 
 **Author**: The Lotusia Stewardship  
-**Status**: Planning / Design Phase  
-**Date**: October 30, 2025  
-**Version**: 1.0
+**Status**: ✅ **IMPLEMENTED** - Three-Phase Architecture  
+**Date**: November 2, 2025  
+**Version**: 2.0
+
+---
+
+## 🎉 Implementation Status
+
+**The MuSig2 P2P coordination layer is now fully implemented with a three-phase architecture!**
+
+✅ **Phase 0**: Signer Advertisement - Wallets announce availability  
+✅ **Phase 1**: Matchmaking - Discover signers by criteria  
+✅ **Phase 2**: Signing Requests - Create requests with discovered keys  
+✅ **Phase 3**: Dynamic Session Building - Session created when ALL join (n-of-n)
+
+**📖 See [P2P_DHT_ARCHITECTURE.md](P2P_DHT_ARCHITECTURE.md) for complete technical details**
 
 ---
 
 ## Overview
 
-This document describes the design and implementation of a **peer-to-peer (P2P) coordination layer** for MuSig2 multi-signature sessions in lotus-lib. The P2P layer enables decentralized coordination between wallets without requiring a central server, similar to BitTorrent's distributed architecture.
+This document describes the **three-phase architecture** for MuSig2 P2P coordination in lotus-lib. The implementation solves the peer discovery chicken-and-egg problem through a phased approach.
 
 ### Current State
 
 ✅ **MuSig2 Core Implementation**: Complete and production-ready  
 ✅ **Session Management**: Local state management implemented  
-❌ **P2P Coordination**: Not yet implemented (this document)
+✅ **P2P Coordination**: ✅ **IMPLEMENTED** - Three-phase architecture  
+✅ **DHT-Based Discovery**: Signer advertisements and signing requests  
+✅ **Dynamic Session Building**: n-of-n participant joining (all must sign)  
+✅ **Tests**: 162 tests passing (including 11 new three-phase tests)
 
 ### Goals
 
@@ -39,6 +55,76 @@ This document describes the design and implementation of a **peer-to-peer (P2P) 
 8. [Deployment Patterns](#deployment-patterns)
 9. [Testing Strategy](#testing-strategy)
 10. [Future Enhancements](#future-enhancements)
+
+---
+
+## Three-Phase Architecture (IMPLEMENTED)
+
+### The Discovery Problem
+
+Traditional MuSig2 implementations assume participants know each other beforehand. This creates a **chicken-and-egg problem**:
+
+- ❌ Can't create transaction without knowing public keys
+- ❌ Can't discover public keys without a way for wallets to advertise
+- ❌ Need keys to create session, need session to find keys
+
+### The Solution: Three Phases
+
+**Phase 0: Signer Advertisement**
+
+```typescript
+// Wallets announce availability with public key
+await coordinator.advertiseSigner(myPrivateKey, {
+  transactionTypes: ['spend', 'swap'],
+  minAmount: 1_000_000, // 1 XPI
+  maxAmount: 100_000_000, // 100 XPI
+})
+```
+
+**Phase 1: Matchmaking**
+
+```typescript
+// Users discover available signers
+const signers = await coordinator.findAvailableSigners({
+  transactionType: 'spend',
+  minAmount: 5_000_000,
+  maxResults: 10,
+})
+// Select signers from list
+```
+
+**Phase 2: Signing Request**
+
+```typescript
+// Create request with discovered public keys (all must sign)
+const requestId = await coordinator.announceSigningRequest(
+  [myKey, signer1.publicKey, signer2.publicKey],
+  transactionSighash,
+  myPrivateKey,
+)
+```
+
+**Phase 3: Dynamic Building**
+
+```typescript
+// Participants discover they're needed and join
+const requests = await coordinator.findSigningRequestsForMe(myPublicKey)
+await coordinator.joinSigningRequest(requestId, myPrivateKey)
+// Session auto-created when ALL participants join (n-of-n)
+```
+
+### Key Benefits
+
+✅ **No Out-of-Band Communication** - Connected wallets discover automatically  
+✅ **Multi-Index DHT** - Efficient filtering by transaction type, purpose, amount  
+✅ **Dynamic Building** - Sessions build as participants join  
+✅ **n-of-n MuSig2** - All participants must sign (not threshold)  
+✅ **Event-Driven** - Real-time notifications for UIs  
+✅ **Cryptographic Security** - Schnorr signatures on all announcements
+
+⚠️ **For m-of-n threshold signatures**, use FROST protocol or Taproot script paths with multiple MuSig2 combinations
+
+**For complete technical documentation, see [P2P_DHT_ARCHITECTURE.md](P2P_DHT_ARCHITECTURE.md)**
 
 ---
 

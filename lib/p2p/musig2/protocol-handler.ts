@@ -18,6 +18,9 @@ import {
   NonceSharePayload,
   PartialSigSharePayload,
   ValidationErrorPayload,
+  SignerAdvertisementPayload,
+  SigningRequestPayload,
+  ParticipantJoinedPayload,
 } from './types.js'
 import {
   deserializePublicNonce,
@@ -62,6 +65,44 @@ export class MuSig2P2PProtocolHandler implements IProtocolHandler {
 
     try {
       switch (message.type) {
+        // Phase 0: Signer advertisement
+        case MuSig2MessageType.SIGNER_ADVERTISEMENT:
+          await this._handleSignerAdvertisement(
+            message.payload as SignerAdvertisementPayload,
+            from,
+          )
+          break
+
+        case MuSig2MessageType.SIGNER_UNAVAILABLE:
+          await this._handleSignerUnavailable(
+            message.payload as { peerId: string; publicKey: string },
+            from,
+          )
+          break
+
+        // Phase 1-2: Signing request
+        case MuSig2MessageType.SIGNING_REQUEST:
+          await this._handleSigningRequest(
+            message.payload as SigningRequestPayload,
+            from,
+          )
+          break
+
+        case MuSig2MessageType.PARTICIPANT_JOINED:
+          await this._handleParticipantJoined(
+            message.payload as ParticipantJoinedPayload,
+            from,
+          )
+          break
+
+        case MuSig2MessageType.SESSION_READY:
+          await this._handleSessionReady(
+            message.payload as { requestId: string; participantIndex: number },
+            from,
+          )
+          break
+
+        // Legacy: Session lifecycle
         case MuSig2MessageType.SESSION_ANNOUNCE:
           await this._handleSessionAnnounce(
             message.payload as SessionAnnouncementPayload,
@@ -289,5 +330,101 @@ export class MuSig2P2PProtocolHandler implements IProtocolHandler {
       MuSig2MessageType.VALIDATION_ERROR,
       payload,
     )
+  }
+
+  /**
+   * Handle signer advertisement
+   */
+  private async _handleSignerAdvertisement(
+    payload: SignerAdvertisementPayload,
+    from: PeerInfo,
+  ): Promise<void> {
+    if (!this.coordinator) return
+
+    // Store advertisement in coordinator
+    // The coordinator will store it in signerAdvertisements Map
+    this.coordinator.emit('signer:discovered', {
+      peerId: payload.peerId,
+      publicKey: deserializePublicKey(payload.publicKey),
+      criteria: payload.criteria,
+      metadata: payload.metadata,
+      timestamp: payload.timestamp,
+      expiresAt: payload.expiresAt,
+      signature: Buffer.from(payload.signature, 'hex'),
+    })
+  }
+
+  /**
+   * Handle signer unavailable
+   */
+  private async _handleSignerUnavailable(
+    payload: { peerId: string; publicKey: string },
+    from: PeerInfo,
+  ): Promise<void> {
+    if (!this.coordinator) return
+
+    this.coordinator.emit('signer:unavailable', {
+      peerId: payload.peerId,
+      publicKey: deserializePublicKey(payload.publicKey),
+    })
+  }
+
+  /**
+   * Handle signing request
+   */
+  private async _handleSigningRequest(
+    payload: SigningRequestPayload,
+    from: PeerInfo,
+  ): Promise<void> {
+    if (!this.coordinator) return
+
+    // Store request and emit event
+    this.coordinator.emit('signing-request:received', {
+      requestId: payload.requestId,
+      requiredPublicKeys: payload.requiredPublicKeys.map(hex =>
+        deserializePublicKey(hex),
+      ),
+      message: Buffer.from(payload.message, 'hex'),
+      threshold: payload.threshold,
+      creatorPeerId: payload.creatorPeerId,
+      creatorPublicKey: deserializePublicKey(payload.creatorPublicKey),
+      createdAt: payload.createdAt,
+      expiresAt: payload.expiresAt,
+      metadata: payload.metadata,
+      creatorSignature: Buffer.from(payload.creatorSignature, 'hex'),
+    })
+  }
+
+  /**
+   * Handle participant joined
+   */
+  private async _handleParticipantJoined(
+    payload: ParticipantJoinedPayload,
+    from: PeerInfo,
+  ): Promise<void> {
+    if (!this.coordinator) return
+
+    // Emit event for coordinator to handle
+    this.coordinator.emit('participant:joined', {
+      requestId: payload.requestId,
+      participantIndex: payload.participantIndex,
+      participantPeerId: payload.participantPeerId,
+      participantPublicKey: deserializePublicKey(payload.participantPublicKey),
+      timestamp: payload.timestamp,
+      signature: Buffer.from(payload.signature, 'hex'),
+    })
+  }
+
+  /**
+   * Handle session ready
+   */
+  private async _handleSessionReady(
+    payload: { requestId: string; participantIndex: number },
+    from: PeerInfo,
+  ): Promise<void> {
+    if (!this.coordinator) return
+
+    // Just emit event - coordinator handles it
+    this.coordinator.emit('session:ready', payload.requestId)
   }
 }
