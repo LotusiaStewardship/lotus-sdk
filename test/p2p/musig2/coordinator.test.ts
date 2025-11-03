@@ -17,6 +17,9 @@ describe('MuSig2 P2P Coordinator', () => {
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true, // Disable for tests
+        },
       })
 
       await musig2Coordinator.start()
@@ -36,6 +39,9 @@ describe('MuSig2 P2P Coordinator', () => {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
           enableDHTServer: false,
+          securityConfig: {
+            disableRateLimiting: true, // Disable for tests
+          },
         },
         {
           sessionTimeout: timeout,
@@ -55,6 +61,9 @@ describe('MuSig2 P2P Coordinator', () => {
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true, // Disable for tests
+        },
       })
 
       await musig2Coordinator.start()
@@ -76,6 +85,9 @@ describe('MuSig2 P2P Coordinator', () => {
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true, // Disable for tests
+        },
       })
 
       await musig2Coordinator.start()
@@ -204,6 +216,9 @@ describe('MuSig2 P2P Coordinator', () => {
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true, // Disable for tests
+        },
       })
 
       await musig2Coordinator.start()

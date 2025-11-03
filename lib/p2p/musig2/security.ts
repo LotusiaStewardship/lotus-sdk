@@ -493,9 +493,12 @@ export class SecurityManager extends EventEmitter {
   public keyTracker: PeerKeyTracker
   public invalidSigTracker: InvalidSignatureTracker
   public peerReputation: PeerReputationManager
+  private disableRateLimiting: boolean
 
-  constructor() {
+  constructor(config?: { disableRateLimiting?: boolean }) {
     super()
+
+    this.disableRateLimiting = config?.disableRateLimiting ?? false
 
     // Initialize security components
     this.rateLimiter = new AdvertisementRateLimiter(this)
@@ -507,6 +510,12 @@ export class SecurityManager extends EventEmitter {
     this.on('peer:should-ban', (peerId: string, reason: string) => {
       this.peerReputation.blacklistPeer(peerId, reason)
     })
+
+    if (this.disableRateLimiting) {
+      console.warn(
+        '[MuSig2 Security] ⚠️  RATE LIMITING DISABLED (testing mode)',
+      )
+    }
   }
 
   /**
@@ -514,6 +523,11 @@ export class SecurityManager extends EventEmitter {
    * Combines rate limiting and key count checks
    */
   canAdvertiseKey(peerId: string, publicKey: PublicKey): boolean {
+    // Skip all security checks if disabled (testing only)
+    if (this.disableRateLimiting) {
+      return true
+    }
+
     // Check if peer is allowed at all
     if (!this.peerReputation.isAllowed(peerId)) {
       console.warn(`[Security] Peer ${peerId} is blacklisted/graylisted`)

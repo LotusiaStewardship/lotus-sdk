@@ -65,12 +65,18 @@ async function main() {
     listen: ['/ip4/127.0.0.1/tcp/0'],
     enableDHT: true,
     enableDHTServer: true,
+    securityConfig: {
+      disableRateLimiting: true, // For demo - remove in production
+    },
   })
 
   const bobMuSig = new MuSig2P2PCoordinator({
     listen: ['/ip4/127.0.0.1/tcp/0'],
     enableDHT: true,
     enableDHTServer: true,
+    securityConfig: {
+      disableRateLimiting: true, // For demo - remove in production
+    },
   })
 
   await aliceMuSig.start()

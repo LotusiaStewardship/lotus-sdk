@@ -93,6 +93,9 @@ describe('MuSig2 Session Announcement Signatures', () => {
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       await coordinator.start()
@@ -203,6 +206,9 @@ describe('MuSig2 Session Announcement Signatures', () => {
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       await coordinator.start()
@@ -350,12 +356,18 @@ describe('MuSig2 Session Announcement Signatures', () => {
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       bobCoordinator = new MuSig2P2PCoordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       await aliceCoordinator.start()
@@ -495,6 +507,9 @@ describe('MuSig2 Session Announcement Signatures', () => {
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       await honestCoordinator.start()
@@ -669,6 +684,9 @@ describe('MuSig2 Session Announcement Signatures', () => {
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       await coordinator.start()

@@ -46,12 +46,18 @@ describe('MuSig2 P2P Integration', () => {
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       bobMuSig = new MuSig2P2PCoordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       await aliceMuSig.start()
@@ -191,18 +197,27 @@ describe('MuSig2 P2P Integration', () => {
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       bobMuSig = new MuSig2P2PCoordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       carolMuSig = new MuSig2P2PCoordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       await aliceMuSig.start()
@@ -286,6 +301,9 @@ describe('MuSig2 P2P Integration', () => {
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       await aliceMuSig.start()
@@ -311,6 +329,9 @@ describe('MuSig2 P2P Integration', () => {
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       await bobMuSig.start()

@@ -59,6 +59,9 @@ async function setupParticipant(name: string): Promise<Participant> {
       listen: ['/ip4/127.0.0.1/tcp/0'],
       enableDHT: true,
       enableDHTServer: true,
+      securityConfig: {
+        disableRateLimiting: true, // For demo - remove in production
+      },
     },
     {
       enableCoordinatorElection: true,

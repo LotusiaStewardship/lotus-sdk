@@ -33,18 +33,29 @@ async function threePhaseExample() {
     listen: ['/ip4/127.0.0.1/tcp/0'],
     enableDHT: true,
     enableDHTServer: false,
+    securityConfig: {
+      // Note: In production, remove disableRateLimiting for security
+      // This is only for demo purposes to allow rapid advertisements
+      disableRateLimiting: true,
+    },
   })
 
   const bobCoordinator = new MuSig2P2PCoordinator({
     listen: ['/ip4/127.0.0.1/tcp/0'],
     enableDHT: true,
     enableDHTServer: false,
+    securityConfig: {
+      disableRateLimiting: true,
+    },
   })
 
   const charlieCoordinator = new MuSig2P2PCoordinator({
     listen: ['/ip4/127.0.0.1/tcp/0'],
     enableDHT: true,
     enableDHTServer: false,
+    securityConfig: {
+      disableRateLimiting: true,
+    },
   })
 
   // Start all coordinators
@@ -312,6 +323,9 @@ async function advertisementExample() {
   const coordinator = new MuSig2P2PCoordinator({
     listen: ['/ip4/127.0.0.1/tcp/0'],
     enableDHT: true,
+    securityConfig: {
+      disableRateLimiting: true, // For demo
+    },
   })
 
   await coordinator.start()
@@ -400,6 +414,9 @@ async function matchmakingDHTExample() {
     listen: ['/ip4/127.0.0.1/tcp/0'],
     enableDHT: true,
     enableDHTServer: true, // Zoe is a full DHT server
+    securityConfig: {
+      disableRateLimiting: true, // For demo
+    },
   })
 
   await zoeCoordinator.start()
@@ -429,6 +446,9 @@ async function matchmakingDHTExample() {
     listen: ['/ip4/127.0.0.1/tcp/0'],
     enableDHT: true,
     enableDHTServer: true, // Bob participates in DHT routing
+    securityConfig: {
+      disableRateLimiting: true, // For demo
+    },
   })
 
   // Charlie runs a signing service
@@ -436,6 +456,9 @@ async function matchmakingDHTExample() {
     listen: ['/ip4/127.0.0.1/tcp/0'],
     enableDHT: true,
     enableDHTServer: true, // Charlie participates in DHT routing
+    securityConfig: {
+      disableRateLimiting: true, // For demo
+    },
   })
 
   await Promise.all([bobCoordinator.start(), charlieCoordinator.start()])
@@ -560,6 +583,9 @@ async function matchmakingDHTExample() {
     listen: ['/ip4/127.0.0.1/tcp/0'],
     enableDHT: true,
     enableDHTServer: false, // Alice is a client, not a DHT server
+    securityConfig: {
+      disableRateLimiting: true, // For demo
+    },
   })
 
   await aliceCoordinator.start()
@@ -1189,6 +1215,9 @@ async function eventDrivenExample() {
   const coordinator = new MuSig2P2PCoordinator({
     listen: ['/ip4/127.0.0.1/tcp/0'],
     enableDHT: true,
+    securityConfig: {
+      disableRateLimiting: true, // For demo
+    },
   })
 
   await coordinator.start()

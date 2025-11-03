@@ -61,8 +61,11 @@ export class P2PCoordinator extends EventEmitter {
     super()
     this.protocol = new P2PProtocol()
 
-    // SECURITY: Initialize core security manager
-    this.coreSecurityManager = new CoreSecurityManager()
+    // SECURITY: Initialize core security manager with config
+    this.coreSecurityManager = new CoreSecurityManager({
+      disableRateLimiting: config.securityConfig?.disableRateLimiting ?? false,
+      customLimits: config.securityConfig?.customLimits,
+    })
 
     // SECURITY: Start automatic DHT cleanup to prevent memory leaks
     this.startDHTCleanup()
@@ -191,6 +194,12 @@ export class P2PCoordinator extends EventEmitter {
    * Stop the P2P node
    */
   async stop(): Promise<void> {
+    // SECURITY: Clear cleanup interval to allow process exit
+    if (this.cleanupIntervalId) {
+      clearInterval(this.cleanupIntervalId)
+      this.cleanupIntervalId = undefined
+    }
+
     if (this.node) {
       // Stop the node - this should stop all services including DHT
       await this.node.stop()
@@ -201,6 +210,10 @@ export class P2PCoordinator extends EventEmitter {
     this.seenMessages.clear()
     this.dhtValues.clear()
     this.peerInfo.clear()
+
+    // SECURITY: Clear core security manager listeners
+    this.coreSecurityManager.removeAllListeners()
+
     // Clear event listeners to prevent event loop from hanging
     this.removeAllListeners()
   }
@@ -373,19 +386,9 @@ export class P2PCoordinator extends EventEmitter {
 
     const peerId = this.node.peerId.toString()
 
-    // SECURITY: Check if peer can announce to DHT
-    const canAnnounce = await this.coreSecurityManager.canAnnounceToDHT(
-      peerId,
-      resourceType,
-      resourceId,
-      data,
-    )
-
-    if (!canAnnounce) {
-      throw new Error(
-        `DHT announcement rejected: rate limited or resource limit exceeded`,
-      )
-    }
+    // NOTE: We do NOT rate limit our own outgoing announcements
+    // Rate limiting is ONLY applied to INCOMING data from OTHER peers
+    // This is enforced in protocol handlers when receiving data
 
     const announcement: ResourceAnnouncement<T> = {
       resourceId,

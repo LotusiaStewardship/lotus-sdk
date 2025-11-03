@@ -149,6 +149,24 @@ export interface P2PConfig {
   enableGossipSub?: boolean
 
   /**
+   * Security configuration
+   * Use for testing or custom security requirements
+   */
+  securityConfig?: {
+    /**
+     * Disable rate limiting (TESTING ONLY)
+     * WARNING: Never use in production - removes DoS protection
+     * Default: false
+     */
+    disableRateLimiting?: boolean
+
+    /**
+     * Custom security limits (override defaults)
+     */
+    customLimits?: Partial<typeof CORE_P2P_SECURITY_LIMITS>
+  }
+
+  /**
    * DHT peer info mapper function
    * Controls which peer addresses are considered valid for DHT operations.
    *
