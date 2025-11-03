@@ -47,6 +47,7 @@ export interface TransactionData {
   outputs?: OutputObject[]
   nLockTime?: number
   changeScript?: Script | string
+  changeAsm?: string
   changeIndex?: number
   fee?: number
 }
@@ -59,6 +60,7 @@ export interface TransactionObject {
   outputs: OutputObject[]
   nLockTime: number
   changeScript?: string
+  changeAsm?: string
   changeIndex?: number
   fee?: number
 }
@@ -656,6 +658,7 @@ export class Transaction {
 
     if (this._changeScript) {
       obj.changeScript = this._changeScript.toString()
+      obj.changeAsm = this._changeScript.toASM()
     }
     if (this._changeIndex !== undefined) {
       obj.changeIndex = this._changeIndex
