@@ -333,7 +333,7 @@ export class Opcode {
     OP_15: 95,
     OP_16: 96,
     OP_NOP: 97,
-    OP_VER: 98,
+    OP_SCRIPTTYPE: 98,
     OP_IF: 99,
     OP_NOTIF: 100,
     OP_VERIF: 101,

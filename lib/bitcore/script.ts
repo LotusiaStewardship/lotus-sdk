@@ -454,36 +454,21 @@ export class Script {
     let str = ''
     if (!chunk.buf) {
       // no data chunk
-      const opcodeNames: { [key: number]: string } = {
-        0: 'OP_0',
-        79: 'OP_1NEGATE',
-        81: 'OP_1',
-        82: 'OP_2',
-        83: 'OP_3',
-        84: 'OP_4',
-        85: 'OP_5',
-        86: 'OP_6',
-        87: 'OP_7',
-        88: 'OP_8',
-        89: 'OP_9',
-        90: 'OP_10',
-        91: 'OP_11',
-        92: 'OP_12',
-        93: 'OP_13',
-        94: 'OP_14',
-        95: 'OP_15',
-        96: 'OP_16',
-        97: 'OP_NOP',
-        105: 'OP_VERIFY',
-        106: 'OP_RETURN',
-        118: 'OP_DUP',
-        135: 'OP_EQUAL',
-        136: 'OP_EQUALVERIFY',
-        169: 'OP_HASH160',
-        172: 'OP_CHECKSIG',
-        174: 'OP_CHECKMULTISIG',
-        175: 'OP_CHECKMULTISIGVERIFY',
-        177: 'OP_CHECKLOCKTIMEVERIFY',
+      // Build reverse mapping from Opcode values to names
+      const opcodeNames: { [key: number]: string } = {}
+      for (const [name, value] of Object.entries(Opcode.map)) {
+        // Prefer non-alias names (skip OP_FALSE, OP_TRUE, OP_NOP2, OP_NOP3)
+        if (
+          name === 'OP_FALSE' ||
+          name === 'OP_TRUE' ||
+          name === 'OP_NOP2' ||
+          name === 'OP_NOP3'
+        ) {
+          continue
+        }
+        if (!opcodeNames[value]) {
+          opcodeNames[value] = name
+        }
       }
 
       if (opcodeNames[opcodenum!]) {
