@@ -320,9 +320,17 @@ export class CoreSecurityManager extends EventEmitter {
   public peerBanManager: CorePeerBanManager
   private protocolValidators: Map<string, IProtocolValidator> = new Map()
   private metrics: CoreSecurityMetrics
+  private disableRateLimiting: boolean
+  private customLimits: Partial<typeof CORE_P2P_SECURITY_LIMITS>
 
-  constructor() {
+  constructor(config?: {
+    disableRateLimiting?: boolean
+    customLimits?: Partial<typeof CORE_P2P_SECURITY_LIMITS>
+  }) {
     super()
+
+    this.disableRateLimiting = config?.disableRateLimiting ?? false
+    this.customLimits = config?.customLimits ?? {}
 
     this.dhtRateLimiter = new DHTAnnouncementRateLimiter()
     this.resourceTracker = new DHTResourceTracker()
@@ -344,6 +352,10 @@ export class CoreSecurityManager extends EventEmitter {
       this.metrics.peers.warnings++
       this.emit('peer:warned', peerId, count, reason)
     })
+
+    if (this.disableRateLimiting) {
+      console.warn('[P2P Security] ⚠️  RATE LIMITING DISABLED (testing mode)')
+    }
   }
 
   /**
@@ -368,6 +380,11 @@ export class CoreSecurityManager extends EventEmitter {
   ): Promise<boolean> {
     this.metrics.dhtAnnouncements.total++
 
+    // Skip all security checks if disabled (testing only)
+    if (this.disableRateLimiting) {
+      return true
+    }
+
     // Check if peer is banned
     if (!this.peerBanManager.isAllowed(peerId)) {
       this.metrics.dhtAnnouncements.rejected++
@@ -377,13 +394,12 @@ export class CoreSecurityManager extends EventEmitter {
       return false
     }
 
-    // Check rate limit
-    if (
-      !this.dhtRateLimiter.canAnnounce(
-        peerId,
-        CORE_P2P_SECURITY_LIMITS.MIN_DHT_ANNOUNCEMENT_INTERVAL,
-      )
-    ) {
+    // Check rate limit (use custom limit if provided)
+    const minInterval =
+      this.customLimits.MIN_DHT_ANNOUNCEMENT_INTERVAL ??
+      CORE_P2P_SECURITY_LIMITS.MIN_DHT_ANNOUNCEMENT_INTERVAL
+
+    if (!this.dhtRateLimiter.canAnnounce(peerId, minInterval)) {
       this.metrics.dhtAnnouncements.rateLimited++
       this.peerBanManager.warnPeer(peerId, 'dht-rate-limit-violation')
       console.warn(`[P2P Security] DHT announcement rate limited: ${peerId}`)

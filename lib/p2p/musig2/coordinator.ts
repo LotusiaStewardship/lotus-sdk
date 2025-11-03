@@ -126,8 +126,11 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     this.messageProtocol = new P2PProtocol()
     this.protocolHandler.setCoordinator(this)
 
-    // SECURITY: Initialize security manager
-    this.securityManager = new SecurityManager()
+    // SECURITY: Initialize security manager with config
+    this.securityManager = new SecurityManager({
+      disableRateLimiting:
+        p2pConfig.securityConfig?.disableRateLimiting ?? false,
+    })
     this.protocolHandler.setSecurityManager(this.securityManager)
 
     // SECURITY: Register MuSig2 as protocol validator with core P2P security
@@ -595,12 +598,9 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     const ttl = options?.ttl || 24 * 60 * 60 * 1000 // Default: 24 hours
     const expiresAt = timestamp + ttl
 
-    // SECURITY: Check if we can advertise this key
-    if (!this.securityManager.canAdvertiseKey(this.peerId, myPubKey)) {
-      throw new Error(
-        'Cannot advertise: rate limit exceeded or key limit reached',
-      )
-    }
+    // NOTE: We do NOT rate limit our own outgoing advertisements
+    // Rate limiting is ONLY applied to INCOMING advertisements from OTHER peers
+    // This is enforced in protocol handlers (_handleSignerAdvertisement)
 
     // Get my multiaddrs for peer discovery
     const myMultiaddrs = this.getStats().multiaddrs

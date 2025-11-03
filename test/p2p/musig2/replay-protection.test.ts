@@ -41,6 +41,9 @@ describe('MuSig2 P2P Replay Protection', () => {
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       await coordinator.start()
@@ -130,6 +133,9 @@ describe('MuSig2 P2P Replay Protection', () => {
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       await coordinator.start()
@@ -682,6 +688,9 @@ describe('MuSig2 P2P Replay Protection', () => {
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       await coordinator.start()
@@ -887,6 +896,9 @@ describe('MuSig2 P2P Replay Protection', () => {
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       await coordinator.start()
@@ -920,6 +932,9 @@ describe('MuSig2 P2P Replay Protection', () => {
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       await coordinator.start()

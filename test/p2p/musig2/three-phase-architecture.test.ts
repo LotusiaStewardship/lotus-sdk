@@ -31,6 +31,9 @@ describe('MuSig2 Three-Phase Architecture', () => {
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       await coordinator.start()
@@ -218,18 +221,27 @@ describe('MuSig2 Three-Phase Architecture', () => {
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       aliceCoordinator = new MuSig2P2PCoordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       bobCoordinator = new MuSig2P2PCoordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       await Promise.all([
@@ -352,18 +364,27 @@ describe('MuSig2 Three-Phase Architecture', () => {
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       aliceCoordinator = new MuSig2P2PCoordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       bobCoordinator = new MuSig2P2PCoordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       await Promise.all([
@@ -576,18 +597,27 @@ describe('MuSig2 Three-Phase Architecture', () => {
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       aliceCoordinator = new MuSig2P2PCoordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       bobCoordinator = new MuSig2P2PCoordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
+        securityConfig: {
+          disableRateLimiting: true,
+        },
       })
 
       await Promise.all([

@@ -6,7 +6,7 @@
  */
 
 import { waitForEvent, ConnectionEvent } from '../lib/p2p/index.js'
-import { MuSig2P2PCoordinator } from '../lib/p2p/musig2/index.js'
+import { MuSig2P2PCoordinator, MuSig2Event } from '../lib/p2p/musig2/index.js'
 import { PrivateKey } from '../lib/bitcore/privatekey.js'
 
 /**
@@ -25,12 +25,18 @@ async function main() {
     listen: ['/ip4/127.0.0.1/tcp/0'], // Random port
     enableDHT: true,
     enableDHTServer: true, // Enable DHT server for session discovery
+    securityConfig: {
+      disableRateLimiting: true, // For demo - remove in production
+    },
   })
 
   const bobMuSig = new MuSig2P2PCoordinator({
     listen: ['/ip4/127.0.0.1/tcp/0'], // Random port
     enableDHT: true,
     enableDHTServer: true,
+    securityConfig: {
+      disableRateLimiting: true, // For demo - remove in production
+    },
   })
 
   await aliceMuSig.start()
@@ -67,27 +73,27 @@ async function main() {
   console.log('Step 4: Alice creates and announces session...')
 
   // Listen for session events
-  aliceMuSig.on('session:created', sessionId => {
+  aliceMuSig.on(MuSig2Event.SESSION_CREATED, (sessionId: string) => {
     console.log(`[Alice] Session created: ${sessionId}`)
   })
 
-  aliceMuSig.on('session:nonces-complete', sessionId => {
+  aliceMuSig.on(MuSig2Event.SESSION_NONCES_COMPLETE, (sessionId: string) => {
     console.log(`[Alice] All nonces received for session: ${sessionId}`)
   })
 
-  aliceMuSig.on('session:complete', sessionId => {
+  aliceMuSig.on(MuSig2Event.SESSION_COMPLETE, (sessionId: string) => {
     console.log(`[Alice] Session complete: ${sessionId}`)
   })
 
-  bobMuSig.on('session:joined', sessionId => {
+  bobMuSig.on(MuSig2Event.SESSION_JOINED, (sessionId: string) => {
     console.log(`[Bob] Joined session: ${sessionId}`)
   })
 
-  bobMuSig.on('session:nonces-complete', sessionId => {
+  bobMuSig.on(MuSig2Event.SESSION_NONCES_COMPLETE, (sessionId: string) => {
     console.log(`[Bob] All nonces received for session: ${sessionId}`)
   })
 
-  bobMuSig.on('session:complete', sessionId => {
+  bobMuSig.on(MuSig2Event.SESSION_COMPLETE, (sessionId: string) => {
     console.log(`[Bob] Session complete: ${sessionId}`)
   })
 
