@@ -18,6 +18,7 @@ export interface OutputData {
 export interface OutputObject {
   satoshis: number
   script: string
+  asm: string
 }
 
 /**
@@ -240,6 +241,7 @@ export class Output {
     return {
       satoshis: this.satoshis,
       script: this._scriptBuffer.toString('hex'),
+      asm: this.script.toASM(),
     }
   }
 
