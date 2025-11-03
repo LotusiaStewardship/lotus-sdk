@@ -1,34 +1,45 @@
 # MuSig2 Quick Reference for lotus-lib
 
-**TL;DR**: MuSig2 implementation with P2P three-phase coordination architecture for decentralized peer discovery and dynamic session building.
+**TL;DR**: MuSig2 implementation with P2P three-phase coordination architecture + GossipSub event-driven discovery for real-time peer discovery and dynamic session building.
+
+**Version**: 2.1.0  
+**Status**: ✅ Production Ready
 
 ---
 
-## P2P Coordination (Three-Phase Architecture)
+## P2P Coordination (Three-Phase + GossipSub)
 
 ### Quick Start
 
 ```typescript
-import { MuSig2P2PCoordinator } from 'lotus-lib/p2p/musig2'
+import { MuSig2P2PCoordinator, TransactionType } from 'lotus-lib/p2p/musig2'
 
-// Create coordinator
+// Create coordinator with GossipSub
 const coordinator = new MuSig2P2PCoordinator({
   listen: ['/ip4/0.0.0.0/tcp/4001'],
   enableDHT: true,
+  enableGossipSub: true, // Real-time discovery
 })
 
 await coordinator.start()
 
-// Phase 0: Advertise availability
+// Phase 0: Advertise availability (dual-channel: DHT + GossipSub)
 await coordinator.advertiseSigner(myPrivateKey, {
-  transactionTypes: ['spend', 'swap'],
+  transactionTypes: [TransactionType.SPEND, TransactionType.SWAP],
   minAmount: 1_000_000, // 1 XPI
   maxAmount: 100_000_000, // 100 XPI
 })
 
-// Phase 1: Discover signers
+// Phase 1a: Real-time discovery (GossipSub)
+await coordinator.subscribeToSignerDiscovery([TransactionType.SWAP])
+
+coordinator.on('signer:discovered', (ad) => {
+  console.log(`📥 Instant: ${ad.metadata?.nickname}`)
+})
+
+// Phase 1b: Historical discovery (DHT fallback)
 const signers = await coordinator.findAvailableSigners({
-  transactionType: 'spend',
+  transactionType: TransactionType.SPEND,
   maxAmount: 5_000_000,
 })
 
@@ -48,6 +59,14 @@ coordinator.on('session:ready', sessionId => {
   // Ready for MuSig2 signing protocol
 })
 ```
+
+### Discovery Mechanisms
+
+| Mechanism | Latency | Use Case |
+|-----------|---------|----------|
+| **GossipSub** | 10-100ms | Real-time events |
+| **DHT** | 500-2000ms | Offline/historical |
+| **P2P Broadcast** | 50-200ms | Direct messaging |
 
 **See [P2P_DHT_ARCHITECTURE.md](P2P_DHT_ARCHITECTURE.md) for complete details**
 

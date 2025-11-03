@@ -1,7 +1,7 @@
 # MuSig2 P2P Coordination
 
 **Status**: ✅ Production Ready  
-**Version**: 2.0.0 - Three-Phase Architecture  
+**Version**: 2.1.0 - Three-Phase Architecture + GossipSub  
 **Date**: November 2, 2025
 
 ---
@@ -11,6 +11,171 @@
 The MuSig2 P2P coordination layer enables **fully decentralized multi-signature session coordination** using a three-phase architecture that solves the peer discovery problem.
 
 **Key Innovation**: Wallets can discover each other's public keys through DHT-based advertisement and matchmaking, eliminating the need for out-of-band communication.
+
+## Security Model
+
+### DHT Advertisement Security
+
+**Cryptographic Proof of Ownership:**
+
+Every advertisement is **self-signed** by the advertiser's private key, proving ownership of the advertised public key.
+
+```
+Advertisement Signature = Schnorr.sign(
+  SHA256(peerId || multiaddrs || publicKey || criteria || timestamps),
+  privateKey
+)
+```
+
+**Protection Against Attacks:**
+
+✅ **DHT Poisoning Prevention:**
+
+- Attackers cannot advertise someone else's public key (no private key to sign)
+- Signature verification fails for fake advertisements
+- Invalid advertisements are rejected
+
+✅ **Multiaddr Tampering Prevention:**
+
+- Multiaddrs are included in the signed data
+- Any modification breaks the signature
+- Ensures Alice connects to the correct peer
+
+✅ **Directory Index Integrity (Secure Append-Only Log):**
+
+- Directory index is a **self-signed append-only log**
+- Each entry is cryptographically signed by the advertiser
+- Entry format: `{publicKey, peerId, transactionType, timestamp, signature}`
+- Entry signature proves only key owner can add their public key
+- **Dual verification**: Directory entry + individual advertisement both verified
+- Attackers cannot poison directory with keys they don't own
+- Directory tampering is cryptographically detectable
+
+✅ **Impersonation Prevention:**
+
+- Only the owner of a private key can create valid signatures
+- Advertisement signature proves key ownership
+- No challenge-response needed (signature is the proof!)
+
+**Security Guarantees:**
+
+1. **Authenticity**: Advertisements provably come from key owners
+2. **Integrity**: Data cannot be modified without detection
+3. **Non-repudiation**: Advertisers cannot deny their advertisements
+4. **Freshness**: Timestamps and expiry prevent replay attacks
+5. **Trust-Free Verification**: Alice verifies signatures locally, doesn't trust intermediaries
+6. **DoS Protection**: Size limits, timestamp validation, expiry enforcement
+
+**Multi-Layer Security Validation:**
+
+Every advertisement is validated through **4 security checks** before processing:
+
+```typescript
+// Layer 1: Message size limit (prevent memory exhaustion)
+if (messageSize > 10KB) → DROP
+
+// Layer 2: Timestamp validation (prevent time-based attacks)
+if (|now - timestamp| > 5 minutes) → DROP
+
+// Layer 3: Expiry enforcement (reject expired ads)
+if (expiresAt < now) → DROP
+
+// Layer 4: Signature verification (prove ownership)
+if (!verifySignature(advertisement)) → DROP
+
+// All checks passed → SIGNER_DISCOVERED event emitted
+```
+
+**Security Constants:**
+
+```typescript
+import { MUSIG2_SECURITY_LIMITS } from 'lotus-lib/p2p/musig2'
+
+// Defined in types.ts:
+const MUSIG2_SECURITY_LIMITS = {
+  MAX_ADVERTISEMENT_SIZE: 10_000,        // 10KB max
+  MAX_TIMESTAMP_SKEW: 300_000,           // 5 minutes
+  MIN_ADVERTISEMENT_INTERVAL: 60_000,    // 60 seconds (future use)
+  MAX_INVALID_SIGNATURES_PER_PEER: 10,   // Ban threshold (future use)
+}
+
+// Override if needed (not recommended):
+const coordinator = new MuSig2P2PCoordinator(
+  { listen: [...] },
+  {
+    securityLimits: {
+      MAX_ADVERTISEMENT_SIZE: 20_000, // Custom limit
+    },
+  }
+)
+```
+
+---
+
+## Discovery Mechanisms
+
+### 1. DHT-Based Discovery (Historical/Offline)
+
+Query pre-existing advertisements stored in the DHT:
+
+```typescript
+// Alice queries DHT for signers who advertised BEFORE she connected
+const signers = await coordinator.findAvailableSigners({
+  transactionType: TransactionType.SWAP,
+  minAmount: 10_000_000, // 10 XPI
+  maxResults: 10,
+})
+```
+
+**Use Case**: Finding services across time (like browsing a directory)
+
+### 2. GossipSub Event-Driven Discovery (Real-Time)
+
+Subscribe to real-time notifications when NEW signers advertise:
+
+```typescript
+// Alice subscribes FIRST (before advertisers join)
+await coordinator.subscribeToSignerDiscovery([TransactionType.SWAP])
+
+// Event handler receives notifications instantly
+coordinator.on(MuSig2Event.SIGNER_DISCOVERED, advertisement => {
+  console.log(`New signer: ${advertisement.metadata?.nickname}`)
+  // No DHT query needed - instant notification!
+})
+
+// Later: Bob advertises → Alice receives notification (milliseconds)
+```
+
+**Use Case**: Real-time marketplace updates, instant discovery
+
+### 3. Hybrid Approach (Production Recommended)
+
+Use BOTH for maximum reliability:
+
+```typescript
+// Subscribe for real-time notifications (preferred)
+await coordinator.subscribeToSignerDiscovery([TransactionType.SWAP])
+
+// Event handler for instant discovery
+coordinator.on(MuSig2Event.SIGNER_DISCOVERED, ad => {
+  displaySigner(ad)
+})
+
+// Fallback: Query DHT for historical/missed advertisements
+const historical = await coordinator.findAvailableSigners({
+  transactionType: TransactionType.SWAP,
+})
+```
+
+### Discovery Comparison
+
+| Mechanism         | Latency    | Use Case          | Network Requirement       |
+| ----------------- | ---------- | ----------------- | ------------------------- |
+| **DHT**           | 500-2000ms | Offline discovery | Routing table ready       |
+| **GossipSub**     | 10-100ms   | Real-time events  | Subscribed before publish |
+| **P2P Broadcast** | 50-200ms   | Direct messaging  | Peer connections          |
+
+**Deduplication**: Applications should deduplicate by public key, as `advertiseSigner()` uses multiple channels for reliability.
 
 ---
 
@@ -159,9 +324,47 @@ coordinator.on('session:ready', async sessionId => {
 
 ## Event-Driven Discovery
 
+### Real-Time Discovery with GossipSub
+
+**GossipSub** enables instant, event-driven discovery without polling or DHT queries:
+
+```typescript
+// Subscribe to topics for real-time notifications
+await coordinator.subscribeToSignerDiscovery([
+  TransactionType.SWAP,
+  TransactionType.SPEND,
+])
+
+// Receive instant notifications when signers advertise
+const discoveredSigners: SignerAdvertisement[] = []
+const seenPublicKeys = new Set<string>()
+
+coordinator.on(MuSig2Event.SIGNER_DISCOVERED, ad => {
+  // Application-layer deduplication (library uses multiple channels)
+  const pubKeyStr = ad.publicKey.toString()
+  if (!seenPublicKeys.has(pubKeyStr)) {
+    seenPublicKeys.add(pubKeyStr)
+    discoveredSigners.push(ad)
+    console.log(`📥 New signer: ${ad.metadata?.nickname}`)
+  }
+})
+
+// Unsubscribe when done
+await coordinator.unsubscribeFromSignerDiscovery()
+```
+
+**Benefits:**
+
+- ✅ **Instant**: 10-100ms latency (vs 500-2000ms for DHT)
+- ✅ **No polling**: True event-driven architecture
+- ✅ **Scalable**: GossipSub used by Ethereum 2.0
+- ✅ **Reliable**: Redundant delivery (GossipSub + P2P broadcast)
+
+### Event Listeners
+
 ```typescript
 // Listen for new signing requests
-coordinator.on('signing-request:received', request => {
+coordinator.on(MuSig2Event.SIGNING_REQUEST_RECEIVED, request => {
   const myPubKeyStr = myPrivateKey.publicKey.toString()
   const isRequired = request.requiredPublicKeys.some(
     pk => pk.toString() === myPubKeyStr,
@@ -172,14 +375,14 @@ coordinator.on('signing-request:received', request => {
   }
 })
 
-// Listen for new signer advertisements
-coordinator.on('signer:discovered', advertisement => {
+// Listen for new signer advertisements (both DHT and GossipSub)
+coordinator.on(MuSig2Event.SIGNER_DISCOVERED, advertisement => {
   console.log(`New signer: ${advertisement.metadata?.nickname}`)
   console.log(`Types: ${advertisement.criteria.transactionTypes.join(', ')}`)
 })
 
 // Listen for session ready
-coordinator.on('session:ready', sessionId => {
+coordinator.on(MuSig2Event.SESSION_READY, sessionId => {
   console.log('Session ready for nonce exchange!')
 })
 ```
@@ -267,9 +470,30 @@ await coordinator.advertiseSigner(
 
 Remove your advertisement from the network.
 
+**`subscribeToSignerDiscovery(transactionTypes)`**
+
+Subscribe to real-time signer advertisements via GossipSub.
+
+```typescript
+// Subscribe to topics for instant notifications
+await coordinator.subscribeToSignerDiscovery([
+  TransactionType.SWAP,
+  TransactionType.SPEND,
+])
+
+// Signers who advertise AFTER subscription → instant notification
+coordinator.on(MuSig2Event.SIGNER_DISCOVERED, ad => {
+  console.log(`Real-time discovery: ${ad.metadata?.nickname}`)
+})
+```
+
+**`unsubscribeFromSignerDiscovery()`**
+
+Unsubscribe from all signer discovery topics.
+
 **`findAvailableSigners(filters)`**
 
-Discover available signers matching criteria.
+Discover available signers matching criteria (queries DHT + local cache).
 
 ```typescript
 const signers = await coordinator.findAvailableSigners({

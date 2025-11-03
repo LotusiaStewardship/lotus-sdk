@@ -1,9 +1,9 @@
 # MuSig2 P2P Coordination Layer
 
 **Author**: The Lotusia Stewardship  
-**Status**: ✅ **IMPLEMENTED** - Three-Phase Architecture  
+**Status**: ✅ **IMPLEMENTED** - Three-Phase Architecture + GossipSub  
 **Date**: November 2, 2025  
-**Version**: 2.0
+**Version**: 2.1.0
 
 ---
 
@@ -14,7 +14,9 @@
 ✅ **Phase 0**: Signer Advertisement - Wallets announce availability  
 ✅ **Phase 1**: Matchmaking - Discover signers by criteria  
 ✅ **Phase 2**: Signing Requests - Create requests with discovered keys  
-✅ **Phase 3**: Dynamic Session Building - Session created when ALL join (n-of-n)
+✅ **Phase 3**: Dynamic Session Building - Session created when ALL join (n-of-n)  
+✅ **GossipSub**: Real-time event-driven discovery (10-100ms latency)  
+✅ **Security**: Signature verification at receipt time (trust-free)
 
 **📖 See [P2P_DHT_ARCHITECTURE.md](P2P_DHT_ARCHITECTURE.md) for complete technical details**
 
@@ -30,6 +32,8 @@ This document describes the **three-phase architecture** for MuSig2 P2P coordina
 ✅ **Session Management**: Local state management implemented  
 ✅ **P2P Coordination**: ✅ **IMPLEMENTED** - Three-phase architecture  
 ✅ **DHT-Based Discovery**: Signer advertisements and signing requests  
+✅ **GossipSub Discovery**: Real-time event-driven pub/sub  
+✅ **Security**: Signature verification at receipt (trust-free)  
 ✅ **Dynamic Session Building**: n-of-n participant joining (all must sign)  
 ✅ **Tests**: 162 tests passing (including 11 new three-phase tests)
 

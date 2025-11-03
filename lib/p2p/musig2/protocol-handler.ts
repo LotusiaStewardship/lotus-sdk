@@ -13,6 +13,7 @@
 import { P2PMessage, PeerInfo, IProtocolHandler } from '../types.js'
 import {
   MuSig2MessageType,
+  MuSig2Event,
   SessionAnnouncementPayload,
   SessionJoinPayload,
   NonceSharePayload,
@@ -21,6 +22,7 @@ import {
   SignerAdvertisementPayload,
   SigningRequestPayload,
   ParticipantJoinedPayload,
+  MUSIG2_SECURITY_LIMITS,
 } from './types.js'
 import {
   deserializePublicNonce,
@@ -341,17 +343,45 @@ export class MuSig2P2PProtocolHandler implements IProtocolHandler {
   ): Promise<void> {
     if (!this.coordinator) return
 
-    // Store advertisement in coordinator
-    // The coordinator will store it in signerAdvertisements Map
-    this.coordinator.emit('signer:discovered', {
+    // SECURITY 1: Timestamp validation (prevent future/past attacks)
+    const timestampSkew = Math.abs(Date.now() - payload.timestamp)
+    if (timestampSkew > MUSIG2_SECURITY_LIMITS.MAX_TIMESTAMP_SKEW) {
+      console.warn(
+        `[MuSig2P2P] ⚠️  Advertisement timestamp out of range: ${timestampSkew}ms skew (max: ${MUSIG2_SECURITY_LIMITS.MAX_TIMESTAMP_SKEW}ms)`,
+      )
+      return // Drop time-invalid advertisement
+    }
+
+    // SECURITY 2: Expiry enforcement (drop expired immediately)
+    if (payload.expiresAt && payload.expiresAt < Date.now()) {
+      console.warn(
+        `[MuSig2P2P] ⚠️  Expired advertisement rejected: ${payload.peerId}`,
+      )
+      return // Drop expired advertisement
+    }
+
+    const advertisement = {
       peerId: payload.peerId,
+      multiaddrs: payload.multiaddrs,
       publicKey: deserializePublicKey(payload.publicKey),
       criteria: payload.criteria,
       metadata: payload.metadata,
       timestamp: payload.timestamp,
       expiresAt: payload.expiresAt,
       signature: Buffer.from(payload.signature, 'hex'),
-    })
+    }
+
+    // SECURITY 3: Verify signature BEFORE trusting
+    // Don't trust the sender - verify cryptographic proof locally
+    if (!this.coordinator.verifyAdvertisementSignature(advertisement)) {
+      console.warn(
+        `[MuSig2P2P] ⚠️  Rejected invalid advertisement from P2P: ${payload.peerId}`,
+      )
+      return // Drop invalid advertisement
+    }
+
+    // All security checks passed - emit event
+    this.coordinator.emit(MuSig2Event.SIGNER_DISCOVERED, advertisement)
   }
 
   /**
@@ -363,7 +393,7 @@ export class MuSig2P2PProtocolHandler implements IProtocolHandler {
   ): Promise<void> {
     if (!this.coordinator) return
 
-    this.coordinator.emit('signer:unavailable', {
+    this.coordinator.emit(MuSig2Event.SIGNER_UNAVAILABLE, {
       peerId: payload.peerId,
       publicKey: deserializePublicKey(payload.publicKey),
     })
@@ -379,13 +409,12 @@ export class MuSig2P2PProtocolHandler implements IProtocolHandler {
     if (!this.coordinator) return
 
     // Store request and emit event
-    this.coordinator.emit('signing-request:received', {
+    this.coordinator.emit(MuSig2Event.SIGNING_REQUEST_RECEIVED, {
       requestId: payload.requestId,
       requiredPublicKeys: payload.requiredPublicKeys.map(hex =>
         deserializePublicKey(hex),
       ),
       message: Buffer.from(payload.message, 'hex'),
-      threshold: payload.threshold,
       creatorPeerId: payload.creatorPeerId,
       creatorPublicKey: deserializePublicKey(payload.creatorPublicKey),
       createdAt: payload.createdAt,
@@ -405,7 +434,7 @@ export class MuSig2P2PProtocolHandler implements IProtocolHandler {
     if (!this.coordinator) return
 
     // Emit event for coordinator to handle
-    this.coordinator.emit('participant:joined', {
+    this.coordinator.emit(MuSig2Event.PARTICIPANT_JOINED, {
       requestId: payload.requestId,
       participantIndex: payload.participantIndex,
       participantPeerId: payload.participantPeerId,
@@ -425,6 +454,6 @@ export class MuSig2P2PProtocolHandler implements IProtocolHandler {
     if (!this.coordinator) return
 
     // Just emit event - coordinator handles it
-    this.coordinator.emit('session:ready', payload.requestId)
+    this.coordinator.emit(MuSig2Event.SESSION_READY, payload.requestId)
   }
 }

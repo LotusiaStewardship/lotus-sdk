@@ -19,6 +19,8 @@ import {
 } from '@libp2p/kad-dht'
 import { identify } from '@libp2p/identify'
 import { ping } from '@libp2p/ping'
+import { gossipsub } from '@libp2p/gossipsub'
+import type { GossipSub } from '@libp2p/gossipsub'
 import { multiaddr, Multiaddr } from '@multiformats/multiaddr'
 import { peerIdFromString } from '@libp2p/peer-id'
 import type { Connection, Stream, PeerId } from '@libp2p/interface'
@@ -83,6 +85,7 @@ export class P2PCoordinator extends EventEmitter {
 
     // Build libp2p configuration
     // kad-dht requires identify and ping services
+    // gossipsub requires identify
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const config: any = {
       addresses: {
@@ -109,9 +112,27 @@ export class P2PCoordinator extends EventEmitter {
                 // Auto-detected based on listen addresses, or override via config
                 peerInfoMapper,
               }),
+              // Enable GossipSub for real-time event-driven discovery
+              ...(this.config.enableGossipSub !== false
+                ? {
+                    pubsub: gossipsub({
+                      allowPublishToZeroTopicPeers: true, // Allow publishing even with no subscribers (for testing)
+                      emitSelf: false, // Don't receive own messages
+                    }),
+                  }
+                : {}),
             }
           : {
               identify: identify(),
+              // Enable GossipSub even without DHT
+              ...(this.config.enableGossipSub !== false
+                ? {
+                    pubsub: gossipsub({
+                      allowPublishToZeroTopicPeers: true,
+                      emitSelf: false,
+                    }),
+                  }
+                : {}),
             },
       connectionManager: {
         maxConnections: this.config.connectionManager?.maxConnections || 50,
@@ -891,5 +912,111 @@ export class P2PCoordinator extends EventEmitter {
    */
   private _makeResourceKey(resourceType: string, resourceId: string): string {
     return `resource:${resourceType}:${resourceId}`
+  }
+
+  // ========================================================================
+  // GossipSub Pub/Sub Methods (Event-Driven Discovery)
+  // ========================================================================
+
+  /**
+   * Subscribe to a GossipSub topic
+   *
+   * Enables real-time event-driven discovery
+   *
+   * @param topic - Topic name to subscribe to
+   * @param handler - Message handler callback
+   */
+  async subscribeToTopic(
+    topic: string,
+    handler: (message: Uint8Array) => void,
+  ): Promise<void> {
+    if (!this.node) {
+      throw new Error('Node not started')
+    }
+
+    const pubsub = this.node.services.pubsub as GossipSub | undefined
+    if (!pubsub) {
+      throw new Error('GossipSub not enabled in config')
+    }
+
+    // Subscribe to topic
+    pubsub.subscribe(topic)
+
+    // Setup message handler
+    // Event detail has: { topic: string, data: Uint8Array }
+    pubsub.addEventListener(
+      'message',
+      (evt: CustomEvent<{ topic: string; data: Uint8Array }>) => {
+        if (evt.detail.topic === topic) {
+          handler(evt.detail.data)
+        }
+      },
+    )
+
+    console.log(`[P2P] Subscribed to topic: ${topic}`)
+  }
+
+  /**
+   * Unsubscribe from a GossipSub topic
+   *
+   * @param topic - Topic name to unsubscribe from
+   */
+  async unsubscribeFromTopic(topic: string): Promise<void> {
+    if (!this.node) {
+      return
+    }
+
+    const pubsub = this.node.services.pubsub as GossipSub | undefined
+    if (!pubsub) {
+      return
+    }
+
+    pubsub.unsubscribe(topic)
+    console.log(`[P2P] Unsubscribed from topic: ${topic}`)
+  }
+
+  /**
+   * Publish message to a GossipSub topic
+   *
+   * @param topic - Topic name
+   * @param message - Message data (will be serialized)
+   */
+  async publishToTopic(topic: string, message: unknown): Promise<void> {
+    if (!this.node) {
+      throw new Error('Node not started')
+    }
+
+    const pubsub = this.node.services.pubsub as GossipSub | undefined
+    if (!pubsub) {
+      throw new Error('GossipSub not enabled in config')
+    }
+
+    // Convert to Uint8Array using Node.js Buffer
+    const messageStr = JSON.stringify(message)
+    const messageBytes = new Uint8Array(Buffer.from(messageStr, 'utf8'))
+
+    await pubsub.publish(topic, messageBytes)
+
+    console.log(`[P2P] Published to topic: ${topic}`)
+  }
+
+  /**
+   * Get list of peers subscribed to a topic
+   *
+   * @param topic - Topic name
+   * @returns Array of peer IDs
+   */
+  getTopicPeers(topic: string): string[] {
+    if (!this.node) {
+      return []
+    }
+
+    const pubsub = this.node.services.pubsub as GossipSub | undefined
+    if (!pubsub) {
+      return []
+    }
+
+    const peers = pubsub.getSubscribers(topic)
+    return Array.from(peers).map(p => p.toString())
   }
 }

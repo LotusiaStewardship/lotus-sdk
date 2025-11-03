@@ -55,17 +55,28 @@ export function parseMultiaddrs(addrs: string | string[]): string[] {
 /**
  * Wait for an event to fire on an EventEmitter
  * Useful for async coordination in protocols
+ *
+ * Supports both regular EventEmitters and strongly-typed event emitters.
+ *
+ * Note: Uses `any` types to support both string-based and strongly-typed
+ * event emitters. TypeScript's type system doesn't allow a fully type-safe
+ * implementation that works with both patterns without this compromise.
  */
 export function waitForEvent<T = unknown>(
-  emitter: { once: (event: string, listener: (data: T) => void) => void },
-  event: string,
-  timeoutMs: number = 5000,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  emitter: { once: (event: any, listener: any) => void },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  event: any,
+  timeoutMs?: number,
 ): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error(`Timeout waiting for event: ${event}`))
-    }, timeoutMs)
-
+    let timeout: NodeJS.Timeout | undefined = undefined
+    // ONLY set a timeout if argument provided
+    if (timeoutMs !== undefined) {
+      timeout = setTimeout(() => {
+        reject(new Error(`Timeout waiting for event: ${String(event)}`))
+      }, timeoutMs)
+    }
     emitter.once(event, (data: T) => {
       clearTimeout(timeout)
       resolve(data)

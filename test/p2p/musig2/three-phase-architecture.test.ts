@@ -16,6 +16,8 @@ import { waitForEvent } from '../../../lib/p2p/utils.js'
 import {
   SignerAdvertisement,
   SigningRequest,
+  MuSig2Event,
+  TransactionType,
 } from '../../../lib/p2p/musig2/types.js'
 
 describe('MuSig2 Three-Phase Architecture', () => {
@@ -53,7 +55,7 @@ describe('MuSig2 Three-Phase Architecture', () => {
       await coordinator.advertiseSigner(
         aliceKey,
         {
-          transactionTypes: ['spend', 'swap'],
+          transactionTypes: [TransactionType.SPEND, TransactionType.SWAP],
           minAmount: 1_000_000, // 1 XPI
           maxAmount: 100_000_000, // 100 XPI
         },
@@ -73,8 +75,12 @@ describe('MuSig2 Three-Phase Architecture', () => {
         advertisement.publicKey.toString(),
         aliceKey.publicKey.toString(),
       )
-      assert.ok(advertisement.criteria.transactionTypes.includes('spend'))
-      assert.ok(advertisement.criteria.transactionTypes.includes('swap'))
+      assert.ok(
+        advertisement.criteria.transactionTypes.includes(TransactionType.SPEND),
+      )
+      assert.ok(
+        advertisement.criteria.transactionTypes.includes(TransactionType.SWAP),
+      )
       assert.strictEqual(advertisement.metadata?.nickname, 'AliceWallet')
       assert.ok(advertisement.signature)
       assert.ok(advertisement.signature.length === 64) // Schnorr signature
@@ -83,19 +89,19 @@ describe('MuSig2 Three-Phase Architecture', () => {
     it('should filter signers by transaction type', async () => {
       // Advertise Alice for spend transactions
       await coordinator.advertiseSigner(aliceKey, {
-        transactionTypes: ['spend'],
+        transactionTypes: [TransactionType.SPEND],
       })
 
       // Advertise Bob for swap transactions only
       await coordinator.advertiseSigner(bobKey, {
-        transactionTypes: ['swap'],
+        transactionTypes: [TransactionType.SWAP],
       })
 
       await new Promise(resolve => setTimeout(resolve, 100))
 
       // Find spend signers
       const spendSigners = await coordinator.findAvailableSigners({
-        transactionType: 'spend',
+        transactionType: TransactionType.SPEND,
       })
 
       assert.ok(spendSigners.length >= 1)
@@ -112,7 +118,7 @@ describe('MuSig2 Three-Phase Architecture', () => {
 
       // Find swap signers
       const swapSigners = await coordinator.findAvailableSigners({
-        transactionType: 'swap',
+        transactionType: TransactionType.SWAP,
       })
 
       assert.ok(swapSigners.length >= 1)
@@ -126,7 +132,7 @@ describe('MuSig2 Three-Phase Architecture', () => {
     it('should filter signers by amount range', async () => {
       // Advertise Alice for small amounts
       await coordinator.advertiseSigner(aliceKey, {
-        transactionTypes: ['spend'],
+        transactionTypes: [TransactionType.SPEND],
         minAmount: 1_000_000,
         maxAmount: 10_000_000,
       })
@@ -135,7 +141,7 @@ describe('MuSig2 Three-Phase Architecture', () => {
 
       // Find signers for large amount (should exclude Alice)
       const largeAmountSigners = await coordinator.findAvailableSigners({
-        transactionType: 'spend',
+        transactionType: TransactionType.SPEND,
         minAmount: 50_000_000,
       })
 
@@ -147,7 +153,7 @@ describe('MuSig2 Three-Phase Architecture', () => {
 
       // Find signers for small amount (should include Alice)
       const smallAmountSigners = await coordinator.findAvailableSigners({
-        transactionType: 'spend',
+        transactionType: TransactionType.SPEND,
         maxAmount: 5_000_000,
       })
 
@@ -160,17 +166,20 @@ describe('MuSig2 Three-Phase Architecture', () => {
 
     it('should withdraw advertisement', async () => {
       await coordinator.advertiseSigner(aliceKey, {
-        transactionTypes: ['spend'],
+        transactionTypes: [TransactionType.SPEND],
       })
 
       await new Promise(resolve => setTimeout(resolve, 100))
 
       const beforeSigners = await coordinator.findAvailableSigners({
-        transactionType: 'spend',
+        transactionType: TransactionType.SPEND,
       })
       assert.ok(beforeSigners.length > 0)
 
-      const eventPromise = waitForEvent(coordinator, 'signer:withdrawn')
+      const eventPromise = waitForEvent(
+        coordinator,
+        MuSig2Event.SIGNER_WITHDRAWN,
+      )
 
       await coordinator.withdrawAdvertisement()
       await eventPromise
@@ -178,7 +187,7 @@ describe('MuSig2 Three-Phase Architecture', () => {
       await new Promise(resolve => setTimeout(resolve, 100))
 
       const afterSigners = await coordinator.findAvailableSigners({
-        transactionType: 'spend',
+        transactionType: TransactionType.SPEND,
       })
 
       // Alice should no longer be in results
@@ -252,10 +261,10 @@ describe('MuSig2 Three-Phase Architecture', () => {
       // Phase 0: Alice and Bob advertise
       await Promise.all([
         aliceCoordinator.advertiseSigner(aliceKey, {
-          transactionTypes: ['spend'],
+          transactionTypes: [TransactionType.SPEND],
         }),
         bobCoordinator.advertiseSigner(bobKey, {
-          transactionTypes: ['spend'],
+          transactionTypes: [TransactionType.SPEND],
         }),
       ])
 
@@ -263,7 +272,7 @@ describe('MuSig2 Three-Phase Architecture', () => {
 
       // Phase 1: Creator discovers available signers
       const availableSigners = await creatorCoordinator.findAvailableSigners({
-        transactionType: 'spend',
+        transactionType: TransactionType.SPEND,
         maxResults: 2,
       })
 
@@ -290,7 +299,7 @@ describe('MuSig2 Three-Phase Architecture', () => {
         {
           metadata: {
             amount: 5_000_000,
-            transactionType: 'spend',
+            transactionType: TransactionType.SPEND,
             description: 'Test spend (3-of-3, all must sign)',
           },
         },
@@ -389,10 +398,10 @@ describe('MuSig2 Three-Phase Architecture', () => {
       // Advertise so we can discover each other
       await Promise.all([
         aliceCoordinator.advertiseSigner(aliceKey, {
-          transactionTypes: ['spend'],
+          transactionTypes: [TransactionType.SPEND],
         }),
         bobCoordinator.advertiseSigner(bobKey, {
-          transactionTypes: ['spend'],
+          transactionTypes: [TransactionType.SPEND],
         }),
       ])
 
@@ -435,10 +444,10 @@ describe('MuSig2 Three-Phase Architecture', () => {
       // Advertise
       await Promise.all([
         aliceCoordinator.advertiseSigner(aliceKey, {
-          transactionTypes: ['spend'],
+          transactionTypes: [TransactionType.SPEND],
         }),
         bobCoordinator.advertiseSigner(bobKey, {
-          transactionTypes: ['spend'],
+          transactionTypes: [TransactionType.SPEND],
         }),
       ])
 
@@ -482,8 +491,14 @@ describe('MuSig2 Three-Phase Architecture', () => {
         creatorCoordinator,
         'session:ready',
       )
-      const aliceReadyPromise = waitForEvent(aliceCoordinator, 'session:ready')
-      const bobReadyPromise = waitForEvent(bobCoordinator, 'session:ready')
+      const aliceReadyPromise = waitForEvent(
+        aliceCoordinator,
+        MuSig2Event.SESSION_READY,
+      )
+      const bobReadyPromise = waitForEvent(
+        bobCoordinator,
+        MuSig2Event.SESSION_READY,
+      )
 
       await bobCoordinator.joinSigningRequest(requestId, bobKey)
 
@@ -609,7 +624,7 @@ describe('MuSig2 Three-Phase Architecture', () => {
         aliceCoordinator.advertiseSigner(
           aliceKey,
           {
-            transactionTypes: ['spend'],
+            transactionTypes: [TransactionType.SPEND],
             minAmount: 1_000_000,
             maxAmount: 100_000_000,
           },
@@ -622,7 +637,7 @@ describe('MuSig2 Three-Phase Architecture', () => {
         bobCoordinator.advertiseSigner(
           bobKey,
           {
-            transactionTypes: ['spend', 'swap'],
+            transactionTypes: [TransactionType.SPEND, TransactionType.SWAP],
             minAmount: 1_000_000,
             maxAmount: 50_000_000,
           },
@@ -638,7 +653,7 @@ describe('MuSig2 Three-Phase Architecture', () => {
 
       // PHASE 1: Creator discovers available signers
       const availableSigners = await creatorCoordinator.findAvailableSigners({
-        transactionType: 'spend',
+        transactionType: TransactionType.SPEND,
         minAmount: 5_000_000,
         maxResults: 10,
       })
@@ -664,7 +679,7 @@ describe('MuSig2 Three-Phase Architecture', () => {
         {
           metadata: {
             amount: 5_000_000,
-            transactionType: 'spend',
+            transactionType: TransactionType.SPEND,
             description: 'Test spend transaction (3-of-3, all must sign)',
           },
         },
@@ -680,8 +695,14 @@ describe('MuSig2 Three-Phase Architecture', () => {
         creatorCoordinator,
         'session:ready',
       )
-      const aliceReadyPromise = waitForEvent(aliceCoordinator, 'session:ready')
-      const bobReadyPromise = waitForEvent(bobCoordinator, 'session:ready')
+      const aliceReadyPromise = waitForEvent(
+        aliceCoordinator,
+        MuSig2Event.SESSION_READY,
+      )
+      const bobReadyPromise = waitForEvent(
+        bobCoordinator,
+        MuSig2Event.SESSION_READY,
+      )
 
       // Alice discovers she's needed and joins
       const aliceRequests = await aliceCoordinator.findSigningRequestsForMe(

@@ -7,6 +7,7 @@
 import { describe, it, before, after } from 'node:test'
 import assert from 'node:assert'
 import { MuSig2P2PCoordinator } from '../../../lib/p2p/musig2/coordinator.js'
+import { MuSig2Event } from '../../../lib/p2p/musig2/types.js'
 import { P2PCoordinator } from '../../../lib/p2p/coordinator.js'
 import { PrivateKey } from '../../../lib/bitcore/privatekey.js'
 import { waitForEvent } from '../../../lib/p2p/utils.js'
@@ -628,7 +629,10 @@ describe('MuSig2 P2P Replay Protection', () => {
           aliceCoord,
           'session:complete',
         )
-        const bobCompletePromise = waitForEvent(bobCoord, 'session:complete')
+        const bobCompletePromise = waitForEvent(
+          bobCoord,
+          MuSig2Event.SESSION_COMPLETE,
+        )
 
         await Promise.all([
           aliceCoord.startRound2(sessionId, alice),

@@ -8,6 +8,7 @@ import { describe, it, before, after } from 'node:test'
 import assert from 'node:assert'
 import { P2PCoordinator } from '../../../lib/p2p/coordinator.js'
 import { MuSig2P2PCoordinator } from '../../../lib/p2p/musig2/coordinator.js'
+import { MuSig2Event } from '../../../lib/p2p/musig2/types.js'
 import { PrivateKey } from '../../../lib/bitcore/privatekey.js'
 import { waitForEvent } from '../../../lib/p2p/utils.js'
 import { ConnectionEvent } from '../../../lib/p2p/types.js'
@@ -142,7 +143,10 @@ describe('MuSig2 P2P Integration', () => {
           aliceMuSig,
           'session:complete',
         )
-        const bobCompletePromise = waitForEvent(bobMuSig, 'session:complete')
+        const bobCompletePromise = waitForEvent(
+          bobMuSig,
+          MuSig2Event.SESSION_COMPLETE,
+        )
 
         await Promise.all([
           aliceMuSig.startRound2(sessionId, alice),
@@ -298,7 +302,7 @@ describe('MuSig2 P2P Integration', () => {
     it('should emit peer connection events', async () => {
       let peerConnectedEvent: string | null = null
 
-      aliceMuSig.on('peer:connected', (peerId: string) => {
+      aliceMuSig.on(MuSig2Event.PEER_CONNECTED, (peerId: string) => {
         peerConnectedEvent = peerId
       })
 

@@ -142,6 +142,13 @@ export interface P2PConfig {
   enableDHTServer?: boolean
 
   /**
+   * Enable GossipSub pub/sub for real-time event-driven discovery
+   * If true: enables topic-based pub/sub for instant notifications
+   * Default: true (recommended for production)
+   */
+  enableGossipSub?: boolean
+
+  /**
    * DHT peer info mapper function
    * Controls which peer addresses are considered valid for DHT operations.
    *

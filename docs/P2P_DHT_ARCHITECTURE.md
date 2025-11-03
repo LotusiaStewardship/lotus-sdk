@@ -633,10 +633,64 @@ MuSig2 multi-signature coordination uses a **three-phase architecture** that sol
 **Hybrid Architecture:**
 
 ```
-DHT: Signer advertisements, signing request discovery
+DHT: Signer advertisements, signing request discovery (offline/historical)
+GossipSub: Real-time event-driven discovery via pub/sub topics
 Direct P2P: Cryptographic material exchange (nonces, partial signatures)
 Broadcast: Advertisement and request announcements to connected peers
 ```
+
+**Discovery Mechanisms:**
+
+1. **GossipSub (Real-Time)**:
+   - Topic-based pub/sub: `musig2:signers:{transactionType}`
+   - Instant notifications (10-100ms latency)
+   - Subscribe before publish (true pub/sub semantics)
+   - Powered by `@libp2p/gossipsub` (Ethereum 2.0 standard)
+
+2. **DHT (Offline/Historical)**:
+   - Query pre-existing advertisements
+   - Persistent storage across time
+   - 500-2000ms latency
+
+3. **P2P Broadcast (Direct Messaging)**:
+   - Direct peer-to-peer announcements
+   - 50-200ms latency
+   - Requires peer connections
+
+### Security: Signature Verification at Receipt
+
+**Alice cannot trust Zoe or any intermediary** - she must verify cryptographic proof locally:
+
+```typescript
+// When Alice receives an advertisement (via DHT, GossipSub, or P2P):
+
+// 1. Extract signature from advertisement
+const { signature, publicKey, peerId, multiaddrs, criteria } = advertisement
+
+// 2. Verify signature BEFORE trusting
+const isValid = coordinator.verifyAdvertisementSignature(advertisement)
+
+if (!isValid) {
+  // Reject! Possible attack or corrupted data
+  console.warn('Invalid advertisement signature - dropping')
+  return
+}
+
+// 3. Signature valid → cryptographic proof established
+//    - Bob owns the advertised public key (only he could sign)
+//    - Multiaddrs are authentic (part of signed data)
+//    - No MITM possible (signature would break)
+
+// 4. Safe to connect
+await coordinator.connectToSigner(advertisement)
+```
+
+**Verification Points:**
+
+- ✅ **GossipSub handler**: Verifies before emitting `SIGNER_DISCOVERED`
+- ✅ **P2P broadcast handler**: Verifies before emitting `SIGNER_DISCOVERED`
+- ✅ **DHT query**: Verifies when deserializing from DHT
+- ✅ **No challenge-response needed**: Signature IS the proof!
 
 ### Why Three Phases?
 
