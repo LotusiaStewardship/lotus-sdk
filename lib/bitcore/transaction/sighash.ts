@@ -293,44 +293,6 @@ function sighashForForkId(
     'For ForkId=0 signatures, satoshis or complete input must be provided',
   )
 
-  function GetPrevoutHash(tx: TransactionLike): Buffer {
-    const writer = new BufferWriter()
-
-    for (const input of tx.inputs) {
-      writer.writeReverse(input.prevTxId)
-      writer.writeUInt32LE(input.outputIndex)
-    }
-
-    const buf = writer.toBuffer()
-    return Hash.sha256sha256(buf)
-  }
-
-  function GetSequenceHash(tx: TransactionLike): Buffer {
-    const writer = new BufferWriter()
-
-    for (const input of tx.inputs) {
-      writer.writeUInt32LENumber(input.sequenceNumber)
-    }
-
-    const buf = writer.toBuffer()
-    return Hash.sha256sha256(buf)
-  }
-
-  function GetOutputsHash(tx: TransactionLike, n?: number): Buffer {
-    const writer = new BufferWriter()
-
-    if (n === undefined) {
-      for (const output of tx.outputs) {
-        output.toBufferWriter(writer)
-      }
-    } else {
-      tx.outputs[n].toBufferWriter(writer)
-    }
-
-    const buf = writer.toBuffer()
-    return Hash.sha256sha256(buf)
-  }
-
   let hashPrevouts = BufferUtil.emptyBuffer(32)
   let hashSequence = BufferUtil.emptyBuffer(32)
   let hashOutputs = BufferUtil.emptyBuffer(32)
@@ -724,6 +686,61 @@ function verify(
   } else {
     throw new Error('Invalid signing method. Must be "ecdsa" or "schnorr"')
   }
+}
+
+/**
+ * Computes the double SHA256 hash of the prevouts (txid + index) of all inputs in the transaction.
+ * @param tx - The transaction-like object.
+ * @returns Buffer - The double SHA256 hash of all input prevouts.
+ */
+function GetPrevoutHash(tx: TransactionLike): Buffer {
+  const writer = new BufferWriter()
+
+  for (const input of tx.inputs) {
+    writer.writeReverse(input.prevTxId)
+    writer.writeUInt32LE(input.outputIndex)
+  }
+
+  const buf = writer.toBuffer()
+  return Hash.sha256sha256(buf)
+}
+
+/**
+ * Computes the double SHA256 hash of the sequence numbers of all inputs in the transaction.
+ * @param tx - The transaction-like object.
+ * @returns Buffer - The double SHA256 hash of all input sequence numbers.
+ */
+function GetSequenceHash(tx: TransactionLike): Buffer {
+  const writer = new BufferWriter()
+
+  for (const input of tx.inputs) {
+    writer.writeUInt32LENumber(input.sequenceNumber)
+  }
+
+  const buf = writer.toBuffer()
+  return Hash.sha256sha256(buf)
+}
+
+/**
+ * Computes the double SHA256 hash of the serialized outputs in the transaction.
+ * If n is provided, only that output is hashed.
+ * @param tx - The transaction-like object.
+ * @param n - Optional output index to hash a single output.
+ * @returns Buffer - The double SHA256 hash of outputs.
+ */
+function GetOutputsHash(tx: TransactionLike, n?: number): Buffer {
+  const writer = new BufferWriter()
+
+  if (n === undefined) {
+    for (const output of tx.outputs) {
+      output.toBufferWriter(writer)
+    }
+  } else {
+    tx.outputs[n].toBufferWriter(writer)
+  }
+
+  const buf = writer.toBuffer()
+  return Hash.sha256sha256(buf)
 }
 
 /**
