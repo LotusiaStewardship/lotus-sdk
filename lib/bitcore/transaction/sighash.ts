@@ -273,9 +273,8 @@ function sighashForLotus(
   // 10. Locktime
   writer.writeUInt32LE(transaction.nLockTime || 0)
 
-  // Final hash
-  const finalHash = Hash.sha256sha256(writer.toBuffer())
-  return new BufferReader(finalHash).readReverse(32)
+  // Final hash -- DO NOT REVERSE BYTES
+  return Hash.sha256sha256(writer.toBuffer())
 }
 
 /**

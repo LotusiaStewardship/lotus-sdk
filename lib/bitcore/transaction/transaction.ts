@@ -944,8 +944,11 @@ export class Transaction {
   signSchnorr(
     privateKey: PrivateKey | string | Array<PrivateKey | string>,
   ): Transaction {
-    const sigtype = Signature.SIGHASH_ALL | Signature.SIGHASH_LOTUS
-    return this.sign(privateKey, sigtype, 'schnorr')
+    return this.sign(
+      privateKey,
+      Signature.SIGHASH_ALL | Signature.SIGHASH_LOTUS,
+      'schnorr',
+    )
   }
 
   /**
