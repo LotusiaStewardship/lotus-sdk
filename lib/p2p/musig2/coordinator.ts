@@ -38,6 +38,7 @@ import {
   DirectoryIndexEntry,
   SecureDirectoryIndex,
   MUSIG2_SECURITY_LIMITS,
+  MUSIG2_MATURATION_PERIODS,
 } from './types.js'
 import {
   serializePublicNonce,
@@ -65,6 +66,9 @@ import {
   getBackupCoordinator,
   getCoordinatorPriorityList,
 } from './election.js'
+import { SecurityManager, PEER_KEY_LIMITS } from './security.js'
+import { IProtocolValidator } from '../types.js'
+import { MuSig2IdentityManager } from './identity-manager.js'
 
 /**
  * MuSig2 P2P Coordinator
@@ -85,7 +89,11 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
   private signingRequests: Map<string, SigningRequest> = new Map() // requestId -> request
   private peerIdToSignerIndex: Map<string, Map<string, number>> = new Map() // sessionId -> peerId -> signerIndex
   private myAdvertisement?: SignerAdvertisement // My current advertisement
-  private cleanupIntervalId?: NodeJS.Timeout
+  private sessionCleanupIntervalId?: NodeJS.Timeout // Renamed to avoid conflict with parent
+  // SECURITY: Security manager for rate limiting, key tracking, and reputation
+  private securityManager: SecurityManager
+  // SECURITY: Identity manager for burn-based blockchain-anchored identities
+  private identityManager?: MuSig2IdentityManager
   private musig2Config: {
     sessionTimeout: number
     enableSessionDiscovery: boolean
@@ -104,6 +112,9 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     cleanupInterval: number
     stuckSessionTimeout: number
     securityLimits: typeof MUSIG2_SECURITY_LIMITS
+    chronikUrl: string | string[]
+    enableBurnBasedIdentity: boolean
+    burnMaturationPeriod: number
   }
 
   constructor(p2pConfig: P2PConfig, musig2Config?: Partial<MuSig2P2PConfig>) {
@@ -114,6 +125,13 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     this.protocolHandler = new MuSig2P2PProtocolHandler()
     this.messageProtocol = new P2PProtocol()
     this.protocolHandler.setCoordinator(this)
+
+    // SECURITY: Initialize security manager
+    this.securityManager = new SecurityManager()
+    this.protocolHandler.setSecurityManager(this.securityManager)
+
+    // SECURITY: Register MuSig2 as protocol validator with core P2P security
+    this._registerProtocolValidator()
 
     this.musig2Config = {
       sessionTimeout: musig2Config?.sessionTimeout || 2 * 60 * 60 * 1000, // 2 hours
@@ -137,6 +155,22 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
         ...MUSIG2_SECURITY_LIMITS,
         ...musig2Config?.securityLimits,
       },
+      chronikUrl: musig2Config?.chronikUrl || 'https://chronik.lotusia.org',
+      enableBurnBasedIdentity: musig2Config?.enableBurnBasedIdentity ?? false,
+      burnMaturationPeriod:
+        musig2Config?.burnMaturationPeriod ??
+        MUSIG2_MATURATION_PERIODS.IDENTITY_REGISTRATION,
+    }
+
+    // Initialize identity manager if burn-based identity is enabled
+    if (this.musig2Config.enableBurnBasedIdentity) {
+      this.identityManager = new MuSig2IdentityManager(
+        this.musig2Config.chronikUrl,
+        this.musig2Config.burnMaturationPeriod,
+      )
+      console.log(
+        `[MuSig2P2P] Burn-based identity system enabled (maturation: ${this.musig2Config.burnMaturationPeriod} blocks)`,
+      )
     }
 
     // Register protocol handler with parent P2PCoordinator
@@ -246,9 +280,9 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
    */
   async stop(): Promise<void> {
     // Stop automatic cleanup interval first (before node shutdown)
-    if (this.cleanupIntervalId) {
-      clearInterval(this.cleanupIntervalId)
-      this.cleanupIntervalId = undefined
+    if (this.sessionCleanupIntervalId) {
+      clearInterval(this.sessionCleanupIntervalId)
+      this.sessionCleanupIntervalId = undefined
     }
 
     // Call parent stop() which will shutdown the libp2p node
@@ -486,7 +520,22 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
             console.warn(
               `[MuSig2P2P] ⚠️  Rejected invalid advertisement from GossipSub: ${payload.peerId}`,
             )
+            // Track invalid signature
+            this.securityManager.recordInvalidSignature(payload.peerId)
             return // Drop invalid advertisement
+          }
+
+          // SECURITY 5: Check rate limit and key count
+          if (
+            !this.securityManager.canAdvertiseKey(
+              payload.peerId,
+              advertisement.publicKey,
+            )
+          ) {
+            console.warn(
+              `[MuSig2P2P] ⚠️  Advertisement rejected from GossipSub (rate/key limit): ${payload.peerId}`,
+            )
+            return // Drop rate-limited advertisement
           }
 
           // All security checks passed - emit event
@@ -545,6 +594,13 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     const timestamp = Date.now()
     const ttl = options?.ttl || 24 * 60 * 60 * 1000 // Default: 24 hours
     const expiresAt = timestamp + ttl
+
+    // SECURITY: Check if we can advertise this key
+    if (!this.securityManager.canAdvertiseKey(this.peerId, myPubKey)) {
+      throw new Error(
+        'Cannot advertise: rate limit exceeded or key limit reached',
+      )
+    }
 
     // Get my multiaddrs for peer discovery
     const myMultiaddrs = this.getStats().multiaddrs
@@ -2894,13 +2950,114 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
   }
 
   /**
+   * Get security manager for advanced security operations
+   */
+  getSecurityManager(): SecurityManager {
+    return this.securityManager
+  }
+
+  /**
+   * Get identity manager (if burn-based identity is enabled)
+   */
+  getIdentityManager(): MuSig2IdentityManager | undefined {
+    return this.identityManager
+  }
+
+  /**
+   * Register MuSig2 as protocol validator with core P2P security
+   * Adds MuSig2-specific validation on top of core security
+   */
+  private _registerProtocolValidator(): void {
+    const validator: IProtocolValidator = {
+      // Validate resource announcements
+      validateResourceAnnouncement: async (
+        resourceType: string,
+        resourceId: string,
+        data: unknown,
+        peerId: string,
+      ): Promise<boolean> => {
+        // Apply MuSig2-specific validation
+        if (resourceType.startsWith('musig2-')) {
+          // If burn-based identity is enabled, validate identity
+          if (
+            this.musig2Config.enableBurnBasedIdentity &&
+            this.identityManager
+          ) {
+            // Extract public key from data
+            const announcement = data as SignerAdvertisement
+            if (announcement && announcement.publicKey) {
+              const pubKeyStr = announcement.publicKey.toString()
+
+              // Check if this public key has a registered identity
+              const identity =
+                this.identityManager.getIdentityByPublicKey(pubKeyStr)
+
+              if (!identity) {
+                console.warn(
+                  `[MuSig2P2P] Rejected announcement from ${peerId}: No registered identity for public key ${pubKeyStr.slice(0, 20)}...`,
+                )
+                return false
+              }
+
+              // Check if identity is banned
+              if (this.identityManager.isBanned(identity.identityId)) {
+                console.warn(
+                  `[MuSig2P2P] Rejected announcement from ${peerId}: Identity ${identity.identityId.slice(0, 20)}... is banned`,
+                )
+                return false
+              }
+
+              // Check minimum reputation (if needed)
+              if (!this.identityManager.isAllowed(identity.identityId, 0)) {
+                console.warn(
+                  `[MuSig2P2P] Rejected announcement from ${peerId}: Identity ${identity.identityId.slice(0, 20)}... has insufficient reputation`,
+                )
+                return false
+              }
+
+              console.log(
+                `[MuSig2P2P] ✓ Validated identity for announcement: ${identity.identityId.slice(0, 20)}... (reputation: ${identity.reputation.score})`,
+              )
+            }
+          }
+
+          // Additional validation can be added here
+          // For now, rely on signature verification in handlers
+          return true
+        }
+        return true
+      },
+
+      // Check if peer can announce resource
+      canAnnounceResource: (resourceType: string, peerId: string): boolean => {
+        // Check if peer is allowed by MuSig2 security
+        if (resourceType.startsWith('musig2-')) {
+          return this.securityManager.peerReputation.isAllowed(peerId)
+        }
+        return true
+      },
+    }
+
+    // Register with core security manager
+    this.coreSecurityManager.registerProtocolValidator('musig2', validator)
+  }
+
+  /**
    * Cleanup: stop automatic cleanup and close all sessions
    */
   async cleanup(): Promise<void> {
     // Stop automatic cleanup interval
-    if (this.cleanupIntervalId) {
-      clearInterval(this.cleanupIntervalId)
-      this.cleanupIntervalId = undefined
+    if (this.sessionCleanupIntervalId) {
+      clearInterval(this.sessionCleanupIntervalId)
+      this.sessionCleanupIntervalId = undefined
+    }
+
+    // SECURITY: Cleanup security manager data
+    this.securityManager.cleanup()
+
+    // SECURITY: Shutdown identity manager if enabled
+    if (this.identityManager) {
+      this.identityManager.shutdown()
     }
 
     // Close all active sessions
@@ -2915,7 +3072,7 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
    * Automatically called by constructor if `enableAutoCleanup` is true.
    */
   private startSessionCleanup(): void {
-    this.cleanupIntervalId = setInterval(() => {
+    this.sessionCleanupIntervalId = setInterval(() => {
       this.cleanupExpiredSessions()
     }, this.musig2Config.cleanupInterval)
   }

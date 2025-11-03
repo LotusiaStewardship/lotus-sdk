@@ -32,7 +32,11 @@ import {
 } from './serialization.js'
 import { Point } from '../../bitcore/crypto/point.js'
 import { BN } from '../../bitcore/crypto/bn.js'
-import { MuSig2P2PCoordinator } from './index.js'
+import { SecurityManager } from './security.js'
+
+// Forward declaration to avoid circular dependency
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type MuSig2P2PCoordinator = any
 
 /**
  * MuSig2 P2P Protocol Handler
@@ -44,12 +48,20 @@ export class MuSig2P2PProtocolHandler implements IProtocolHandler {
   readonly protocolId = '/lotus/musig2/1.0.0'
 
   private coordinator?: MuSig2P2PCoordinator
+  private securityManager?: SecurityManager
 
   /**
    * Set the coordinator instance
    */
   setCoordinator(coordinator: MuSig2P2PCoordinator): void {
     this.coordinator = coordinator
+  }
+
+  /**
+   * Set the security manager instance
+   */
+  setSecurityManager(securityManager: SecurityManager): void {
+    this.securityManager = securityManager
   }
 
   /**
@@ -341,7 +353,15 @@ export class MuSig2P2PProtocolHandler implements IProtocolHandler {
     payload: SignerAdvertisementPayload,
     from: PeerInfo,
   ): Promise<void> {
-    if (!this.coordinator) return
+    if (!this.coordinator || !this.securityManager) return
+
+    // SECURITY 0: Check peer reputation (blacklist/graylist)
+    if (!this.securityManager.peerReputation.isAllowed(from.peerId)) {
+      console.warn(
+        `[MuSig2P2P] ⚠️  Advertisement from blacklisted/graylisted peer: ${from.peerId}`,
+      )
+      return // Drop from banned peer
+    }
 
     // SECURITY 1: Timestamp validation (prevent future/past attacks)
     const timestampSkew = Math.abs(Date.now() - payload.timestamp)
@@ -377,7 +397,22 @@ export class MuSig2P2PProtocolHandler implements IProtocolHandler {
       console.warn(
         `[MuSig2P2P] ⚠️  Rejected invalid advertisement from P2P: ${payload.peerId}`,
       )
+      // Track invalid signature
+      this.securityManager.recordInvalidSignature(from.peerId)
       return // Drop invalid advertisement
+    }
+
+    // SECURITY 4: Check rate limit and key count
+    if (
+      !this.securityManager.canAdvertiseKey(
+        from.peerId,
+        advertisement.publicKey,
+      )
+    ) {
+      console.warn(
+        `[MuSig2P2P] ⚠️  Advertisement rejected (rate limit or key limit): ${from.peerId}`,
+      )
+      return // Drop rate-limited advertisement
     }
 
     // All security checks passed - emit event

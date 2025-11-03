@@ -301,3 +301,86 @@ export interface P2PStats {
   /** This node's multiaddrs */
   multiaddrs: string[]
 }
+
+// ============================================================================
+// Core Security Types (Protocol-Agnostic)
+// ============================================================================
+
+/**
+ * Core P2P security limits
+ * Applied universally to all protocols using the P2P layer
+ */
+export const CORE_P2P_SECURITY_LIMITS = {
+  /** Maximum message size for P2P streams (bytes) */
+  MAX_P2P_MESSAGE_SIZE: 100_000, // 100KB
+
+  /** Minimum interval between DHT announcements per peer (ms) */
+  MIN_DHT_ANNOUNCEMENT_INTERVAL: 30_000, // 30 seconds
+
+  /** Maximum DHT resources per peer */
+  MAX_DHT_RESOURCES_PER_PEER: 100,
+
+  /** Maximum DHT resources per resource type per peer */
+  MAX_DHT_RESOURCES_PER_TYPE_PER_PEER: 20,
+
+  /** DHT cleanup interval (ms) */
+  DHT_CLEANUP_INTERVAL: 5 * 60 * 1000, // 5 minutes
+
+  /** Maximum invalid messages before ban */
+  MAX_INVALID_MESSAGES_PER_PEER: 20,
+} as const
+
+/**
+ * Protocol validator interface
+ * Protocols can implement this to add custom validation logic
+ */
+export interface IProtocolValidator {
+  /**
+   * Validate a resource announcement before accepting it
+   * @returns true if valid, false if should be rejected
+   */
+  validateResourceAnnouncement?(
+    resourceType: string,
+    resourceId: string,
+    data: unknown,
+    peerId: string,
+  ): Promise<boolean> | boolean
+
+  /**
+   * Validate a message before processing it
+   * @returns true if valid, false if should be rejected
+   */
+  validateMessage?(
+    message: P2PMessage,
+    from: PeerInfo,
+  ): Promise<boolean> | boolean
+
+  /**
+   * Check if peer can announce a resource
+   * @returns true if allowed, false if denied
+   */
+  canAnnounceResource?(
+    resourceType: string,
+    peerId: string,
+  ): Promise<boolean> | boolean
+}
+
+/**
+ * Core security metrics
+ */
+export interface CoreSecurityMetrics {
+  dhtAnnouncements: {
+    total: number
+    rejected: number
+    rateLimited: number
+  }
+  messages: {
+    total: number
+    rejected: number
+    oversized: number
+  }
+  peers: {
+    banned: number
+    warnings: number
+  }
+}

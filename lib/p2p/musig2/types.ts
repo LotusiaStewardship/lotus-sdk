@@ -335,6 +335,26 @@ export interface MuSig2P2PConfig {
    * Override defaults if needed (not recommended)
    */
   securityLimits?: Partial<typeof MUSIG2_SECURITY_LIMITS>
+
+  /**
+   * Chronik API URL for blockchain verification
+   * Default: 'https://chronik.lotusia.org'
+   * Can be an array of URLs for failover
+   */
+  chronikUrl?: string | string[]
+
+  /**
+   * Enable burn-based identity system
+   * Default: false (for backwards compatibility)
+   */
+  enableBurnBasedIdentity?: boolean
+
+  /**
+   * Maturation period for burn-based identities (in blocks)
+   * Default: 144 blocks (~4.8 hours on Lotus)
+   * Set to 0 to disable maturation requirement
+   */
+  burnMaturationPeriod?: number
 }
 
 /**
@@ -698,4 +718,201 @@ export interface ActiveSigningSession {
     coordinatorPeerId?: string
     electionProof: string
   }
+}
+
+// ============================================================================
+// Burn-Based Identity Types (Phase 2)
+// ============================================================================
+
+/**
+ * LOKAD protocol constants for MuSig2
+ */
+export const MUSIG2_LOKAD = {
+  /** LOKAD prefix: "LTMS" (Lotus MuSig) */
+  PREFIX: Buffer.from([0x4c, 0x54, 0x4d, 0x53]),
+  /** Prefix in hex (little-endian) */
+  PREFIX_HEX: '0x534D544C',
+  /** Protocol version */
+  VERSION: 0x01,
+  /** Protocol name */
+  NAME: 'Lotus MuSig2 DHT Reputation',
+} as const
+
+/**
+ * Burn requirements for MuSig2 operations
+ * Based on Lotus network economics (20.343% inflation, ~1.8B supply)
+ */
+export const MUSIG2_BURN_REQUIREMENTS = {
+  /** Identity registration (one-time per identity) */
+  IDENTITY_REGISTRATION: 50_000_000, // 50 XPI
+
+  /** Additional public key (per key beyond first) */
+  ADDITIONAL_KEY: 10_000_000, // 10 XPI
+
+  /** Signing request creation */
+  SIGNING_REQUEST: 5_000_000, // 5 XPI
+
+  /** Weekly advertisement extension */
+  WEEKLY_EXTENSION: 1_000_000, // 1 XPI
+
+  /** Key rotation */
+  KEY_ROTATION: 5_000_000, // 5 XPI
+} as const
+
+/**
+ * Maturation periods (in blocks) for temporal security
+ * Prevents spam by requiring time commitment, not just capital
+ *
+ * Lotus blocks: ~2 minutes average
+ * - 144 blocks ≈ 4.8 hours
+ * - 720 blocks ≈ 1 day
+ * - 4320 blocks ≈ 6 days
+ */
+export const MUSIG2_MATURATION_PERIODS = {
+  /** Identity registration maturation (144 blocks ≈ 4.8 hours) */
+  IDENTITY_REGISTRATION: 144,
+
+  /** Key rotation maturation (72 blocks ≈ 2.4 hours) */
+  KEY_ROTATION: 72,
+
+  /** Minimum confirmations for security (6 blocks ≈ 12 minutes) */
+  MIN_CONFIRMATIONS: 6,
+} as const
+
+/**
+ * Burn proof (on-chain evidence)
+ */
+export interface BurnProof {
+  /** Transaction ID on Lotus blockchain */
+  txId: string
+
+  /** Output index of burn (usually 0) */
+  outputIndex: number
+
+  /** Amount burned in satoshis */
+  burnAmount: number
+
+  /** Block height of burn transaction */
+  burnHeight: number
+
+  /** Number of confirmations */
+  confirmations: number
+}
+
+/**
+ * Identity commitment (current signing key)
+ */
+export interface IdentityCommitment {
+  /** Current signing public key (can rotate) */
+  publicKey: PublicKey
+
+  /** Signature proving ownership of current key */
+  signature: Buffer
+
+  /** Commitment timestamp */
+  timestamp: number
+}
+
+/**
+ * Key rotation entry
+ */
+export interface KeyRotationEntry {
+  /** Public key */
+  publicKey: string
+
+  /** When this key was activated */
+  activatedAt: number
+
+  /** When this key was revoked (if rotated) */
+  revokedAt?: number
+
+  /** Rotation signature proof */
+  rotationSignature?: Buffer
+}
+
+/**
+ * Identity reputation (tied to identityId, NOT public key)
+ */
+export interface IdentityReputation {
+  /** Identity ID this reputation belongs to */
+  identityId: string
+
+  /** Reputation score (0-100) */
+  score: number
+
+  /** Successful signings */
+  completedSignings: number
+
+  /** Failed signings */
+  failedSignings: number
+
+  /** Total signing attempts */
+  totalSignings: number
+
+  /** Average response time in milliseconds */
+  averageResponseTime: number
+
+  /** Total XPI burned for this identity (across all burns) */
+  totalBurned: number
+
+  /** First seen timestamp */
+  firstSeen: number
+
+  /** Last updated timestamp */
+  lastUpdated: number
+}
+
+/**
+ * Signer identity (blockchain-anchored)
+ *
+ * CRITICAL: Identity is tied to burn transaction, NOT to public key
+ * Public keys can be rotated without losing reputation
+ */
+export interface SignerIdentity {
+  /** Unique identity ID (derived from burn transaction) */
+  identityId: string
+
+  /** Burn proof (on-chain registration) */
+  burnProof: BurnProof
+
+  /** Current identity commitment */
+  identityCommitment: IdentityCommitment
+
+  /** Reputation data (tied to identityId, survives key rotation) */
+  reputation: IdentityReputation
+
+  /** Key rotation history */
+  keyHistory: KeyRotationEntry[]
+
+  /** Optional metadata from LOKAD payload */
+  metadata?: {
+    nickname?: string
+    contactInfo?: string
+  }
+
+  /** Registration timestamp */
+  registeredAt: number
+
+  /** Last verified on-chain timestamp */
+  lastVerified: number
+}
+
+/**
+ * Session record for reputation tracking
+ */
+export interface SessionRecord {
+  /** Session ID */
+  sessionId: string
+
+  /** Outcome */
+  outcome: 'success' | 'failure'
+
+  /** Failure reason if applicable */
+  reason?: string
+
+  /** Timestamp */
+  timestamp: number
+
+  /** Response time in milliseconds */
+  responseTimeMs?: number
 }

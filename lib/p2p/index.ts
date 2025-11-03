@@ -13,6 +13,12 @@ export * from './types.js'
 // Protocol and messaging
 export { P2PProtocol } from './protocol.js'
 
+// Core security (protocol-agnostic)
+export * from './security.js'
+
+// Blockchain utilities (burn verification)
+export * from './blockchain-utils.js'
+
 // Utilities
 export {
   createPeerIdFromPrivateKey,

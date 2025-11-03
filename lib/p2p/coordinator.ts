@@ -38,8 +38,10 @@ import {
   BroadcastOptions,
   DHTStats,
   P2PStats,
+  CORE_P2P_SECURITY_LIMITS,
 } from './types.js'
 import { P2PProtocol } from './protocol.js'
+import { CoreSecurityManager } from './security.js'
 
 /**
  * Main P2P Coordinator using libp2p
@@ -51,10 +53,40 @@ export class P2PCoordinator extends EventEmitter {
   private seenMessages: Set<string> = new Set()
   private peerInfo: Map<string, PeerInfo> = new Map()
   private dhtValues: Map<string, ResourceAnnouncement> = new Map()
+  private cleanupIntervalId?: NodeJS.Timeout
+  // SECURITY: Core security manager (protocol-agnostic)
+  protected coreSecurityManager: CoreSecurityManager
 
   constructor(private readonly config: P2PConfig) {
     super()
     this.protocol = new P2PProtocol()
+
+    // SECURITY: Initialize core security manager
+    this.coreSecurityManager = new CoreSecurityManager()
+
+    // SECURITY: Start automatic DHT cleanup to prevent memory leaks
+    this.startDHTCleanup()
+  }
+
+  /**
+   * Get core security manager
+   * Allows protocols to register validators and access security features
+   */
+  getCoreSecurityManager(): CoreSecurityManager {
+    return this.coreSecurityManager
+  }
+
+  /**
+   * Start periodic DHT cleanup task
+   * Removes expired entries from local cache every 5 minutes
+   */
+  private startDHTCleanup(): void {
+    this.cleanupIntervalId = setInterval(
+      () => {
+        this.cleanup()
+      },
+      5 * 60 * 1000, // Every 5 minutes
+    )
   }
 
   /**
@@ -339,10 +371,26 @@ export class P2PCoordinator extends EventEmitter {
       throw new Error('Node not started')
     }
 
+    const peerId = this.node.peerId.toString()
+
+    // SECURITY: Check if peer can announce to DHT
+    const canAnnounce = await this.coreSecurityManager.canAnnounceToDHT(
+      peerId,
+      resourceType,
+      resourceId,
+      data,
+    )
+
+    if (!canAnnounce) {
+      throw new Error(
+        `DHT announcement rejected: rate limited or resource limit exceeded`,
+      )
+    }
+
     const announcement: ResourceAnnouncement<T> = {
       resourceId,
       resourceType,
-      creatorPeerId: this.node.peerId.toString(),
+      creatorPeerId: peerId,
       data,
       createdAt: Date.now(),
       expiresAt: options?.expiresAt,
@@ -496,6 +544,18 @@ export class P2PCoordinator extends EventEmitter {
         if (event.name === 'VALUE') {
           const valueStr = uint8ArrayToString(event.value)
           const announcement = JSON.parse(valueStr) as ResourceAnnouncement
+
+          // SECURITY: Check expiry before returning (prevent stale data attacks)
+          if (announcement.expiresAt && announcement.expiresAt < Date.now()) {
+            const expiredAgo = Math.round(
+              (Date.now() - announcement.expiresAt) / 1000,
+            )
+            console.warn(
+              `[P2P] DHT returned expired entry (expired ${expiredAgo}s ago): ${key}`,
+            )
+            // Don't return it, continue looking for valid providers
+            continue
+          }
 
           // Cache it
           this.dhtValues.set(key, announcement)
@@ -710,14 +770,30 @@ export class P2PCoordinator extends EventEmitter {
     for (const [key, announcement] of this.dhtValues.entries()) {
       if (announcement.expiresAt && announcement.expiresAt < now) {
         this.dhtValues.delete(key)
+
+        // SECURITY: Remove from resource tracker when expired
+        this.coreSecurityManager.resourceTracker.removeResource(
+          announcement.creatorPeerId,
+          announcement.resourceType,
+          announcement.resourceId,
+        )
       }
     }
+
+    // SECURITY: Cleanup core security manager data
+    this.coreSecurityManager.cleanup()
   }
 
   /**
    * Shutdown coordinator
    */
   async shutdown(): Promise<void> {
+    // SECURITY: Stop cleanup interval before shutdown
+    if (this.cleanupIntervalId) {
+      clearInterval(this.cleanupIntervalId)
+      this.cleanupIntervalId = undefined
+    }
+
     if (this.node) {
       await this.node.stop()
       this.node = undefined
@@ -727,6 +803,10 @@ export class P2PCoordinator extends EventEmitter {
     this.seenMessages.clear()
     this.dhtValues.clear()
     this.peerInfo.clear()
+
+    // SECURITY: Clear core security manager
+    this.coreSecurityManager.removeAllListeners()
+
     this.removeAllListeners()
   }
 
@@ -815,13 +895,47 @@ export class P2PCoordinator extends EventEmitter {
   ): Promise<void> {
     try {
       const data: Uint8Array[] = []
+      let totalSize = 0
+      const MAX_MESSAGE_SIZE = 100_000 // 100KB limit (DoS protection)
 
       // Stream is AsyncIterable - iterate directly
       for await (const chunk of stream) {
         if (chunk instanceof Uint8Array) {
+          totalSize += chunk.length
+
+          // SECURITY: Check total size to prevent memory exhaustion
+          if (totalSize > MAX_MESSAGE_SIZE) {
+            console.warn(
+              `[P2P] Oversized message from ${connection.remotePeer.toString()}: ${totalSize} bytes (max: ${MAX_MESSAGE_SIZE})`,
+            )
+            this.coreSecurityManager.recordMessage(false, true) // Track oversized
+            this.coreSecurityManager.peerBanManager.warnPeer(
+              connection.remotePeer.toString(),
+              'oversized-message',
+            )
+            stream.abort(new Error('Message too large'))
+            return
+          }
+
           data.push(chunk.subarray())
         } else {
           // Handle Uint8ArrayList
+          totalSize += chunk.length
+
+          // SECURITY: Check total size
+          if (totalSize > MAX_MESSAGE_SIZE) {
+            console.warn(
+              `[P2P] Oversized message from ${connection.remotePeer.toString()}: ${totalSize} bytes (max: ${MAX_MESSAGE_SIZE})`,
+            )
+            this.coreSecurityManager.recordMessage(false, true) // Track oversized
+            this.coreSecurityManager.peerBanManager.warnPeer(
+              connection.remotePeer.toString(),
+              'oversized-message',
+            )
+            stream.abort(new Error('Message too large'))
+            return
+          }
+
           data.push(chunk.subarray())
         }
       }
@@ -846,8 +960,16 @@ export class P2PCoordinator extends EventEmitter {
       // Validate
       if (!this.protocol.validateMessage(message)) {
         console.warn('Invalid message received')
+        this.coreSecurityManager.recordMessage(false) // Track invalid message
+        this.coreSecurityManager.peerBanManager.warnPeer(
+          connection.remotePeer.toString(),
+          'invalid-message-format',
+        )
         return
       }
+
+      // SECURITY: Track valid message
+      this.coreSecurityManager.recordMessage(true)
 
       // Check for duplicate
       const messageHash = this.protocol.computeMessageHash(message)
