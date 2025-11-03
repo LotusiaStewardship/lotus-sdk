@@ -573,8 +573,8 @@ export class Address {
    * contains the `hashBuffer`, `network`, and `type` parameters to instantiate the
    * new `Address` object.
    */
-  static fromString(str: string): Address {
-    const info = Address._transformString(str)
+  static fromString(str: string, network?: Network | string): Address {
+    const info = Address._transformString(str, network)
     return new Address(info.hashBuffer, info.network, info.type)
   }
 
@@ -715,11 +715,11 @@ export class Address {
   /**
    * Wrapper method for `Address.toXAddress` method
    */
-  toString(): string {
+  toString(network?: Network | string): string {
     /* const version = this.network[this.type as keyof Network] as number
     const payload = Buffer.concat([Buffer.from([version]), this.hashBuffer])
     return Base58Check.encode(payload) */
-    return this.toXAddress()
+    return this.toXAddress(network)
   }
 
   /**
@@ -740,9 +740,13 @@ export class Address {
   /**
    * Will return an X address string
    */
-  toXAddress(): string {
+  toXAddress(network?: Network | string): string {
     const script = Script.fromAddress(this)
-    const xaddr = new XAddress(script.toBuffer(), this.network, this.type)
+    const xaddr = new XAddress(
+      script.toBuffer(),
+      network ?? this.network,
+      this.type,
+    )
     return xaddr.toString()
   }
 

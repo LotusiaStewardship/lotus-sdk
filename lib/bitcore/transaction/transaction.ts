@@ -844,7 +844,7 @@ export class Transaction {
       | Address
       | string
       | Array<{ address: Address | string; satoshis: number }>,
-    amount: number,
+    amount: number | string | bigint,
   ): Transaction {
     if (Array.isArray(address)) {
       for (const to of address) {
@@ -944,8 +944,11 @@ export class Transaction {
   signSchnorr(
     privateKey: PrivateKey | string | Array<PrivateKey | string>,
   ): Transaction {
-    const sigtype = Signature.SIGHASH_ALL | Signature.SIGHASH_LOTUS
-    return this.sign(privateKey, sigtype, 'schnorr')
+    return this.sign(
+      privateKey,
+      Signature.SIGHASH_ALL | Signature.SIGHASH_LOTUS,
+      'schnorr',
+    )
   }
 
   /**

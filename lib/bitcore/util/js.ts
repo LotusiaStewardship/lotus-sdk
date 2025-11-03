@@ -45,10 +45,12 @@ export class JSUtil {
    */
   static isNaturalNumber(value: unknown): boolean {
     return (
-      typeof value === 'number' &&
-      isFinite(value) &&
-      Math.floor(value) === value &&
-      value >= 0
+      (typeof value === 'number' &&
+        isFinite(value) &&
+        Math.floor(value) === value &&
+        value >= 0) ||
+      (typeof value === 'string' && /^[0-9]+$/.test(value)) ||
+      (typeof value === 'bigint' && value >= 0n)
     )
   }
 
