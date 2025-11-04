@@ -180,6 +180,66 @@ export interface P2PConfig {
    */
   dhtPeerInfoMapper?: PeerInfoMapper
 
+  /**
+   * Enable circuit relay v2 (NAT traversal for Node.js peers)
+   * Default: true (recommended for production)
+   *
+   * How it works:
+   * - Peers behind NAT connect via public relay nodes (bootstrap/Zoe)
+   * - Enables connectivity when direct TCP connection fails
+   * - DCUTR automatically upgrades relay → direct P2P connection
+   */
+  enableRelay?: boolean
+
+  /**
+   * Enable relay server mode (allow others to relay through you)
+   * Default: false (only set to true for public bootstrap/relay nodes)
+   *
+   * Bootstrap nodes should enable this to help NAT peers connect
+   * Regular wallet nodes should leave this disabled
+   */
+  enableRelayServer?: boolean
+
+  /**
+   * Enable AutoNAT (automatic NAT detection and public address discovery)
+   * Default: true (recommended for all nodes)
+   *
+   * Detects:
+   * - Whether node is behind NAT
+   * - Public IP address (if available)
+   * - Whether port forwarding is working
+   */
+  enableAutoNAT?: boolean
+
+  /**
+   * Enable DCUTR (Direct Connection Upgrade through Relay)
+   * Default: true (recommended for production)
+   *
+   * Automatically upgrades relay connections to direct P2P:
+   * - Step 1: Connect via relay (Alice → Relay → Bob)
+   * - Step 2: DCUTR hole punching (both peers try direct connection)
+   * - Step 3: Direct P2P established (Alice ←→ Bob, relay dropped)
+   *
+   * Requires enableRelay to be true
+   */
+  enableDCUTR?: boolean
+
+  /**
+   * Enable UPnP/NAT-PMP (automatic port forwarding - LAST RESORT)
+   * Default: false (disabled by default for security)
+   *
+   * WARNING: UPnP can expose security risks:
+   * - Opens ports automatically without user consent
+   * - May expose internal network topology
+   * - Router vulnerabilities can be exploited
+   *
+   * Only enable if:
+   * - Circuit Relay + DCUTR is not sufficient
+   * - Running on trusted networks
+   * - User explicitly opts in
+   */
+  enableUPnP?: boolean
+
   /** Maximum connections */
   maxConnections?: number
 

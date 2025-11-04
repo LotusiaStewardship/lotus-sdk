@@ -9,7 +9,7 @@ import { createLibp2p, Libp2p } from 'libp2p'
 import { tcp } from '@libp2p/tcp'
 import { webSockets } from '@libp2p/websockets'
 import { noise } from '@chainsafe/libp2p-noise'
-import { mplex } from '@libp2p/mplex'
+import { yamux } from '@libp2p/yamux'
 import {
   kadDHT,
   KadDHT,
@@ -21,6 +21,11 @@ import { identify } from '@libp2p/identify'
 import { ping } from '@libp2p/ping'
 import { gossipsub } from '@libp2p/gossipsub'
 import type { GossipSub } from '@libp2p/gossipsub'
+import { circuitRelayTransport } from '@libp2p/circuit-relay-v2'
+import { circuitRelayServer } from '@libp2p/circuit-relay-v2'
+import { autoNAT } from '@libp2p/autonat'
+import { dcutr } from '@libp2p/dcutr'
+import { uPnPNAT } from '@libp2p/upnp-nat'
 import { multiaddr, Multiaddr } from '@multiformats/multiaddr'
 import { peerIdFromString } from '@libp2p/peer-id'
 import type { Connection, Stream, PeerId } from '@libp2p/interface'
@@ -119,56 +124,96 @@ export class P2PCoordinator extends EventEmitter {
     // Build libp2p configuration
     // kad-dht requires identify and ping services
     // gossipsub requires identify
+
+    // Prepare transports array
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const transports: any[] = []
+
+    // TCP (primary transport for Node.js peers)
+    transports.push(tcp())
+
+    // WebSockets (for browser compatibility and firewall traversal)
+    transports.push(webSockets())
+
+    // Circuit Relay v2 (PRIMARY NAT traversal for Node.js)
+    // Enables peers behind NAT to connect via relay nodes
+    // DCUTR will automatically upgrade relay connections to direct P2P
+    // Relay discovery happens automatically via DHT and identify protocol
+    if (this.config.enableRelay !== false) {
+      transports.push(circuitRelayTransport())
+    }
+
+    // Build services configuration
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const services: any = {
+      identify: identify(),
+      ping: ping(),
+    }
+
+    // DHT service
+    if (this.config.enableDHT !== false) {
+      services.kadDHT = kadDHT({
+        protocol: this.config.dhtProtocol || '/lotus/kad/1.0.0',
+        clientMode: !(this.config.enableDHTServer ?? false),
+        peerInfoMapper,
+      })
+    }
+
+    // GossipSub service
+    if (this.config.enableGossipSub !== false) {
+      services.pubsub = gossipsub({
+        allowPublishToZeroTopicPeers: true,
+        emitSelf: false,
+      })
+    }
+
+    // Circuit Relay Server (for bootstrap/relay nodes to relay traffic)
+    // This allows the node to act as a relay for NAT peers
+    // Should only be enabled on public bootstrap nodes
+    if (this.config.enableRelayServer === true) {
+      services.relay = circuitRelayServer({
+        reservations: {
+          maxReservations: 100, // Max number of peers that can reserve relay slots
+        },
+      })
+    }
+
+    // AutoNAT service (detect if behind NAT and discover public address)
+    // Enabled by default for all nodes
+    if (this.config.enableAutoNAT !== false) {
+      services.autoNAT = autoNAT()
+    }
+
+    // DCUTR service (Direct Connection Upgrade through Relay)
+    // Automatically upgrades relay connections to direct P2P connections
+    // Enabled by default when relay is enabled
+    if (
+      this.config.enableDCUTR !== false &&
+      this.config.enableRelay !== false
+    ) {
+      services.dcutr = dcutr()
+    }
+
+    // UPnP NAT service (automatic port forwarding - LAST RESORT)
+    // Disabled by default - only enable if explicitly requested
+    // UPnP can expose security risks and should be opt-in only
+    if (this.config.enableUPnP === true) {
+      services.upnpNAT = uPnPNAT()
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const config: any = {
       addresses: {
         listen: this.config.listen || ['/ip4/0.0.0.0/tcp/0'],
         announce: this.config.announce || [],
       },
-      transports: [tcp(), webSockets()],
+      transports,
       connectionEncrypters: [noise()],
-      streamMuxers: [mplex()],
-      services:
-        this.config.enableDHT !== false
-          ? {
-              identify: identify(),
-              ping: ping(),
-              kadDHT: kadDHT({
-                protocol: this.config.dhtProtocol || '/lotus/kad/1.0.0',
-                // Use server mode if enabled, otherwise client-only mode
-                // Server mode: participate in DHT network (routing, storing)
-                // Client mode: only query DHT, no background operations
-                clientMode: !(this.config.enableDHTServer ?? false),
-                // CRITICAL: peerInfoMapper determines which addresses are valid
-                // - passthroughMapper: Allow all (localhost development/testing)
-                // - removePrivateAddressesMapper: Only public (production security)
-                // Auto-detected based on listen addresses, or override via config
-                peerInfoMapper,
-              }),
-              // Enable GossipSub for real-time event-driven discovery
-              ...(this.config.enableGossipSub !== false
-                ? {
-                    pubsub: gossipsub({
-                      allowPublishToZeroTopicPeers: true, // Allow publishing even with no subscribers (for testing)
-                      emitSelf: false, // Don't receive own messages
-                    }),
-                  }
-                : {}),
-            }
-          : {
-              identify: identify(),
-              // Enable GossipSub even without DHT
-              ...(this.config.enableGossipSub !== false
-                ? {
-                    pubsub: gossipsub({
-                      allowPublishToZeroTopicPeers: true,
-                      emitSelf: false,
-                    }),
-                  }
-                : {}),
-            },
+      streamMuxers: [yamux()],
+      services,
       connectionManager: {
-        maxConnections: this.config.connectionManager?.maxConnections || 50,
+        minConnections: this.config.connectionManager?.minConnections || 0,
+        maxConnections: this.config.connectionManager?.maxConnections || 100,
       },
     }
 

@@ -28,11 +28,44 @@ async function threePhaseExample() {
   const bobKey = new PrivateKey()
   const charlieKey = new PrivateKey()
 
-  // Create coordinators for each wallet
+  // ========================================================================
+  // NAT Traversal Configuration for Node.js Peers
+  // ========================================================================
+  //
+  // Lotus uses Circuit Relay v2 + DCUTR for Node.js NAT traversal:
+  //
+  // 1. Circuit Relay v2: Peers connect via public relay nodes (bootstrap/Zoe)
+  // 2. DCUTR: Automatically upgrades relay → direct P2P connection
+  // 3. AutoNAT: Detects if peer is behind NAT and discovers public IP
+  // 4. UPnP: LAST RESORT - disabled by default (security risk, opt-in only)
+  //
+  // Connection Flow for NAT Peers:
+  //   Step 1: Alice → Relay (Zoe) ← Bob  (both connect to public relay via TCP)
+  //   Step 2: Alice ←Relay→ Bob           (relayed connection established)
+  //   Step 3: DCUTR hole punching         (both peers attempt direct connection)
+  //   Step 4: Alice ←→ Bob                (direct P2P, relay dropped)
+  //
+  // Transport Priority:
+  //   1. Direct TCP (if both have public IPs or same network)
+  //   2. Circuit Relay (if behind NAT, connects via bootstrap nodes)
+  //   3. DCUTR upgrade (relay → direct, automatic hole punching)
+  //
+  // Why NOT WebRTC for Node.js?
+  //   - @libp2p/webrtc is designed for BROWSER-to-browser connectivity
+  //   - Does NOT generate /webrtc listen addresses in Node.js
+  //   - Circuit Relay + DCUTR is the standard for Node.js P2P (IPFS, Ethereum)
+  //   - Lighter weight (no WebRTC native dependencies)
+  //   - Better security (no outdated WebRTC packages)
+  // ========================================================================
+
   const aliceCoordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/127.0.0.1/tcp/0'],
+    listen: ['/ip4/0.0.0.0/tcp/0'], // TCP transport (primary for Node.js)
     enableDHT: true,
     enableDHTServer: false,
+    enableRelay: true, // Circuit Relay v2 (PRIMARY NAT solution)
+    enableAutoNAT: true, // Detect if behind NAT
+    enableDCUTR: true, // Direct Connection Upgrade (relay → direct)
+    enableUPnP: false, // LAST RESORT: Disabled by default (security risk)
     securityConfig: {
       // Note: In production, remove disableRateLimiting for security
       // This is only for demo purposes to allow rapid advertisements
@@ -41,18 +74,26 @@ async function threePhaseExample() {
   })
 
   const bobCoordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/127.0.0.1/tcp/0'],
+    listen: ['/ip4/0.0.0.0/tcp/0'],
     enableDHT: true,
     enableDHTServer: false,
+    enableRelay: true,
+    enableAutoNAT: true,
+    enableDCUTR: true,
+    enableUPnP: false, // Disabled by default
     securityConfig: {
       disableRateLimiting: true,
     },
   })
 
   const charlieCoordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/127.0.0.1/tcp/0'],
+    listen: ['/ip4/0.0.0.0/tcp/0'],
     enableDHT: true,
     enableDHTServer: false,
+    enableRelay: true,
+    enableAutoNAT: true,
+    enableDCUTR: true,
+    enableUPnP: false, // Disabled by default
     securityConfig: {
       disableRateLimiting: true,
     },
@@ -70,9 +111,27 @@ async function threePhaseExample() {
   console.log(`   Bob: ${bobCoordinator.peerId}`)
   console.log(`   Charlie: ${charlieCoordinator.peerId}\n`)
 
-  // Connect wallets
+  // Show available transports for each peer
+  console.log('📡 Available multiaddrs (transport types):')
+  console.log('   Transport: TCP (primary for Node.js)')
+  console.log('   NAT Traversal: Circuit Relay + DCUTR\n')
   const aliceAddrs = aliceCoordinator.getStats().multiaddrs
   const bobAddrs = bobCoordinator.getStats().multiaddrs
+  const charlieAddrs = charlieCoordinator.getStats().multiaddrs
+
+  console.log(`   Alice: ${aliceAddrs.length} addresses`)
+  aliceAddrs.forEach(addr => console.log(`     - ${addr}`))
+  console.log(`   Bob: ${bobAddrs.length} addresses`)
+  bobAddrs.forEach(addr => console.log(`     - ${addr}`))
+  console.log(`   Charlie: ${charlieAddrs.length} addresses`)
+  charlieAddrs.forEach(addr => console.log(`     - ${addr}`))
+  console.log()
+
+  // Connect wallets
+  console.log('🔗 Connecting peers (direct TCP on same network):')
+  console.log(`   Bob → Alice: ${aliceAddrs[0]}`)
+  console.log(`   Charlie → Alice: ${aliceAddrs[0]}`)
+  console.log(`   Charlie → Bob: ${bobAddrs[0]}`)
 
   await Promise.all([
     bobCoordinator.connectToPeer(aliceAddrs[0]),
@@ -80,9 +139,62 @@ async function threePhaseExample() {
     charlieCoordinator.connectToPeer(bobAddrs[0]),
   ])
 
-  console.log('✅ Wallets connected\n')
+  console.log('✅ Wallets connected (direct TCP)\n')
 
   await new Promise(resolve => setTimeout(resolve, 500))
+
+  // Show actual connection details to verify transport used
+  console.log('🔍 Verifying active connections and transports:')
+  console.log('   Expected: TCP (direct, same network)')
+  console.log(
+    '   Note: Circuit Relay would show /p2p-circuit if going through relay\n',
+  )
+
+  const aliceNode = aliceCoordinator.libp2pNode
+  const aliceConnections = aliceNode.getConnections()
+  console.log(`   Alice has ${aliceConnections.length} connection(s):`)
+  aliceConnections.forEach(conn => {
+    const remoteAddr = conn.remoteAddr.toString()
+    const transport = remoteAddr.includes('/p2p-circuit')
+      ? '🔀 Circuit Relay'
+      : remoteAddr.includes('/tcp')
+        ? '🔌 TCP Direct'
+        : remoteAddr.includes('/ws')
+          ? '📡 WebSocket'
+          : '❓ Unknown'
+    console.log(`     ${transport}: ${remoteAddr}`)
+  })
+
+  const bobNode = bobCoordinator.libp2pNode
+  const bobConnections = bobNode.getConnections()
+  console.log(`   Bob has ${bobConnections.length} connection(s):`)
+  bobConnections.forEach(conn => {
+    const remoteAddr = conn.remoteAddr.toString()
+    const transport = remoteAddr.includes('/p2p-circuit')
+      ? '🔀 Circuit Relay'
+      : remoteAddr.includes('/tcp')
+        ? '🔌 TCP Direct'
+        : remoteAddr.includes('/ws')
+          ? '📡 WebSocket'
+          : '❓ Unknown'
+    console.log(`     ${transport}: ${remoteAddr}`)
+  })
+
+  const charlieNode = charlieCoordinator.libp2pNode
+  const charlieConnections = charlieNode.getConnections()
+  console.log(`   Charlie has ${charlieConnections.length} connection(s):`)
+  charlieConnections.forEach(conn => {
+    const remoteAddr = conn.remoteAddr.toString()
+    const transport = remoteAddr.includes('/p2p-circuit')
+      ? '🔀 Circuit Relay'
+      : remoteAddr.includes('/tcp')
+        ? '🔌 TCP Direct'
+        : remoteAddr.includes('/ws')
+          ? '📡 WebSocket'
+          : '❓ Unknown'
+    console.log(`     ${transport}: ${remoteAddr}`)
+  })
+  console.log()
 
   // ========================================================================
   // PHASE 0: Signer Advertisement
@@ -321,8 +433,12 @@ async function advertisementExample() {
   console.log('\n=== Signer Advertisement Example ===\n')
 
   const coordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/127.0.0.1/tcp/0'],
+    listen: ['/ip4/0.0.0.0/tcp/0'],
     enableDHT: true,
+    enableRelay: true,
+    enableAutoNAT: true,
+    enableDCUTR: true,
+    enableUPnP: false, // Disabled by default (security)
     securityConfig: {
       disableRateLimiting: true, // For demo
     },
@@ -410,10 +526,16 @@ async function matchmakingDHTExample() {
 
   // Zoe runs a public bootstrap node (like bootstrap.libp2p.io)
   // This is a well-known, always-on node that helps peers discover each other
+  // Bootstrap nodes MUST have enableRelayServer: true to help NAT peers
   const zoeCoordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/127.0.0.1/tcp/0'],
+    listen: ['/ip4/127.0.0.1/tcp/0'], // TCP only (publicly routable)
     enableDHT: true,
-    enableDHTServer: true, // Zoe is a full DHT server
+    enableDHTServer: true, // Full DHT server
+    enableRelay: true, // Enable circuit relay transport
+    enableRelayServer: true, // CRITICAL: Act as relay for NAT peers
+    enableAutoNAT: false, // Bootstrap nodes don't need this (public IP)
+    enableDCUTR: false, // Bootstrap nodes don't need this
+    enableUPnP: false, // Bootstrap nodes don't need this (public IP)
     securityConfig: {
       disableRateLimiting: true, // For demo
     },
@@ -441,21 +563,29 @@ async function matchmakingDHTExample() {
 
   console.log('--- Phase 1: Service Providers Connect to Bootstrap ---\n')
 
-  // Bob runs a signing service
+  // Bob runs a signing service (Circuit Relay enabled for NAT traversal)
   const bobCoordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/127.0.0.1/tcp/0'],
+    listen: ['/ip4/0.0.0.0/tcp/0'],
     enableDHT: true,
     enableDHTServer: true, // Bob participates in DHT routing
+    enableRelay: true, // Circuit Relay for NAT traversal
+    enableAutoNAT: true, // Detect if behind NAT
+    enableDCUTR: true, // Upgrade relay to direct
+    enableUPnP: false, // Disabled by default (security)
     securityConfig: {
       disableRateLimiting: true, // For demo
     },
   })
 
-  // Charlie runs a signing service
+  // Charlie runs a signing service (Circuit Relay enabled for NAT traversal)
   const charlieCoordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/127.0.0.1/tcp/0'],
+    listen: ['/ip4/0.0.0.0/tcp/0'],
     enableDHT: true,
     enableDHTServer: true, // Charlie participates in DHT routing
+    enableRelay: true, // Circuit Relay for NAT traversal
+    enableAutoNAT: true, // Detect if behind NAT
+    enableDCUTR: true, // Upgrade relay to direct
+    enableUPnP: false, // Disabled by default (security)
     securityConfig: {
       disableRateLimiting: true, // For demo
     },
@@ -578,11 +708,15 @@ async function matchmakingDHTExample() {
 
   console.log('Alice (client) starting up...')
 
-  // Alice creates her coordinator (client mode)
+  // Alice creates her coordinator (client mode with Circuit Relay)
   const aliceCoordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/127.0.0.1/tcp/0'],
+    listen: ['/ip4/0.0.0.0/tcp/0'],
     enableDHT: true,
     enableDHTServer: false, // Alice is a client, not a DHT server
+    enableRelay: true, // Circuit Relay for NAT traversal
+    enableAutoNAT: true, // Detect if behind NAT
+    enableDCUTR: true, // Upgrade relay to direct
+    enableUPnP: false, // Disabled by default (security)
     securityConfig: {
       disableRateLimiting: true, // For demo
     },
@@ -909,10 +1043,15 @@ async function matchmakingGossipSubExample() {
   console.log('--- Phase 0: Zoe (Bootstrap) Starts ---\n')
 
   const zoeCoordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/127.0.0.1/tcp/0'],
+    listen: ['/ip4/127.0.0.1/tcp/0'], // TCP only for bootstrap
     enableDHT: true,
     enableDHTServer: true,
     enableGossipSub: true, // Enable pub/sub
+    enableRelay: true,
+    enableRelayServer: true, // Act as relay for NAT peers
+    enableAutoNAT: false,
+    enableDCUTR: false,
+    enableUPnP: false,
   })
 
   await zoeCoordinator.start()
@@ -928,10 +1067,14 @@ async function matchmakingGossipSubExample() {
   console.log('--- Phase 1: Alice Joins and Subscribes ---\n')
 
   const aliceCoordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/127.0.0.1/tcp/0'],
+    listen: ['/ip4/0.0.0.0/tcp/0'],
     enableDHT: true,
     enableDHTServer: false,
     enableGossipSub: true,
+    enableRelay: true,
+    enableAutoNAT: true,
+    enableDCUTR: true,
+    enableUPnP: false,
   })
 
   await aliceCoordinator.start()
@@ -976,17 +1119,25 @@ async function matchmakingGossipSubExample() {
   console.log('--- Phase 2: Bob & Charlie Join and Advertise ---\n')
 
   const bobCoordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/127.0.0.1/tcp/0'],
+    listen: ['/ip4/0.0.0.0/tcp/0'],
     enableDHT: true,
     enableDHTServer: true,
     enableGossipSub: true,
+    enableRelay: true,
+    enableAutoNAT: true,
+    enableDCUTR: true,
+    enableUPnP: false,
   })
 
   const charlieCoordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/127.0.0.1/tcp/0'],
+    listen: ['/ip4/0.0.0.0/tcp/0'],
     enableDHT: true,
     enableDHTServer: true,
     enableGossipSub: true,
+    enableRelay: true,
+    enableAutoNAT: true,
+    enableDCUTR: true,
+    enableUPnP: false,
   })
 
   await Promise.all([bobCoordinator.start(), charlieCoordinator.start()])
@@ -1213,8 +1364,12 @@ async function eventDrivenExample() {
   console.log('\n=== Event-Driven Discovery Example ===\n')
 
   const coordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/127.0.0.1/tcp/0'],
+    listen: ['/ip4/0.0.0.0/tcp/0'],
     enableDHT: true,
+    enableRelay: true,
+    enableAutoNAT: true,
+    enableDCUTR: true,
+    enableUPnP: false,
     securityConfig: {
       disableRateLimiting: true, // For demo
     },
