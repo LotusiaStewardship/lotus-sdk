@@ -22,7 +22,7 @@
  */
 
 import { waitForEvent, ConnectionEvent } from '../lib/p2p/index.js'
-import { MuSig2P2PCoordinator } from '../lib/p2p/musig2/index.js'
+import { MuSig2Coordinator } from '../lib/p2p/musig2/index.js'
 import { PrivateKey } from '../lib/bitcore/privatekey.js'
 import { PublicKey } from '../lib/bitcore/publickey.js'
 import { Transaction } from '../lib/bitcore/transaction/transaction.js'
@@ -61,7 +61,7 @@ async function main() {
   console.log('Phase 1: Setup P2P Coordinators')
   console.log('─'.repeat(50))
 
-  const aliceMuSig = new MuSig2P2PCoordinator({
+  const aliceMuSig = new MuSig2Coordinator({
     listen: ['/ip4/127.0.0.1/tcp/0'],
     enableDHT: true,
     enableDHTServer: true,
@@ -70,7 +70,7 @@ async function main() {
     },
   })
 
-  const bobMuSig = new MuSig2P2PCoordinator({
+  const bobMuSig = new MuSig2Coordinator({
     listen: ['/ip4/127.0.0.1/tcp/0'],
     enableDHT: true,
     enableDHTServer: true,

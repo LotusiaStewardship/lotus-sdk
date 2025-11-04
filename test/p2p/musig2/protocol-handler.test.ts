@@ -6,7 +6,7 @@ import { describe, it, before, after } from 'node:test'
 import assert from 'node:assert'
 import { P2PProtocol } from '../../../lib/p2p/protocol.js'
 import { MuSig2ProtocolHandler } from '../../../lib/p2p/musig2/protocol-handler.js'
-import { MuSig2P2PCoordinator } from '../../../lib/p2p/musig2/coordinator.js'
+import { MuSig2Coordinator } from '../../../lib/p2p/musig2/coordinator.js'
 import { P2PCoordinator } from '../../../lib/p2p/coordinator.js'
 import { PrivateKey } from '../../../lib/bitcore/privatekey.js'
 import { MuSig2MessageType } from '../../../lib/p2p/musig2/types.js'
@@ -31,7 +31,7 @@ describe('MuSig2 P2P Protocol Handler', () => {
     })
 
     it('should set coordinator', async () => {
-      const musig2Coordinator = new MuSig2P2PCoordinator({
+      const musig2Coordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -53,12 +53,12 @@ describe('MuSig2 P2P Protocol Handler', () => {
   })
 
   describe('Message Handling', () => {
-    let musig2Coordinator: MuSig2P2PCoordinator
+    let musig2Coordinator: MuSig2Coordinator
     let handler: MuSig2ProtocolHandler
     let protocol: P2PProtocol
 
     before(async () => {
-      musig2Coordinator = new MuSig2P2PCoordinator({
+      musig2Coordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,

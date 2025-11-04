@@ -5,7 +5,7 @@
 import { describe, it, before, after } from 'node:test'
 import assert from 'node:assert'
 import { P2PCoordinator } from '../../../lib/p2p/coordinator.js'
-import { MuSig2P2PCoordinator } from '../../../lib/p2p/musig2/coordinator.js'
+import { MuSig2Coordinator } from '../../../lib/p2p/musig2/coordinator.js'
 import { PrivateKey } from '../../../lib/bitcore/privatekey.js'
 import { waitForEvent } from '../../../lib/p2p/utils.js'
 import { ConnectionEvent } from '../../../lib/p2p/types.js'
@@ -13,7 +13,7 @@ import { ConnectionEvent } from '../../../lib/p2p/types.js'
 describe('MuSig2 P2P Coordinator', () => {
   describe('Initialization', () => {
     it('should create coordinator with P2P config', async () => {
-      const musig2Coordinator = new MuSig2P2PCoordinator({
+      const musig2Coordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -34,7 +34,7 @@ describe('MuSig2 P2P Coordinator', () => {
 
     it('should configure session timeout', async () => {
       const timeout = 3600000 // 1 hour
-      const musig2Coordinator = new MuSig2P2PCoordinator(
+      const musig2Coordinator = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
@@ -57,7 +57,7 @@ describe('MuSig2 P2P Coordinator', () => {
     })
 
     it('should register protocol handler automatically', async () => {
-      const musig2Coordinator = new MuSig2P2PCoordinator({
+      const musig2Coordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -78,10 +78,10 @@ describe('MuSig2 P2P Coordinator', () => {
   })
 
   describe('Session Creation', () => {
-    let musig2Coordinator: MuSig2P2PCoordinator
+    let musig2Coordinator: MuSig2Coordinator
 
     before(async () => {
-      musig2Coordinator = new MuSig2P2PCoordinator({
+      musig2Coordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -209,10 +209,10 @@ describe('MuSig2 P2P Coordinator', () => {
   })
 
   describe('Session Cleanup', () => {
-    let musig2Coordinator: MuSig2P2PCoordinator
+    let musig2Coordinator: MuSig2Coordinator
 
     before(async () => {
-      musig2Coordinator = new MuSig2P2PCoordinator({
+      musig2Coordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -296,10 +296,10 @@ describe('MuSig2 P2P Coordinator', () => {
   })
 
   describe('Error Handling', () => {
-    let musig2Coordinator: MuSig2P2PCoordinator
+    let musig2Coordinator: MuSig2Coordinator
 
     before(async () => {
-      musig2Coordinator = new MuSig2P2PCoordinator({
+      musig2Coordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,

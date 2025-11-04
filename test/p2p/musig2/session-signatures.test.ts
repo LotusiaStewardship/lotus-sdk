@@ -9,7 +9,7 @@
 
 import { describe, it, before, after } from 'node:test'
 import assert from 'node:assert'
-import { MuSig2P2PCoordinator } from '../../../lib/p2p/musig2/coordinator.js'
+import { MuSig2Coordinator } from '../../../lib/p2p/musig2/coordinator.js'
 import { PrivateKey } from '../../../lib/bitcore/privatekey.js'
 import { PublicKey } from '../../../lib/bitcore/publickey.js'
 import { BN } from '../../../lib/bitcore/crypto/bn.js'
@@ -25,7 +25,7 @@ import { ConnectionEvent } from '../../../lib/p2p/types.js'
  * Helper to access private methods for testing
  * Uses 'any' cast to access private implementation details in unit tests
  */
-function asTest(coordinator: MuSig2P2PCoordinator): any {
+function asTest(coordinator: MuSig2Coordinator): any {
   return coordinator as any
 }
 
@@ -68,8 +68,8 @@ function createTestAnnouncementData(
  * Helper to connect two P2P coordinators
  */
 async function connectPeers(
-  peer1: MuSig2P2PCoordinator,
-  peer2: MuSig2P2PCoordinator,
+  peer1: MuSig2Coordinator,
+  peer2: MuSig2Coordinator,
 ): Promise<void> {
   const peer2Addrs = peer2.libp2pNode.getMultiaddrs()
   assert.ok(peer2Addrs.length > 0)
@@ -84,12 +84,12 @@ async function connectPeers(
 
 describe('MuSig2 Session Announcement Signatures', () => {
   describe('Unit Tests - Signing', () => {
-    let coordinator: MuSig2P2PCoordinator
+    let coordinator: MuSig2Coordinator
     let alice: PrivateKey
     let bob: PrivateKey
 
     before(async () => {
-      coordinator = new MuSig2P2PCoordinator({
+      coordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -197,12 +197,12 @@ describe('MuSig2 Session Announcement Signatures', () => {
   })
 
   describe('Unit Tests - Verification', () => {
-    let coordinator: MuSig2P2PCoordinator
+    let coordinator: MuSig2Coordinator
     let alice: PrivateKey
     let bob: PrivateKey
 
     before(async () => {
-      coordinator = new MuSig2P2PCoordinator({
+      coordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -345,14 +345,14 @@ describe('MuSig2 Session Announcement Signatures', () => {
   })
 
   describe('Integration Tests - DHT', () => {
-    let aliceCoordinator: MuSig2P2PCoordinator
-    let bobCoordinator: MuSig2P2PCoordinator
+    let aliceCoordinator: MuSig2Coordinator
+    let bobCoordinator: MuSig2Coordinator
     let alice: PrivateKey
     let bob: PrivateKey
     let message: Buffer
 
     before(async () => {
-      aliceCoordinator = new MuSig2P2PCoordinator({
+      aliceCoordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -361,7 +361,7 @@ describe('MuSig2 Session Announcement Signatures', () => {
         },
       })
 
-      bobCoordinator = new MuSig2P2PCoordinator({
+      bobCoordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -498,12 +498,12 @@ describe('MuSig2 Session Announcement Signatures', () => {
   })
 
   describe('Security Tests - Attack Scenarios', () => {
-    let honestCoordinator: MuSig2P2PCoordinator
+    let honestCoordinator: MuSig2Coordinator
     let alice: PrivateKey
     let bob: PrivateKey
 
     before(async () => {
-      honestCoordinator = new MuSig2P2PCoordinator({
+      honestCoordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -676,11 +676,11 @@ describe('MuSig2 Session Announcement Signatures', () => {
   })
 
   describe('Edge Cases', () => {
-    let coordinator: MuSig2P2PCoordinator
+    let coordinator: MuSig2Coordinator
     let alice: PrivateKey
 
     before(async () => {
-      coordinator = new MuSig2P2PCoordinator({
+      coordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,

@@ -6,7 +6,7 @@
 
 import { describe, it, before, after } from 'node:test'
 import assert from 'node:assert'
-import { MuSig2P2PCoordinator } from '../../../lib/p2p/musig2/coordinator.js'
+import { MuSig2Coordinator } from '../../../lib/p2p/musig2/coordinator.js'
 import { P2PCoordinator } from '../../../lib/p2p/coordinator.js'
 import { PrivateKey } from '../../../lib/bitcore/privatekey.js'
 import { MuSigSessionPhase } from '../../../lib/bitcore/musig2/session.js'
@@ -66,7 +66,7 @@ async function connectPeers(
 describe('MuSig2 P2P Session Cleanup', () => {
   describe('Configuration', () => {
     it('should enable automatic cleanup by default', async () => {
-      const coordinator = new MuSig2P2PCoordinator({
+      const coordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -94,7 +94,7 @@ describe('MuSig2 P2P Session Cleanup', () => {
     })
 
     it('should allow disabling automatic cleanup', async () => {
-      const coordinator = new MuSig2P2PCoordinator(
+      const coordinator = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
@@ -128,7 +128,7 @@ describe('MuSig2 P2P Session Cleanup', () => {
     })
 
     it('should allow configuring cleanup interval', async () => {
-      const coordinator = new MuSig2P2PCoordinator(
+      const coordinator = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
@@ -145,7 +145,7 @@ describe('MuSig2 P2P Session Cleanup', () => {
     })
 
     it('should allow configuring session timeout', async () => {
-      const coordinator = new MuSig2P2PCoordinator(
+      const coordinator = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
@@ -175,7 +175,7 @@ describe('MuSig2 P2P Session Cleanup', () => {
     })
 
     it('should allow configuring stuck session timeout', async () => {
-      const coordinator = new MuSig2P2PCoordinator(
+      const coordinator = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
@@ -194,7 +194,7 @@ describe('MuSig2 P2P Session Cleanup', () => {
 
   describe('Expired Session Cleanup', () => {
     it('should clean up session after session timeout', async () => {
-      const coordinator = new MuSig2P2PCoordinator(
+      const coordinator = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
@@ -237,7 +237,7 @@ describe('MuSig2 P2P Session Cleanup', () => {
     })
 
     it('should not clean up session before timeout', async () => {
-      const coordinator = new MuSig2P2PCoordinator(
+      const coordinator = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
@@ -276,7 +276,7 @@ describe('MuSig2 P2P Session Cleanup', () => {
     })
 
     it('should clean up multiple expired sessions', async () => {
-      const coordinator = new MuSig2P2PCoordinator(
+      const coordinator = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
@@ -325,7 +325,7 @@ describe('MuSig2 P2P Session Cleanup', () => {
 
   describe('Stuck Session Cleanup', () => {
     it('should clean up session stuck in NONCE_EXCHANGE phase', async () => {
-      const coordinator = new MuSig2P2PCoordinator(
+      const coordinator = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
@@ -376,7 +376,7 @@ describe('MuSig2 P2P Session Cleanup', () => {
     })
 
     it('should verify NONCE_EXCHANGE can be stuck and cleaned up', async () => {
-      const coordinator = new MuSig2P2PCoordinator(
+      const coordinator = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
@@ -431,7 +431,7 @@ describe('MuSig2 P2P Session Cleanup', () => {
     })
 
     it('should not clean up session in INIT phase', async () => {
-      const coordinator = new MuSig2P2PCoordinator(
+      const coordinator = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
@@ -481,7 +481,7 @@ describe('MuSig2 P2P Session Cleanup', () => {
 
   describe('Manual Cleanup', () => {
     it('should stop automatic cleanup when cleanup() is called', async () => {
-      const coordinator = new MuSig2P2PCoordinator(
+      const coordinator = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
@@ -516,7 +516,7 @@ describe('MuSig2 P2P Session Cleanup', () => {
     })
 
     it('should close all active sessions when cleanup() is called', async () => {
-      const coordinator = new MuSig2P2PCoordinator(
+      const coordinator = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
@@ -567,7 +567,7 @@ describe('MuSig2 P2P Session Cleanup', () => {
     it('should verify cleanup works for multi-party sessions (DHT-dependent)', async () => {
       // Note: Multi-party tests with DHT discovery can be unreliable in test environments
       // This test verifies the concept but may be skipped if DHT fails
-      const aliceCoord = new MuSig2P2PCoordinator(
+      const aliceCoord = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
@@ -579,7 +579,7 @@ describe('MuSig2 P2P Session Cleanup', () => {
         },
       )
 
-      const bobCoord = new MuSig2P2PCoordinator(
+      const bobCoord = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
@@ -647,7 +647,7 @@ describe('MuSig2 P2P Session Cleanup', () => {
 
   describe('Edge Cases', () => {
     it('should handle cleanup with no active sessions', async () => {
-      const coordinator = new MuSig2P2PCoordinator(
+      const coordinator = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
@@ -669,7 +669,7 @@ describe('MuSig2 P2P Session Cleanup', () => {
     })
 
     it('should handle session created after coordinator start', async () => {
-      const coordinator = new MuSig2P2PCoordinator(
+      const coordinator = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
@@ -711,7 +711,7 @@ describe('MuSig2 P2P Session Cleanup', () => {
     })
 
     it('should handle very short cleanup interval', async () => {
-      const coordinator = new MuSig2P2PCoordinator(
+      const coordinator = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
@@ -746,7 +746,7 @@ describe('MuSig2 P2P Session Cleanup', () => {
     })
 
     it('should handle very long cleanup interval', async () => {
-      const coordinator = new MuSig2P2PCoordinator(
+      const coordinator = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,

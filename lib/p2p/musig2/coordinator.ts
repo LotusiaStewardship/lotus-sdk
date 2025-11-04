@@ -79,7 +79,7 @@ import { MuSig2IdentityManager } from './identity-manager.js'
  * Events are strongly typed - use MuSig2Event enum for event names
  */
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging -- Safe: We're using declaration merging to add type-safe method signatures (not properties) to the EventEmitter methods inherited from the parent class. This is a standard TypeScript pattern for typed event emitters and doesn't introduce runtime safety issues since we're not adding uninitialized properties.
-export class MuSig2P2PCoordinator extends P2PCoordinator {
+export class MuSig2Coordinator extends P2PCoordinator {
   private sessionManager: MuSigSessionManager
   private protocolHandler: MuSig2ProtocolHandler
   private messageProtocol: P2PProtocol // Renamed to avoid conflict with parent's private 'protocol'

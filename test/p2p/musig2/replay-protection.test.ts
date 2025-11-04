@@ -6,7 +6,7 @@
 
 import { describe, it, before, after } from 'node:test'
 import assert from 'node:assert'
-import { MuSig2P2PCoordinator } from '../../../lib/p2p/musig2/coordinator.js'
+import { MuSig2Coordinator } from '../../../lib/p2p/musig2/coordinator.js'
 import { MuSig2Event } from '../../../lib/p2p/musig2/types.js'
 import { P2PCoordinator } from '../../../lib/p2p/coordinator.js'
 import { PrivateKey } from '../../../lib/bitcore/privatekey.js'
@@ -37,7 +37,7 @@ async function connectPeers(
 describe('MuSig2 P2P Replay Protection', () => {
   describe('Configuration', () => {
     it('should enable replay protection by default', async () => {
-      const coordinator = new MuSig2P2PCoordinator({
+      const coordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -67,7 +67,7 @@ describe('MuSig2 P2P Replay Protection', () => {
     })
 
     it('should allow disabling replay protection', async () => {
-      const coordinator = new MuSig2P2PCoordinator(
+      const coordinator = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
@@ -98,7 +98,7 @@ describe('MuSig2 P2P Replay Protection', () => {
     })
 
     it('should configure max sequence gap', async () => {
-      const coordinator = new MuSig2P2PCoordinator(
+      const coordinator = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
@@ -129,7 +129,7 @@ describe('MuSig2 P2P Replay Protection', () => {
     })
 
     it('should initialize lastSequenceNumbers for new sessions', async () => {
-      const coordinator = new MuSig2P2PCoordinator({
+      const coordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -157,7 +157,7 @@ describe('MuSig2 P2P Replay Protection', () => {
     })
 
     it('should track sequence numbers per signer', async () => {
-      const coordinator = new MuSig2P2PCoordinator(
+      const coordinator = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
@@ -192,8 +192,8 @@ describe('MuSig2 P2P Replay Protection', () => {
   })
 
   describe('Integration Tests - Replay Attack Prevention', () => {
-    let aliceCoord: MuSig2P2PCoordinator
-    let bobCoord: MuSig2P2PCoordinator
+    let aliceCoord: MuSig2Coordinator
+    let bobCoord: MuSig2Coordinator
     let alice: PrivateKey
     let bob: PrivateKey
     let message: Buffer
@@ -204,7 +204,7 @@ describe('MuSig2 P2P Replay Protection', () => {
       message = Buffer.from('test replay protection', 'utf8')
 
       // Create two coordinators
-      aliceCoord = new MuSig2P2PCoordinator(
+      aliceCoord = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
@@ -216,7 +216,7 @@ describe('MuSig2 P2P Replay Protection', () => {
         },
       )
 
-      bobCoord = new MuSig2P2PCoordinator(
+      bobCoord = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
@@ -492,7 +492,7 @@ describe('MuSig2 P2P Replay Protection', () => {
 
     it('should allow disabling replay protection for testing', async () => {
       // Create coordinator with replay protection disabled
-      const noReplayCoord = new MuSig2P2PCoordinator(
+      const noReplayCoord = new MuSig2Coordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
           enableDHT: true,
@@ -556,7 +556,7 @@ describe('MuSig2 P2P Replay Protection', () => {
         const bob = new PrivateKey()
         const message = Buffer.from('complete signing test', 'utf8')
 
-        const aliceCoord = new MuSig2P2PCoordinator(
+        const aliceCoord = new MuSig2Coordinator(
           {
             listen: ['/ip4/127.0.0.1/tcp/0'],
             enableDHT: true,
@@ -568,7 +568,7 @@ describe('MuSig2 P2P Replay Protection', () => {
           },
         )
 
-        const bobCoord = new MuSig2P2PCoordinator(
+        const bobCoord = new MuSig2Coordinator(
           {
             listen: ['/ip4/127.0.0.1/tcp/0'],
             enableDHT: true,
@@ -676,7 +676,7 @@ describe('MuSig2 P2P Replay Protection', () => {
   })
 
   describe('Protocol Phase Enforcement', () => {
-    let coordinator: MuSig2P2PCoordinator
+    let coordinator: MuSig2Coordinator
     let alice: PrivateKey
     let bob: PrivateKey
 
@@ -684,7 +684,7 @@ describe('MuSig2 P2P Replay Protection', () => {
       alice = new PrivateKey()
       bob = new PrivateKey()
 
-      coordinator = new MuSig2P2PCoordinator({
+      coordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -892,7 +892,7 @@ describe('MuSig2 P2P Replay Protection', () => {
 
   describe('Edge Cases', () => {
     it('should handle sequence overflow gracefully', async () => {
-      const coordinator = new MuSig2P2PCoordinator({
+      const coordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -928,7 +928,7 @@ describe('MuSig2 P2P Replay Protection', () => {
     })
 
     it('should track sequences independently per session', async () => {
-      const coordinator = new MuSig2P2PCoordinator({
+      const coordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,

@@ -7,7 +7,7 @@
 import { describe, it, before, after } from 'node:test'
 import assert from 'node:assert'
 import { P2PCoordinator } from '../../../lib/p2p/coordinator.js'
-import { MuSig2P2PCoordinator } from '../../../lib/p2p/musig2/coordinator.js'
+import { MuSig2Coordinator } from '../../../lib/p2p/musig2/coordinator.js'
 import { MuSig2Event } from '../../../lib/p2p/musig2/types.js'
 import { PrivateKey } from '../../../lib/bitcore/privatekey.js'
 import { waitForEvent } from '../../../lib/p2p/utils.js'
@@ -34,15 +34,15 @@ async function connectPeers(
 
 describe('MuSig2 P2P Integration', () => {
   describe('2-of-2 Signing Session', () => {
-    let aliceMuSig: MuSig2P2PCoordinator
-    let bobMuSig: MuSig2P2PCoordinator
+    let aliceMuSig: MuSig2Coordinator
+    let bobMuSig: MuSig2Coordinator
     let alice: PrivateKey
     let bob: PrivateKey
     let message: Buffer
 
     before(async () => {
       // Create MuSig2 coordinators
-      aliceMuSig = new MuSig2P2PCoordinator({
+      aliceMuSig = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -51,7 +51,7 @@ describe('MuSig2 P2P Integration', () => {
         },
       })
 
-      bobMuSig = new MuSig2P2PCoordinator({
+      bobMuSig = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -183,9 +183,9 @@ describe('MuSig2 P2P Integration', () => {
   })
 
   describe('3-of-3 Signing Session', () => {
-    let aliceMuSig: MuSig2P2PCoordinator
-    let bobMuSig: MuSig2P2PCoordinator
-    let carolMuSig: MuSig2P2PCoordinator
+    let aliceMuSig: MuSig2Coordinator
+    let bobMuSig: MuSig2Coordinator
+    let carolMuSig: MuSig2Coordinator
     let alice: PrivateKey
     let bob: PrivateKey
     let carol: PrivateKey
@@ -193,7 +193,7 @@ describe('MuSig2 P2P Integration', () => {
 
     before(async () => {
       // Create MuSig2 coordinators (which extend P2PCoordinator)
-      aliceMuSig = new MuSig2P2PCoordinator({
+      aliceMuSig = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -202,7 +202,7 @@ describe('MuSig2 P2P Integration', () => {
         },
       })
 
-      bobMuSig = new MuSig2P2PCoordinator({
+      bobMuSig = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -211,7 +211,7 @@ describe('MuSig2 P2P Integration', () => {
         },
       })
 
-      carolMuSig = new MuSig2P2PCoordinator({
+      carolMuSig = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -292,12 +292,12 @@ describe('MuSig2 P2P Integration', () => {
   })
 
   describe('Session Event Handling', () => {
-    let aliceMuSig: MuSig2P2PCoordinator
+    let aliceMuSig: MuSig2Coordinator
     let alice: PrivateKey
     let bob: PrivateKey
 
     before(async () => {
-      aliceMuSig = new MuSig2P2PCoordinator({
+      aliceMuSig = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -325,7 +325,7 @@ describe('MuSig2 P2P Integration', () => {
       })
 
       // Create a second peer and connect
-      const bobMuSig = new MuSig2P2PCoordinator({
+      const bobMuSig = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,

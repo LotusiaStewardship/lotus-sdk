@@ -6,7 +6,7 @@
  */
 
 import { waitForEvent, ConnectionEvent } from '../lib/p2p/index.js'
-import { MuSig2P2PCoordinator, MuSig2Event } from '../lib/p2p/musig2/index.js'
+import { MuSig2Coordinator, MuSig2Event } from '../lib/p2p/musig2/index.js'
 import { PrivateKey } from '../lib/bitcore/privatekey.js'
 
 /**
@@ -21,7 +21,7 @@ async function main() {
   // Step 1: Create MuSig2 coordinators (which extend P2PCoordinator)
   console.log('Step 1: Creating MuSig2 P2P coordinators...')
 
-  const aliceMuSig = new MuSig2P2PCoordinator({
+  const aliceMuSig = new MuSig2Coordinator({
     listen: ['/ip4/127.0.0.1/tcp/0'], // Random port
     enableDHT: true,
     enableDHTServer: true, // Enable DHT server for session discovery
@@ -30,7 +30,7 @@ async function main() {
     },
   })
 
-  const bobMuSig = new MuSig2P2PCoordinator({
+  const bobMuSig = new MuSig2Coordinator({
     listen: ['/ip4/127.0.0.1/tcp/0'], // Random port
     enableDHT: true,
     enableDHTServer: true,

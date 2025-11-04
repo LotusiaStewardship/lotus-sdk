@@ -22,7 +22,7 @@ import type { PrivateKey } from '../../bitcore/privatekey.js'
 import type { PublicKey } from '../../bitcore/publickey.js'
 import { Address } from '../../bitcore/address.js'
 import type { UnspentOutput } from '../../bitcore/transaction/unspentoutput.js'
-import { MuSig2P2PCoordinator } from '../musig2/coordinator.js'
+import { MuSig2Coordinator } from '../musig2/coordinator.js'
 import type { P2PConfig } from '../types.js'
 import type { MuSig2P2PConfig, SigningRequest } from '../musig2/types.js'
 import { MuSig2Event, TransactionType } from '../musig2/types.js'
@@ -65,7 +65,7 @@ export interface SwapSigConfig {
 /**
  * SwapSig Protocol Coordinator
  *
- * Extends MuSig2P2PCoordinator to provide privacy-preserving swaps.
+ * Extends MuSig2Coordinator to provide privacy-preserving swaps.
  * SwapSig is a MuSig2 P2P application that builds on top of the three-phase architecture.
  *
  * Note: The interface override below intentionally narrows the event types from
@@ -73,9 +73,8 @@ export interface SwapSigConfig {
  * it's the correct design - SwapSig has its own event system and consumes MuSig2
  * events internally via super.on().
  */
-// @ts-expect-error - Intentionally overriding parent event types with SwapSigEventMap
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
-export class SwapSigCoordinator extends MuSig2P2PCoordinator {
+export class SwapSigCoordinator extends MuSig2Coordinator {
   private swapConfig: SwapSigConfig
   private poolManager: SwapPoolManager
   private burnMechanism: SwapSigBurnMechanism
@@ -88,7 +87,7 @@ export class SwapSigCoordinator extends MuSig2P2PCoordinator {
     musig2Config?: Partial<MuSig2P2PConfig>,
     swapSigConfig?: Partial<SwapSigConfig>,
   ) {
-    // Call parent MuSig2P2PCoordinator constructor
+    // Call parent MuSig2Coordinator constructor
     super(p2pConfig, musig2Config)
 
     this.swapConfig = {
@@ -120,7 +119,7 @@ export class SwapSigCoordinator extends MuSig2P2PCoordinator {
    * Start coordinator (starts P2P node)
    */
   async start(): Promise<void> {
-    // Start parent MuSig2P2PCoordinator
+    // Start parent MuSig2Coordinator
     await super.start()
   }
 
@@ -1195,8 +1194,8 @@ export class SwapSigCoordinator extends MuSig2P2PCoordinator {
 /**
  * Interface declaration merging for proper event typing
  *
- * OVERRIDES parent MuSig2P2PCoordinator event types completely with SwapSigEventMap.
- * This follows the same pattern as MuSig2P2PCoordinator overriding P2PCoordinator.
+ * OVERRIDES parent MuSig2Coordinator event types completely with SwapSigEventMap.
+ * This follows the same pattern as MuSig2Coordinator overriding P2PCoordinator.
  *
  * - External API: Users only see SwapSigEventMap
  * - Internal: Can still use super.on(MuSig2Event.*) to consume parent events
@@ -1208,7 +1207,6 @@ export class SwapSigCoordinator extends MuSig2P2PCoordinator {
  * - IntelliSense support for all SwapSig events
  * - Compile-time validation of event parameters
  */
-// @ts-expect-error - Intentionally overriding parent event types with SwapSigEventMap
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export interface SwapSigCoordinator {
   on<E extends keyof SwapSigEventMap>(

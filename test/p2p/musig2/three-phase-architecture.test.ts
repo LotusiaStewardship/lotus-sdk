@@ -10,7 +10,7 @@
 
 import { describe, it, before, after } from 'node:test'
 import assert from 'node:assert'
-import { MuSig2P2PCoordinator } from '../../../lib/p2p/musig2/coordinator.js'
+import { MuSig2Coordinator } from '../../../lib/p2p/musig2/coordinator.js'
 import { PrivateKey } from '../../../lib/bitcore/privatekey.js'
 import { waitForEvent } from '../../../lib/p2p/utils.js'
 import {
@@ -22,12 +22,12 @@ import {
 
 describe('MuSig2 Three-Phase Architecture', () => {
   describe('Phase 0: Signer Advertisement', () => {
-    let coordinator: MuSig2P2PCoordinator
+    let coordinator: MuSig2Coordinator
     let aliceKey: PrivateKey
     let bobKey: PrivateKey
 
     before(async () => {
-      coordinator = new MuSig2P2PCoordinator({
+      coordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -203,9 +203,9 @@ describe('MuSig2 Three-Phase Architecture', () => {
   })
 
   describe('Phase 1-2: Matchmaking and Signing Request', () => {
-    let creatorCoordinator: MuSig2P2PCoordinator
-    let aliceCoordinator: MuSig2P2PCoordinator
-    let bobCoordinator: MuSig2P2PCoordinator
+    let creatorCoordinator: MuSig2Coordinator
+    let aliceCoordinator: MuSig2Coordinator
+    let bobCoordinator: MuSig2Coordinator
 
     let creatorKey: PrivateKey
     let aliceKey: PrivateKey
@@ -217,7 +217,7 @@ describe('MuSig2 Three-Phase Architecture', () => {
       bobKey = new PrivateKey()
 
       // Create coordinators
-      creatorCoordinator = new MuSig2P2PCoordinator({
+      creatorCoordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -226,7 +226,7 @@ describe('MuSig2 Three-Phase Architecture', () => {
         },
       })
 
-      aliceCoordinator = new MuSig2P2PCoordinator({
+      aliceCoordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -235,7 +235,7 @@ describe('MuSig2 Three-Phase Architecture', () => {
         },
       })
 
-      bobCoordinator = new MuSig2P2PCoordinator({
+      bobCoordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -347,9 +347,9 @@ describe('MuSig2 Three-Phase Architecture', () => {
   })
 
   describe('Phase 3: Dynamic Session Building', () => {
-    let creatorCoordinator: MuSig2P2PCoordinator
-    let aliceCoordinator: MuSig2P2PCoordinator
-    let bobCoordinator: MuSig2P2PCoordinator
+    let creatorCoordinator: MuSig2Coordinator
+    let aliceCoordinator: MuSig2Coordinator
+    let bobCoordinator: MuSig2Coordinator
 
     let creatorKey: PrivateKey
     let aliceKey: PrivateKey
@@ -360,7 +360,7 @@ describe('MuSig2 Three-Phase Architecture', () => {
       aliceKey = new PrivateKey()
       bobKey = new PrivateKey()
 
-      creatorCoordinator = new MuSig2P2PCoordinator({
+      creatorCoordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -369,7 +369,7 @@ describe('MuSig2 Three-Phase Architecture', () => {
         },
       })
 
-      aliceCoordinator = new MuSig2P2PCoordinator({
+      aliceCoordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -378,7 +378,7 @@ describe('MuSig2 Three-Phase Architecture', () => {
         },
       })
 
-      bobCoordinator = new MuSig2P2PCoordinator({
+      bobCoordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -580,9 +580,9 @@ describe('MuSig2 Three-Phase Architecture', () => {
   })
 
   describe('End-to-End Three-Phase Flow', () => {
-    let creatorCoordinator: MuSig2P2PCoordinator
-    let aliceCoordinator: MuSig2P2PCoordinator
-    let bobCoordinator: MuSig2P2PCoordinator
+    let creatorCoordinator: MuSig2Coordinator
+    let aliceCoordinator: MuSig2Coordinator
+    let bobCoordinator: MuSig2Coordinator
 
     let creatorKey: PrivateKey
     let aliceKey: PrivateKey
@@ -593,7 +593,7 @@ describe('MuSig2 Three-Phase Architecture', () => {
       aliceKey = new PrivateKey()
       bobKey = new PrivateKey()
 
-      creatorCoordinator = new MuSig2P2PCoordinator({
+      creatorCoordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -602,7 +602,7 @@ describe('MuSig2 Three-Phase Architecture', () => {
         },
       })
 
-      aliceCoordinator = new MuSig2P2PCoordinator({
+      aliceCoordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,
@@ -611,7 +611,7 @@ describe('MuSig2 Three-Phase Architecture', () => {
         },
       })
 
-      bobCoordinator = new MuSig2P2PCoordinator({
+      bobCoordinator = new MuSig2Coordinator({
         listen: ['/ip4/127.0.0.1/tcp/0'],
         enableDHT: true,
         enableDHTServer: false,

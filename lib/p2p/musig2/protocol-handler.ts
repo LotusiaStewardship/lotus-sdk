@@ -11,7 +11,7 @@
  */
 
 import type { P2PMessage, PeerInfo, IProtocolHandler } from '../types.js'
-import type { MuSig2P2PCoordinator } from './coordinator.js'
+import type { MuSig2Coordinator } from './coordinator.js'
 import {
   MuSig2MessageType,
   MuSig2Event,
@@ -42,13 +42,13 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
   readonly protocolName = 'musig2'
   readonly protocolId = '/lotus/musig2/1.0.0'
 
-  private coordinator?: MuSig2P2PCoordinator
+  private coordinator?: MuSig2Coordinator
   private securityManager?: SecurityManager
 
   /**
    * Set the coordinator instance
    */
-  setCoordinator(coordinator: MuSig2P2PCoordinator): void {
+  setCoordinator(coordinator: MuSig2Coordinator): void {
     this.coordinator = coordinator
   }
 

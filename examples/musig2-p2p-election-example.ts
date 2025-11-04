@@ -26,7 +26,7 @@
  */
 
 import { waitForEvent, ConnectionEvent } from '../lib/p2p/index.js'
-import { MuSig2P2PCoordinator } from '../lib/p2p/musig2/index.js'
+import { MuSig2Coordinator } from '../lib/p2p/musig2/index.js'
 import { electCoordinator, ElectionMethod } from '../lib/p2p/musig2/election.js'
 import { PrivateKey } from '../lib/bitcore/privatekey.js'
 import { PublicKey } from '../lib/bitcore/publickey.js'
@@ -44,7 +44,7 @@ interface Participant {
   name: string
   privateKey: PrivateKey
   publicKey: PublicKey
-  coordinator: MuSig2P2PCoordinator
+  coordinator: MuSig2Coordinator
 }
 
 /**
@@ -54,7 +54,7 @@ async function setupParticipant(name: string): Promise<Participant> {
   const privateKey = new PrivateKey()
   const publicKey = privateKey.publicKey
 
-  const coordinator = new MuSig2P2PCoordinator(
+  const coordinator = new MuSig2Coordinator(
     {
       listen: ['/ip4/127.0.0.1/tcp/0'],
       enableDHT: true,
