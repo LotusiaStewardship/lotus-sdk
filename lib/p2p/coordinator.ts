@@ -25,8 +25,6 @@ import { multiaddr, Multiaddr } from '@multiformats/multiaddr'
 import { peerIdFromString } from '@libp2p/peer-id'
 import type { Connection, Stream, PeerId } from '@libp2p/interface'
 import type { StreamHandler } from '@libp2p/interface'
-import { fromString as uint8ArrayFromString } from 'uint8arrays/from-string'
-import { toString as uint8ArrayToString } from 'uint8arrays/to-string'
 
 import {
   P2PConfig,
@@ -416,8 +414,8 @@ export class P2PCoordinator extends EventEmitter {
       if (dhtStats.isReady) {
         // DHT routing table has peers - proceed with propagation
         const dht = this.node.services.kadDHT as KadDHT
-        const keyBytes = uint8ArrayFromString(key)
-        const valueBytes = uint8ArrayFromString(JSON.stringify(announcement))
+        const keyBytes = Buffer.from(key, 'utf8')
+        const valueBytes = Buffer.from(JSON.stringify(announcement), 'utf8')
 
         await this._putDHT(keyBytes, valueBytes, 5000)
       }
@@ -526,7 +524,7 @@ export class P2PCoordinator extends EventEmitter {
     }
 
     const dht = this.node.services.kadDHT as KadDHT
-    const keyBytes = uint8ArrayFromString(key)
+    const keyBytes = Buffer.from(key, 'utf8')
     const controller = new AbortController()
 
     // Set overall timeout for the entire DHT query
@@ -545,7 +543,7 @@ export class P2PCoordinator extends EventEmitter {
 
         // Handle VALUE event
         if (event.name === 'VALUE') {
-          const valueStr = uint8ArrayToString(event.value)
+          const valueStr = Buffer.from(event.value).toString('utf8')
           const announcement = JSON.parse(valueStr) as ResourceAnnouncement
 
           // SECURITY: Check expiry before returning (prevent stale data attacks)
@@ -593,8 +591,8 @@ export class P2PCoordinator extends EventEmitter {
    * We use a timeout + event limit to ensure the operation completes gracefully.
    */
   private async _putDHT(
-    keyBytes: Uint8Array,
-    valueBytes: Uint8Array,
+    keyBytes: Buffer,
+    valueBytes: Buffer,
     timeoutMs: number,
   ): Promise<void> {
     if (!this.node?.services.kadDHT) {
