@@ -14,7 +14,6 @@ import {
   Connection,
   waitForEvent,
 } from '../lib/p2p/index.js'
-import { toString as uint8ArrayToString } from 'uint8arrays/to-string'
 
 /**
  * Example: Custom Chat Protocol
@@ -74,7 +73,7 @@ class ChatProtocolHandler implements IProtocolHandler {
       }
 
       const combined = Buffer.concat(data.map(d => Buffer.from(d)))
-      const messageStr = uint8ArrayToString(combined)
+      const messageStr = combined.toString('utf8')
       const message = JSON.parse(messageStr) as P2PMessage
 
       await this.handleMessage(message, {

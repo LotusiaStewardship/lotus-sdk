@@ -13,7 +13,6 @@ import {
   waitForEvent,
   ConnectionEvent,
 } from '../../lib/p2p/index.js'
-import { fromString as uint8ArrayFromString } from 'uint8arrays/from-string'
 import type { SingleKadDHT } from '@libp2p/kad-dht'
 
 /**
@@ -598,8 +597,8 @@ describe('DHT Integration Tests', () => {
 
       // Test that _putDHT completes within timeout
       const start = Date.now()
-      const keyBytes = uint8ArrayFromString('test-key-put')
-      const valueBytes = uint8ArrayFromString(JSON.stringify({ test: 'value' }))
+      const keyBytes = Buffer.from('test-key-put', 'utf8')
+      const valueBytes = Buffer.from(JSON.stringify({ test: 'value' }), 'utf8')
 
       // Access private method for testing
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

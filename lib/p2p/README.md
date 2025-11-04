@@ -530,8 +530,7 @@ const coordinator = new P2PCoordinator({
     "@libp2p/mplex": "^10.0.0",
     "@chainsafe/libp2p-noise": "^14.0.0",
     "@libp2p/bootstrap": "^10.0.0",
-    "@multiformats/multiaddr": "^12.0.0",
-    "uint8arrays": "^5.0.0"
+    "@multiformats/multiaddr": "^12.0.0"
   }
 }
 ```
