@@ -22,7 +22,9 @@ import {
  * Applied universally to all resource types
  */
 export class DHTAnnouncementRateLimiter {
+  /** Map with keys of peerId and values to Linux timestamp of peer's most recently accepted announcement */
   private lastAnnouncement: Map<string, number> = new Map()
+  /** Map with keys of peerId and values to the number of total announcements made by the peer */
   private announcementCount: Map<string, number> = new Map()
 
   /**

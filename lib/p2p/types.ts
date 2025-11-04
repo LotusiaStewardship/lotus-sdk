@@ -5,11 +5,7 @@
  */
 
 import { PublicKey } from '../bitcore/publickey.js'
-import type {
-  Connection,
-  Stream,
-  PeerInfo as LibP2PPeerInfo,
-} from '@libp2p/interface'
+import type { Connection, Stream } from '@libp2p/interface'
 import type { PeerId } from '@libp2p/interface-peer-id'
 import type { Multiaddr } from '@multiformats/multiaddr'
 import type { Libp2p } from 'libp2p'
