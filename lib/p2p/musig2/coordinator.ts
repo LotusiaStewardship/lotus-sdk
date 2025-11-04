@@ -46,7 +46,7 @@ import {
   serializePublicKey,
   serializeMessage,
 } from './serialization.js'
-import { MuSig2P2PProtocolHandler } from './protocol-handler.js'
+import { MuSig2ProtocolHandler } from './protocol-handler.js'
 import {
   MuSigSessionManager,
   MuSigSession,
@@ -81,7 +81,7 @@ import { MuSig2IdentityManager } from './identity-manager.js'
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging -- Safe: We're using declaration merging to add type-safe method signatures (not properties) to the EventEmitter methods inherited from the parent class. This is a standard TypeScript pattern for typed event emitters and doesn't introduce runtime safety issues since we're not adding uninitialized properties.
 export class MuSig2P2PCoordinator extends P2PCoordinator {
   private sessionManager: MuSigSessionManager
-  private protocolHandler: MuSig2P2PProtocolHandler
+  private protocolHandler: MuSig2ProtocolHandler
   private messageProtocol: P2PProtocol // Renamed to avoid conflict with parent's private 'protocol'
   private activeSessions: Map<string, ActiveSession> = new Map()
   private activeSigningSessions: Map<string, ActiveSigningSession> = new Map() // New: Dynamic signing sessions
@@ -122,7 +122,7 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     super(p2pConfig)
 
     this.sessionManager = new MuSigSessionManager()
-    this.protocolHandler = new MuSig2P2PProtocolHandler()
+    this.protocolHandler = new MuSig2ProtocolHandler()
     this.messageProtocol = new P2PProtocol()
     this.protocolHandler.setCoordinator(this)
 

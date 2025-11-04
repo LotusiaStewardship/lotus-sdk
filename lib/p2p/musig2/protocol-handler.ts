@@ -10,7 +10,8 @@
  * Implements IProtocolHandler for MuSig2 coordination
  */
 
-import { P2PMessage, PeerInfo, IProtocolHandler } from '../types.js'
+import type { P2PMessage, PeerInfo, IProtocolHandler } from '../types.js'
+import type { MuSig2P2PCoordinator } from './coordinator.js'
 import {
   MuSig2MessageType,
   MuSig2Event,
@@ -30,20 +31,14 @@ import {
   deserializePublicKey,
   deserializeMessage,
 } from './serialization.js'
-import { Point } from '../../bitcore/crypto/point.js'
-import { BN } from '../../bitcore/crypto/bn.js'
 import { SecurityManager } from './security.js'
-
-// Forward declaration to avoid circular dependency
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type MuSig2P2PCoordinator = any
 
 /**
  * MuSig2 P2P Protocol Handler
  *
  * Handles incoming MuSig2 messages and routes them to the coordinator
  */
-export class MuSig2P2PProtocolHandler implements IProtocolHandler {
+export class MuSig2ProtocolHandler implements IProtocolHandler {
   readonly protocolName = 'musig2'
   readonly protocolId = '/lotus/musig2/1.0.0'
 

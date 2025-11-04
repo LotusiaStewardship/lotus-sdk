@@ -11,7 +11,7 @@
  */
 
 export { MuSig2P2PCoordinator } from './coordinator.js'
-export { MuSig2P2PProtocolHandler } from './protocol-handler.js'
+export { MuSig2ProtocolHandler } from './protocol-handler.js'
 export * from './types.js'
 export * from './serialization.js'
 export * from './election.js'

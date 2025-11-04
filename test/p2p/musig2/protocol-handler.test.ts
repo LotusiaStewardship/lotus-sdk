@@ -5,7 +5,7 @@
 import { describe, it, before, after } from 'node:test'
 import assert from 'node:assert'
 import { P2PProtocol } from '../../../lib/p2p/protocol.js'
-import { MuSig2P2PProtocolHandler } from '../../../lib/p2p/musig2/protocol-handler.js'
+import { MuSig2ProtocolHandler } from '../../../lib/p2p/musig2/protocol-handler.js'
 import { MuSig2P2PCoordinator } from '../../../lib/p2p/musig2/coordinator.js'
 import { P2PCoordinator } from '../../../lib/p2p/coordinator.js'
 import { PrivateKey } from '../../../lib/bitcore/privatekey.js'
@@ -24,7 +24,7 @@ import { BN } from '../../../lib/bitcore/crypto/bn.js'
 describe('MuSig2 P2P Protocol Handler', () => {
   describe('Initialization', () => {
     it('should create protocol handler with correct properties', async () => {
-      const handler = new MuSig2P2PProtocolHandler()
+      const handler = new MuSig2ProtocolHandler()
 
       assert.strictEqual(handler.protocolName, 'musig2')
       assert.strictEqual(handler.protocolId, '/lotus/musig2/1.0.0')
@@ -42,7 +42,7 @@ describe('MuSig2 P2P Protocol Handler', () => {
 
       await musig2Coordinator.start()
 
-      const handler = new MuSig2P2PProtocolHandler()
+      const handler = new MuSig2ProtocolHandler()
       handler.setCoordinator(musig2Coordinator)
 
       assert.ok(handler)
@@ -54,7 +54,7 @@ describe('MuSig2 P2P Protocol Handler', () => {
 
   describe('Message Handling', () => {
     let musig2Coordinator: MuSig2P2PCoordinator
-    let handler: MuSig2P2PProtocolHandler
+    let handler: MuSig2ProtocolHandler
     let protocol: P2PProtocol
 
     before(async () => {
@@ -69,7 +69,7 @@ describe('MuSig2 P2P Protocol Handler', () => {
 
       await musig2Coordinator.start()
 
-      handler = new MuSig2P2PProtocolHandler()
+      handler = new MuSig2ProtocolHandler()
       handler.setCoordinator(musig2Coordinator)
       protocol = new P2PProtocol()
     })
@@ -263,14 +263,14 @@ describe('MuSig2 P2P Protocol Handler', () => {
 
   describe('Peer Connection Events', () => {
     it('should handle peer connected events', async () => {
-      const handler = new MuSig2P2PProtocolHandler()
+      const handler = new MuSig2ProtocolHandler()
 
       // Should not throw
       await handler.onPeerConnected('test-peer-id')
     })
 
     it('should handle peer disconnected events', async () => {
-      const handler = new MuSig2P2PProtocolHandler()
+      const handler = new MuSig2ProtocolHandler()
 
       // Should not throw
       await handler.onPeerDisconnected('test-peer-id')
