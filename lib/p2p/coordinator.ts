@@ -105,14 +105,26 @@ export class P2PCoordinator extends EventEmitter {
     let peerInfoMapper = this.config.dhtPeerInfoMapper
 
     if (!peerInfoMapper) {
-      // Auto-detect: If listening on localhost, use passthroughMapper
-      // If listening on public addresses, use removePrivateAddressesMapper
+      // Auto-detect: If listening on localhost OR bootstraps are localhost, use passthroughMapper
+      // If listening on public addresses AND no localhost bootstraps, use removePrivateAddressesMapper
       const listenAddrs = this.config.listen || ['/ip4/0.0.0.0/tcp/0']
-      const isLocalhost = listenAddrs.some(
+      const bootstrapAddrs = this.config.bootstrapPeers || []
+
+      const isListenLocalhost = listenAddrs.some(
+        addr => addr.includes('127.0.0.1') || addr.includes('localhost'),
+      )
+      const isBootstrapLocalhost = bootstrapAddrs.some(
         addr => addr.includes('127.0.0.1') || addr.includes('localhost'),
       )
 
-      if (isLocalhost) {
+      // Use passthroughMapper if EITHER listen or bootstrap uses localhost
+      // This fixes DHT in local testing scenarios where 0.0.0.0 is used for listen
+      // but all actual connections are on 127.0.0.1
+      if (
+        isListenLocalhost ||
+        isBootstrapLocalhost ||
+        bootstrapAddrs.length === 0
+      ) {
         // Development/testing on localhost - allow private addresses
         peerInfoMapper = passthroughMapper
       } else {
