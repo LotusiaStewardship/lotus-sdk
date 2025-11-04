@@ -7,11 +7,7 @@ import { PublicKey } from '../publickey.js'
 import { ECDSA } from '../crypto/ecdsa.js'
 import { Schnorr } from '../crypto/schnorr.js'
 import { Preconditions } from '../util/preconditions.js'
-import { BitcoreError } from '../errors.js'
-import { BufferUtil } from '../util/buffer.js'
-import { sighash, TransactionLike } from '../transaction/sighash.js'
-import { Transaction } from '../transaction/transaction.js'
-import { Input } from '../transaction/input.js'
+import type { Transaction } from '../transaction/transaction.js'
 import {
   TAPROOT_INTRO_SIZE,
   TAPROOT_SIZE_WITHOUT_STATE,
