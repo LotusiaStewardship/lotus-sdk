@@ -474,10 +474,17 @@ export class P2PCoordinator extends EventEmitter {
         const keyBytes = Buffer.from(key, 'utf8')
         const valueBytes = Buffer.from(JSON.stringify(announcement), 'utf8')
 
+        console.log(
+          `[DHT] Storing to DHT: ${key} (routing table: ${dhtStats.routingTableSize} peers)`,
+        )
         await this._putDHT(keyBytes, valueBytes, 5000)
+        console.log(`[DHT] ✅ Stored to DHT: ${key}`)
+      } else {
+        console.log(
+          `[DHT] ⚠️  Skipping DHT storage for ${key} (routing table not ready: ${dhtStats.routingTableSize} peers)`,
+        )
       }
-      // Else: Routing table empty, skip DHT propagation
-      // Resource is still in local cache for later propagation
+      // Resource is still in local cache regardless
     }
 
     this.emit('resource:announced', announcement)
