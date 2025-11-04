@@ -169,6 +169,8 @@ export {
   tweakPublicKey,
   tweakPrivateKey,
   verifyTaprootCommitment,
+  verifyTaprootScriptPath,
+  verifyTaprootSpend,
   // constants
   TAPROOT_LEAF_MASK,
   TAPROOT_LEAF_TAPSCRIPT,
@@ -272,6 +274,8 @@ export type {
 export type { XAddressData, XAddressObject } from './xaddress.js'
 
 export type { ScriptData } from './script.js'
+
+export type { TaprootVerifyResult } from './taproot.js'
 
 export type { URIParams } from './uri.js'
 

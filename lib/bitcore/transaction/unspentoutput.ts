@@ -2,6 +2,7 @@ import { Preconditions } from '../util/preconditions.js'
 import { JSUtil } from '../util/js.js'
 import { Script } from '../script.js'
 import { Address } from '../address.js'
+import { PublicKey } from '../publickey.js'
 import { Unit } from '../unit.js'
 import type { MuSigKeyAggContext } from '../crypto/musig2.js'
 
@@ -15,6 +16,9 @@ export interface UnspentOutputData {
   amount?: number
   satoshis?: number | bigint
   address?: Address | string
+  // Taproot specific fields
+  internalPubKey?: PublicKey | Buffer | string
+  merkleRoot?: Buffer
   // MuSig2 Taproot specific fields
   keyAggContext?: MuSigKeyAggContext
   mySignerIndex?: number
@@ -39,6 +43,9 @@ export class UnspentOutput {
   readonly outputIndex!: number
   readonly script!: Script
   readonly satoshis!: number
+  // Taproot specific properties
+  readonly internalPubKey?: PublicKey
+  readonly merkleRoot?: Buffer
   // MuSig2 Taproot specific properties
   readonly keyAggContext?: MuSigKeyAggContext
   readonly mySignerIndex?: number
@@ -95,6 +102,19 @@ export class UnspentOutput {
     this.outputIndex = outputIndex
     this.script = script
     this.satoshis = amount
+
+    // Store Taproot metadata if provided
+    if (data.internalPubKey) {
+      if (data.internalPubKey instanceof PublicKey) {
+        this.internalPubKey = data.internalPubKey
+      } else if (Buffer.isBuffer(data.internalPubKey)) {
+        this.internalPubKey = new PublicKey(data.internalPubKey)
+      } else if (typeof data.internalPubKey === 'string') {
+        this.internalPubKey = new PublicKey(data.internalPubKey)
+      }
+    }
+    this.merkleRoot = data.merkleRoot
+
     // Store MuSig2 Taproot metadata if provided
     this.keyAggContext = data.keyAggContext
     this.mySignerIndex = data.mySignerIndex
@@ -179,6 +199,8 @@ export class UnspentOutput {
       script: this.script.clone(),
       satoshis: this.satoshis,
       address: this.address,
+      internalPubKey: this.internalPubKey,
+      merkleRoot: this.merkleRoot,
       keyAggContext: this.keyAggContext,
       mySignerIndex: this.mySignerIndex,
     })

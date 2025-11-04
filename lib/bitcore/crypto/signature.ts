@@ -814,6 +814,19 @@ export class Signature {
       return false
     }
 
+    // Check if SIGHASH_LOTUS is set (Taproot signatures)
+    if (this.nhashtype & Signature.SIGHASH_LOTUS) {
+      // LOTUS is valid, just check the base type
+      const baseMask =
+        ~(Signature.SIGHASH_LOTUS | Signature.SIGHASH_ANYONECANPAY) >>> 0
+      const baseType = this.nhashtype & baseMask
+      return (
+        baseType >= Signature.SIGHASH_ALL &&
+        baseType <= Signature.SIGHASH_SINGLE
+      )
+    }
+
+    // Original logic for FORKID signatures
     const mask =
       ~(Signature.SIGHASH_FORKID | Signature.SIGHASH_ANYONECANPAY) >>> 0
     const temp = this.nhashtype & mask
