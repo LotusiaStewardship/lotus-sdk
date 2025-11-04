@@ -98,8 +98,7 @@ export class BurnVerifier {
   async verifyBurnTransaction(
     txId: string,
     outputIndex: number,
-    minConfirmations: number = 6,
-    maturationPeriod: number = 0,
+    maturationPeriod: number = 100,
   ): Promise<BurnVerificationResult | null> {
     try {
       // Fetch transaction from blockchain using Chronik
@@ -119,14 +118,6 @@ export class BurnVerifier {
       const blockchainInfo = await this.chronik.blockchainInfo()
       const currentHeight = blockchainInfo.tipHeight
       const confirmations = currentHeight - tx.block.height + 1
-
-      // Check minimum confirmations for security
-      if (confirmations < minConfirmations) {
-        console.warn(
-          `[BurnVerifier] Insufficient confirmations: ${confirmations} (need ${minConfirmations})`,
-        )
-        return null
-      }
 
       // Calculate maturation status
       // Note: We return the result even if not matured - protocol decides if maturation is required

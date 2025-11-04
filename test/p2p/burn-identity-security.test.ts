@@ -71,13 +71,11 @@ class BurnTestHelper {
   async verifyBurn(
     txId: string,
     outputIndex: number,
-    minConfirmations: number = 6,
-    maturationPeriod: number = 0,
+    maturationPeriod: number = MUSIG2_MATURATION_PERIODS.IDENTITY_REGISTRATION,
   ) {
     return await this.burnVerifier.verifyBurnTransaction(
       txId,
       outputIndex,
-      minConfirmations,
       maturationPeriod,
     )
   }

@@ -107,14 +107,12 @@ export class MuSig2IdentityManager extends EventEmitter {
     outputIndex: number,
     publicKey: PublicKey,
     signature: Buffer,
-    minConfirmations: number = 6,
   ): Promise<string | null> {
     try {
       // 1. Verify burn transaction exists on blockchain
       const burnResult = await this.burnVerifier.verifyBurnTransaction(
         txId,
         outputIndex,
-        minConfirmations,
         this.maturationPeriod,
       )
 
@@ -309,7 +307,6 @@ export class MuSig2IdentityManager extends EventEmitter {
       const burnResult = await this.burnVerifier.verifyBurnTransaction(
         rotationBurnTxId,
         rotationBurnOutputIndex,
-        MUSIG2_MATURATION_PERIODS.MIN_CONFIRMATIONS,
         rotationMaturation,
       )
 
