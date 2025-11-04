@@ -305,6 +305,9 @@ export class Opcode {
   static readonly OP_CHECKDATASIGVERIFY = 187
   /** Reverse bytes of top stack item */
   static readonly OP_REVERSEBYTES = 188
+  // NOTE: When adding more op codes after OP_REVERSEBYTES, the lotus-lib AND lotusd
+  // script interpreter classes MUST be updated to EXCLUDE the new op code from disabled
+  // op code checks!
 
   // Opcode map for string lookup
   static readonly map = {

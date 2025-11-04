@@ -320,12 +320,18 @@ export function buildTapTree(tree: TapNode): TapTreeBuildResult {
  *
  * Control block format:
  * - 1 byte: leaf_version | parity_bit
- * - 32 bytes: internal public key x-coordinate + parity byte
+ * - 32 bytes: internal public key X-coordinate (without 0x02/0x03 prefix)
  * - 32*n bytes: merkle path
  *
- * Note: Lotus uses 33-byte keys, encoding parity in control block first bit
+ * Total size: 33 + 32*n bytes
  *
- * @param internalPubKey - Internal public key
+ * The parity bit (bit 0 of first byte) indicates if the internal pubkey's
+ * Y-coordinate is even (0) or odd (1), allowing reconstruction of the full
+ * 33-byte compressed public key during verification.
+ *
+ * Reference: lotusd/src/script/taproot.cpp lines 43-54
+ *
+ * @param internalPubKey - Internal public key (33-byte compressed)
  * @param leafIndex - Index of the leaf being spent
  * @param tree - Taproot tree structure
  * @returns Control block buffer
@@ -352,10 +358,10 @@ export function createControlBlock(
   const writer = new BufferWriter()
   writer.writeUInt8(controlByte)
 
-  // Next 32 bytes: x-coordinate + parity byte (but we store full 33-byte key)
-  // Actually, for Lotus we need to encode it specially
-  // From lotusd: we encode parity in first bit, then include the full pubkey
-  writer.write(pubKeyBytes)
+  // Next 32 bytes: x-coordinate only (not the full 33-byte compressed key)
+  // Parity is already encoded in the control byte above
+  // Control block format: [control_byte][32-byte x-coord][merkle_path...]
+  writer.write(pubKeyBytes.slice(1, 33)) // Skip the 0x02/0x03 prefix, write only x-coordinate
 
   // Merkle path
   for (const node of leaf.merklePath) {
@@ -537,5 +543,232 @@ export function buildScriptPathTaproot(
     commitment,
     merkleRoot: treeInfo.merkleRoot,
     leaves: treeInfo.leaves,
+  }
+}
+
+/**
+ * Verify Taproot script path spending
+ *
+ * Verifies that a script is correctly committed to in a Taproot output
+ * by validating the merkle proof in the control block.
+ *
+ * @param internalPubKey - Internal public key X-coordinate (32 bytes, without prefix)
+ * @param script - Script being revealed
+ * @param commitmentPubKey - Commitment public key from scriptPubKey (33 bytes)
+ * @param leafVersion - Leaf version from control block
+ * @param merklePath - Merkle path nodes from control block
+ * @param parity - Parity bit from control block (0=even Y, 1=odd Y)
+ * @returns true if verification succeeds
+ */
+export function verifyTaprootScriptPath(
+  internalPubKey: Buffer,
+  script: Script,
+  commitmentPubKey: Buffer,
+  leafVersion: number,
+  merklePath: Buffer[],
+  parity: number,
+): boolean {
+  try {
+    // Reconstruct full 33-byte compressed pubkey from 32-byte x-coordinate and parity
+    // internalPubKey is 32 bytes (x-coordinate only)
+    // parity bit tells us the prefix: 0 = 0x02 (even), 1 = 0x03 (odd)
+    const pubkeyPrefix = parity === 0 ? 0x02 : 0x03
+    const fullPubkey = Buffer.concat([
+      Buffer.from([pubkeyPrefix]),
+      internalPubKey,
+    ])
+
+    // Calculate leaf hash
+    let leafHash = calculateTapLeaf(script, leafVersion)
+
+    // Walk up the merkle tree
+    for (const pathNode of merklePath) {
+      // Sort hashes lexicographically before combining
+      if (Buffer.compare(leafHash, pathNode) < 0) {
+        leafHash = calculateTapBranch(leafHash, pathNode)
+      } else {
+        leafHash = calculateTapBranch(pathNode, leafHash)
+      }
+    }
+
+    // Calculate expected commitment from internal key and merkle root
+    const internalKey = new PublicKey(fullPubkey)
+    const expectedCommitment = tweakPublicKey(internalKey, leafHash)
+
+    // Verify commitment matches scriptPubkey commitment
+    // Note: We don't check parity against commitment like BIP341 does.
+    // The parity was already used to reconstruct the internal pubkey above.
+    // Reference: lotusd/src/script/taproot.cpp lines 59-65
+    const actualCommitment = new PublicKey(commitmentPubKey)
+    if (expectedCommitment.toString() !== actualCommitment.toString()) {
+      return false
+    }
+
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
+/**
+ * Result of Taproot spend verification
+ */
+export interface TaprootVerifyResult {
+  /** Whether verification succeeded */
+  success: boolean
+  /** Error message if verification failed */
+  error?: string
+  /** Script to execute (for script path spending) */
+  scriptToExecute?: Script
+  /** Stack after verification (for script path spending) */
+  stack?: Buffer[]
+}
+
+/**
+ * Verify Taproot spending (key path or script path)
+ *
+ * This is the main entry point for Taproot verification, handling both:
+ * - Key path spending: Single Schnorr signature
+ * - Script path spending: Script + control block + merkle proof
+ *
+ * Reference: lotusd/src/script/interpreter.cpp VerifyTaprootSpend() lines 2074-2165
+ *
+ * @param scriptPubkey - The Taproot scriptPubKey being spent
+ * @param stack - Stack from scriptSig execution
+ * @param tx - Transaction being verified
+ * @param nin - Input index
+ * @param flags - Script verification flags
+ * @param satoshisBN - Amount being spent (for sighash)
+ * @returns Verification result with error or script to execute
+ */
+export function verifyTaprootSpend(
+  scriptPubkey: Script,
+  stack: Buffer[],
+  flags: number,
+): TaprootVerifyResult {
+  // Import locally to avoid circular dependency
+  const SCRIPT_DISABLE_TAPROOT_SIGHASH_LOTUS = 1 << 22
+  const SCRIPT_TAPROOT_KEY_SPEND_PATH = 1 << 23
+  const TAPROOT_ANNEX_TAG = 0x50
+
+  // Check if Taproot is disabled
+  if (flags & SCRIPT_DISABLE_TAPROOT_SIGHASH_LOTUS) {
+    return { success: false, error: 'SCRIPT_ERR_TAPROOT_PHASEOUT' }
+  }
+
+  // Verify scriptPubkey is valid P2TR
+  if (!isPayToTaproot(scriptPubkey)) {
+    return { success: false, error: 'SCRIPT_ERR_SCRIPTTYPE_MALFORMED_SCRIPT' }
+  }
+
+  // Extract commitment pubkey from scriptPubkey
+  const scriptBuf = scriptPubkey.toBuffer()
+  const vchPubkey = scriptBuf.slice(
+    TAPROOT_INTRO_SIZE,
+    TAPROOT_SIZE_WITHOUT_STATE,
+  )
+
+  // Stack must not be empty
+  if (stack.length === 0) {
+    return { success: false, error: 'SCRIPT_ERR_INVALID_STACK_OPERATION' }
+  }
+
+  // Check for annex (not supported)
+  if (
+    stack.length >= 2 &&
+    stack[stack.length - 1].length > 0 &&
+    stack[stack.length - 1][0] === TAPROOT_ANNEX_TAG
+  ) {
+    return { success: false, error: 'SCRIPT_ERR_TAPROOT_ANNEX_NOT_SUPPORTED' }
+  }
+
+  // Key path spending: single signature on stack
+  if (stack.length === 1) {
+    // Key path spending is verified by the transaction's signature verification
+    // The interpreter will handle this after we return
+    return {
+      success: true,
+      stack,
+      // No script to execute for key path
+    }
+  }
+
+  // Script path spending: script and control block on stack
+  const controlBlock = stack[stack.length - 1]
+  const scriptBytes = stack[stack.length - 2]
+  const execScript = new Script(scriptBytes)
+
+  // Create new stack without script and control block
+  const newStack = stack.slice(0, stack.length - 2)
+
+  // Validate control block size
+  const sizeRemainder =
+    (controlBlock.length - TAPROOT_CONTROL_BASE_SIZE) %
+    TAPROOT_CONTROL_NODE_SIZE
+
+  if (
+    controlBlock.length < TAPROOT_CONTROL_BASE_SIZE ||
+    controlBlock.length > TAPROOT_CONTROL_MAX_SIZE ||
+    sizeRemainder !== 0
+  ) {
+    return { success: false, error: 'SCRIPT_ERR_TAPROOT_WRONG_CONTROL_SIZE' }
+  }
+
+  // Check leaf version
+  if ((controlBlock[0] & TAPROOT_LEAF_MASK) !== TAPROOT_LEAF_TAPSCRIPT) {
+    return {
+      success: false,
+      error: 'SCRIPT_ERR_TAPROOT_LEAF_VERSION_NOT_SUPPORTED',
+    }
+  }
+
+  // Extract internal pubkey and merkle path from control block
+  // Control block format: [control_byte][32-byte x-coord][merkle_path...]
+  // BASE_SIZE = 33 means bytes 0-32 are base (1 control + 32 pubkey)
+  const internalPubkey = controlBlock.slice(1, TAPROOT_CONTROL_BASE_SIZE)
+  const merklePath: Buffer[] = []
+  for (
+    let i = TAPROOT_CONTROL_BASE_SIZE;
+    i < controlBlock.length;
+    i += TAPROOT_CONTROL_NODE_SIZE
+  ) {
+    merklePath.push(controlBlock.slice(i, i + TAPROOT_CONTROL_NODE_SIZE))
+  }
+
+  // Verify script is in merkle tree
+  const leafVersion = controlBlock[0] & TAPROOT_LEAF_MASK
+  const parity = controlBlock[0] & 0x01
+
+  const isValid = verifyTaprootScriptPath(
+    internalPubkey,
+    execScript,
+    vchPubkey,
+    leafVersion,
+    merklePath,
+    parity,
+  )
+
+  if (!isValid) {
+    return {
+      success: false,
+      error: 'SCRIPT_ERR_TAPROOT_CONTROL_BLOCK_VERIFICATION_FAILED',
+    }
+  }
+
+  // Push state onto stack if present (matches lotusd behavior)
+  // Reference: lotusd/src/script/interpreter.cpp lines 2136-2140
+  const scriptPubkeyBuf = scriptPubkey.toBuffer()
+  if (scriptPubkeyBuf.length === TAPROOT_SIZE_WITH_STATE) {
+    const state = extractTaprootState(scriptPubkey)
+    if (state) {
+      newStack.push(state)
+    }
+  }
+
+  // Return script to execute and updated stack
+  return {
+    success: true,
+    stack: newStack,
+    scriptToExecute: execScript,
   }
 }

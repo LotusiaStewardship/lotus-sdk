@@ -7,11 +7,13 @@ import { PublicKey } from '../publickey.js'
 import { ECDSA } from '../crypto/ecdsa.js'
 import { Schnorr } from '../crypto/schnorr.js'
 import { Preconditions } from '../util/preconditions.js'
-import { BitcoreError } from '../errors.js'
-import { BufferUtil } from '../util/buffer.js'
-import { sighash, TransactionLike } from '../transaction/sighash.js'
-import { Transaction } from '../transaction/transaction.js'
-import { Input } from '../transaction/input.js'
+import type { Transaction } from '../transaction/transaction.js'
+import {
+  TAPROOT_INTRO_SIZE,
+  TAPROOT_SIZE_WITHOUT_STATE,
+  TAPROOT_SCRIPTTYPE,
+  verifyTaprootSpend,
+} from '../taproot.js'
 
 export interface InterpreterData {
   script?: Script
@@ -44,7 +46,13 @@ export interface InterpreterObject {
  */
 export class Interpreter {
   // Script verification flags
+  // Note: Lotus enforces many Bitcoin rules (P2SH, STRICTENC, etc.) as mandatory consensus rules
+  // These flags are kept for compatibility, but many are always enforced in Lotus
+  // Reference: lotusd/src/script/script_flags.h and lotusd/src/policy/policy.h
   static SCRIPT_VERIFY_NONE = 0
+
+  // Bitcoin compatibility flags (bits 0-15)
+  // Note: In Lotus, most of these are always enforced, not optional
   static SCRIPT_VERIFY_P2SH = 1 << 0
   static SCRIPT_VERIFY_STRICTENC = 1 << 1
   static SCRIPT_VERIFY_DERSIG = 1 << 2
@@ -52,18 +60,31 @@ export class Interpreter {
   static SCRIPT_VERIFY_NULLDUMMY = 1 << 4
   static SCRIPT_VERIFY_SIGPUSHONLY = 1 << 5
   static SCRIPT_VERIFY_MINIMALDATA = 1 << 6
-  static SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_NOPS = 1 << 7
-  static SCRIPT_VERIFY_CLEANSTACK = 1 << 8
+  static SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_NOPS = 1 << 7 // lotusd: same
+  static SCRIPT_VERIFY_CLEANSTACK = 1 << 8 // lotusd: same (MANDATORY)
   static SCRIPT_VERIFY_CHECKLOCKTIMEVERIFY = 1 << 9
   static SCRIPT_VERIFY_CHECKSEQUENCEVERIFY = 1 << 10
-  static SCRIPT_VERIFY_MINIMALIF = 1 << 13
+  static SCRIPT_VERIFY_MINIMALIF = 1 << 13 // lotusd: same
   static SCRIPT_VERIFY_NULLFAIL = 1 << 14
   static SCRIPT_VERIFY_COMPRESSED_PUBKEYTYPE = 1 << 15
-  static SCRIPT_ENABLE_SIGHASH_FORKID = 1 << 16
-  static SCRIPT_ENABLE_REPLAY_PROTECTION = 1 << 17
+
+  // Lotus-specific flags (bits 16+)
+  // Enables both SIGHASH_FORKID (0x40) and SIGHASH_LOTUS (0x60) signatures
+  // Reference: lotusd/src/script/script_flags.h line 47-49
+  static SCRIPT_ENABLE_SIGHASH_FORKID = 1 << 16 // lotusd: same (MANDATORY)
+  static SCRIPT_ENABLE_REPLAY_PROTECTION = 1 << 17 // lotusd: same
   static SCRIPT_ENABLE_CHECKDATASIG = 1 << 18
   static SCRIPT_DISALLOW_SEGWIT_RECOVERY = 1 << 20
   static SCRIPT_ENABLE_SCHNORR_MULTISIG = 1 << 21
+  static SCRIPT_VERIFY_INPUT_SIGCHECKS = 1 << 22 // lotusd: same (STANDARD)
+
+  // Taproot-specific flags
+  // Note: lotusd uses bits 0-1 for these, but we use higher bits to avoid conflicts
+  static SCRIPT_TAPROOT_KEY_SPEND_PATH = 1 << 23 // lotusd uses 1<<0
+  /**
+   * @deprecated No longer active as of Winter Solstice 2025 (Second Samuel)
+   */
+  static SCRIPT_DISABLE_TAPROOT_SIGHASH_LOTUS = 1 << 24 // lotusd uses 1<<1 (STANDARD)
 
   // Constants
   static MAX_SCRIPT_ELEMENT_SIZE = 520
@@ -136,6 +157,7 @@ export class Interpreter {
     this.flags = obj.flags !== undefined ? obj.flags : this.flags
     this.satoshisBN = obj.satoshisBN || this.satoshisBN
     this.outputScript = obj.outputScript || this.outputScript
+    this.stack = obj.stack || this.stack
     return this
   }
 
@@ -153,10 +175,10 @@ export class Interpreter {
   verify(
     scriptSig: Script,
     scriptPubkey: Script,
-    tx?: Transaction,
-    nin?: number,
-    flags?: number,
-    satoshisBN?: bigint,
+    tx: Transaction,
+    nin: number,
+    flags: number,
+    satoshisBN: bigint,
   ): boolean {
     Preconditions.checkArgument(
       scriptSig instanceof Script,
@@ -220,6 +242,22 @@ export class Interpreter {
     this.nin = nin
     this.flags = flags || Interpreter.SCRIPT_VERIFY_NONE
     this.satoshisBN = satoshisBN
+
+    // Check if scriptPubkey starts with OP_SCRIPTTYPE (e.g., Taproot)
+    // Reference: lotusd/src/script/interpreter.cpp lines 2198-2206
+    const scriptPubkeyBuf = scriptPubkey.toBuffer()
+    if (
+      scriptPubkeyBuf.length > 0 &&
+      scriptPubkeyBuf[0] === Opcode.OP_SCRIPTTYPE
+    ) {
+      // Verify script type (Taproot, etc.)
+      // validates against the values initialized above
+      if (!this._verifyScriptType(scriptPubkey)) {
+        return false
+      }
+
+      return true
+    }
 
     // Evaluate scriptPubkey with the stack from scriptSig
     if (!this.evaluate()) {
@@ -329,7 +367,8 @@ export class Interpreter {
       this.errstr = 'SCRIPT_ERR_SIG_DER_INVALID_FORMAT'
       return false
     } else if ((this.flags & Interpreter.SCRIPT_VERIFY_LOW_S) !== 0) {
-      const sig = Signature.fromTxFormat(buf)
+      // Note: buf here is DER only (without hashtype byte)
+      const sig = Signature.fromDER(buf, false)
       if (!sig.hasLowS()) {
         this.errstr = 'SCRIPT_ERR_SIG_DER_HIGH_S'
         return false
@@ -407,24 +446,32 @@ export class Interpreter {
 
     if ((this.flags & Interpreter.SCRIPT_VERIFY_STRICTENC) !== 0) {
       const sig = Signature.fromTxFormat(buf)
+
       if (!sig.hasDefinedHashtype()) {
         this.errstr = 'SCRIPT_ERR_SIG_HASHTYPE'
         return false
       }
-      if (
-        !(this.flags & Interpreter.SCRIPT_ENABLE_SIGHASH_FORKID) &&
-        sig.nhashtype! & Signature.SIGHASH_FORKID
-      ) {
-        this.errstr = 'SCRIPT_ERR_ILLEGAL_FORKID'
-        return false
-      }
 
-      if (
-        this.flags & Interpreter.SCRIPT_ENABLE_SIGHASH_FORKID &&
-        !(sig.nhashtype! & Signature.SIGHASH_FORKID)
-      ) {
-        this.errstr = 'SCRIPT_ERR_MUST_USE_FORKID'
-        return false
+      // Skip FORKID checks for Taproot key path spending
+      const isTaprootKeyPath =
+        (this.flags & Interpreter.SCRIPT_TAPROOT_KEY_SPEND_PATH) !== 0
+
+      if (!isTaprootKeyPath) {
+        if (
+          !(this.flags & Interpreter.SCRIPT_ENABLE_SIGHASH_FORKID) &&
+          sig.nhashtype! & Signature.SIGHASH_FORKID
+        ) {
+          this.errstr = 'SCRIPT_ERR_ILLEGAL_FORKID'
+          return false
+        }
+
+        if (
+          this.flags & Interpreter.SCRIPT_ENABLE_SIGHASH_FORKID &&
+          !(sig.nhashtype! & Signature.SIGHASH_FORKID)
+        ) {
+          this.errstr = 'SCRIPT_ERR_MUST_USE_FORKID'
+          return false
+        }
       }
     }
 
@@ -2088,13 +2135,12 @@ export class Interpreter {
   }
 
   /**
-   * Check if opcode is disabled (based on Lotus specification from lotusd)
+   * Check if opcode is disabled (matches lotusd/src/script/interpreter.cpp IsOpcodeDisabled)
    */
   private isOpcodeDisabled(opcode: number): boolean {
     switch (opcode) {
       // Disabled opcodes in Lotus
       case 80: // OP_RESERVED
-      case 98: // OP_VER
       case 101: // OP_VERIF
       case 102: // OP_VERNOTIF
       case 115: // OP_IFDUP - Disabled in Lotus!
@@ -2125,6 +2171,11 @@ export class Interpreter {
         return false
 
       default:
+        // All undefined opcodes (>= 0xbd = 189) are also disabled
+        // OP_REVERSEBYTES is 0xbc (188), so first undefined is 0xbd (189)
+        if (opcode >= 189) {
+          return true
+        }
         return false
     }
   }
@@ -2259,6 +2310,130 @@ export class Interpreter {
    */
   static isSchnorrSig(buf: Buffer): boolean {
     return (buf.length === 64 || buf.length === 65) && buf[0] !== 0x30
+  }
+
+  /**
+   * Verify script type (dispatches to appropriate handler)
+   * Reference: lotusd/src/script/interpreter.cpp lines 2158-2174
+   *
+   * Note: scriptSig has already been executed and its results are on this.stack
+   */
+  private _verifyScriptType(scriptPubkey: Script): boolean {
+    const buf = scriptPubkey.toBuffer()
+
+    // Must have at least 2 bytes: OP_SCRIPTTYPE + type byte
+    if (buf.length < 2) {
+      this.errstr = 'SCRIPT_ERR_SCRIPTTYPE_MALFORMED_SCRIPT'
+      return false
+    }
+
+    // Check script type (second byte)
+    const scriptType = buf[1]
+
+    switch (scriptType) {
+      case TAPROOT_SCRIPTTYPE: {
+        // Taproot script - delegate to taproot module
+        const result = verifyTaprootSpend(scriptPubkey, this.stack, this.flags)
+
+        if (!result.success) {
+          this.errstr = result.error || 'SCRIPT_ERR_UNKNOWN'
+          return false
+        }
+
+        // Update stack from verification
+        if (result.stack) {
+          this.stack = result.stack
+        }
+
+        // If there is a script to execute, evaluate it
+        if (result.scriptToExecute) {
+          const prevScript = this.script
+          const prevPc = this.pc
+          const prevPbegincodehash = this.pbegincodehash
+
+          this.script = result.scriptToExecute
+          this.pc = 0
+          this.pbegincodehash = 0
+
+          const evalResult = this.evaluate()
+
+          // Restore state
+          this.script = prevScript
+          this.pc = prevPc
+          this.pbegincodehash = prevPbegincodehash
+
+          if (!evalResult) {
+            return false
+          }
+
+          // Check final stack
+          if (this.stack.length === 0) {
+            this.errstr = 'SCRIPT_ERR_EVAL_FALSE_NO_RESULT'
+            return false
+          }
+
+          const finalBuf = this.stack[this.stack.length - 1]
+          if (!Interpreter.castToBool(finalBuf)) {
+            this.errstr = 'SCRIPT_ERR_EVAL_FALSE_IN_STACK'
+            return false
+          }
+        } else {
+          // Key path spending - verify signature
+          const scriptBuf = scriptPubkey.toBuffer()
+          const vchPubkey = scriptBuf.subarray(
+            TAPROOT_INTRO_SIZE,
+            TAPROOT_SIZE_WITHOUT_STATE,
+          )
+          const vchSig = this.stack[this.stack.length - 1]
+          const sigFlags =
+            this.flags | Interpreter.SCRIPT_TAPROOT_KEY_SPEND_PATH
+
+          // Check signature and pubkey encoding
+          if (
+            !this.checkTxSignatureEncoding(vchSig) ||
+            !this.checkPubkeyEncoding(vchPubkey)
+          ) {
+            return false
+          }
+
+          // Empty signature fails
+          if (vchSig.length === 0) {
+            this.errstr = 'SCRIPT_ERR_TAPROOT_VERIFY_SIGNATURE_FAILED'
+            return false
+          }
+
+          // Verify Schnorr signature with SIGHASH_LOTUS
+          const sig = Signature.fromTxFormat(vchSig)
+          const pubkey = new PublicKey(vchPubkey)
+
+          if (!sig.isSchnorr) {
+            this.errstr = 'SCRIPT_ERR_TAPROOT_KEY_SPEND_SIGNATURE_NOT_SCHNORR'
+            return false
+          }
+
+          try {
+            this.tx?.verifySignature(
+              sig,
+              pubkey,
+              this.nin!,
+              scriptPubkey, // Use scriptPubkey as subscript for Taproot
+              new BN(this.satoshisBN!.toString()),
+              sigFlags,
+              'schnorr',
+            )
+          } catch (e) {
+            this.errstr = 'SCRIPT_ERR_TAPROOT_VERIFY_SIGNATURE_FAILED'
+            return false
+          }
+        }
+
+        return true
+      }
+      // Unknown script type
+      default:
+        this.errstr = 'SCRIPT_ERR_SCRIPTTYPE_INVALID_TYPE'
+        return false
+    }
   }
 
   /**

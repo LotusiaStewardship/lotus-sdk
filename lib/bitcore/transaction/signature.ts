@@ -1,5 +1,4 @@
 import { Preconditions } from '../util/preconditions.js'
-import { BufferUtil } from '../util/buffer.js'
 import { JSUtil } from '../util/js.js'
 import { PublicKey, PublicKeyInput } from '../publickey.js'
 import { BitcoreError } from '../errors.js'

@@ -85,9 +85,11 @@ OP_SCRIPTTYPE OP_1 0x21 <33-byte commitment pubkey> 0x20 <32-byte state>
 
 ```
 <1 byte: leaf_version | parity>
-<33 bytes: internal_pubkey>
+<32 bytes: internal_pubkey X-coordinate>
 <32*n bytes: merkle path>
 ```
+
+**Note**: Total size is 33 + 32\*n bytes. The parity bit (bit 0 of first byte) indicates if the internal pubkey's Y-coordinate is even (0) or odd (1).
 
 **Requirements**:
 

@@ -567,6 +567,9 @@ function sighash(
     .toBuffer()
 
   const hash = Hash.sha256sha256(buf)
+  // Reverse the hash bytes here because Bitcoin sighash and signature logic expect little-endian order.
+  // This is a legacy convention from Satoshi's original implementation, where hashes are often displayed
+  // in big-endian for humans but processed in little-endian for signing and validation.
   return new BufferReader(hash).readReverse(32)
 }
 
@@ -614,8 +617,6 @@ function sign(
   signingMethod = signingMethod || 'ecdsa'
   let sig: Signature
 
-  // NOTE: Using 'little' endian matches bitcore-lib-xpi behavior
-  // Combined with BIP143 hash reversal, this produces correct signatures
   if (signingMethod === 'schnorr') {
     sig = Schnorr.sign(hashbuf, privateKey, 'big')
     sig.nhashtype = sighashType

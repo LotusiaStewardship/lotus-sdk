@@ -40,6 +40,7 @@ import { BN } from '../crypto/bn.js'
 import { TransactionSignature } from './signature.js'
 import type { Point } from '../crypto/point.js'
 import { sighash as computeSighash } from './sighash.js'
+import { Interpreter } from '../script/interpreter.js'
 
 export interface TransactionData {
   version?: number
@@ -76,7 +77,7 @@ const DUST_AMOUNT = 546
 // Margin of error to allow fees in the vecinity of the expected value but doesn't allow a big difference
 const FEE_SECURITY_MARGIN = 150
 
-// MAX_MONEY = 2,100,000,000,000,000 satoshis (2,100,000 LOTUS)
+// MAX_MONEY = 2,100,000,000,000,000 satoshis (2,100,000,000 XPI)
 // see lotusd/src/amount.h
 const MAX_MONEY = 2_100_000_000_000_000
 
@@ -500,7 +501,7 @@ export class Transaction {
     if (sigError) return sigError
 
     // Check for invalid satoshis
-    if (this.invalidSatoshis()) {
+    if (this._hasInvalidSatoshis()) {
       return new BitcoreError('Invalid satoshis in outputs')
     }
 
@@ -546,7 +547,7 @@ export class Transaction {
   /**
    * Check if transaction has invalid satoshis
    */
-  invalidSatoshis(): boolean {
+  private _hasInvalidSatoshis(): boolean {
     for (const output of this.outputs) {
       if (output.satoshis < 0) {
         return true
@@ -1509,7 +1510,87 @@ export class Transaction {
       inputSet.add(inputId)
     }
 
+    // Verify input scripts using the Interpreter
+    const scriptVerification = this._verifyScripts()
+    if (!scriptVerification.success) {
+      return scriptVerification.error || 'Script verification failed'
+    }
+
     return true
+  }
+
+  /**
+   * Verify all input scripts using the Interpreter
+   * This validates that each scriptSig properly satisfies its corresponding scriptPubkey
+   *
+   * @param flags - Script verification flags (optional, defaults to standard Lotus flags)
+   * @returns Object with success boolean and optional error message
+   */
+  private _verifyScripts(flags?: number): { success: boolean; error?: string } {
+    // Skip script verification for coinbase transactions
+    if (this.isCoinbase()) {
+      return { success: true }
+    }
+
+    // Check that all inputs have output information
+    if (!this.hasAllUtxoInfo()) {
+      return {
+        success: false,
+        error: 'Missing UTXO (output) information for script verification',
+      }
+    }
+
+    // Verify each input's script
+    for (let i = 0; i < this.inputs.length; i++) {
+      const input = this.inputs[i]
+
+      // Ensure scripts are defined
+      if (!input.script || !input.output?.script) {
+        return {
+          success: false,
+          error: `Input ${i} script verification failed: missing script`,
+        }
+      }
+
+      try {
+        // Use standard Lotus verification flags if not provided
+        const verifyFlags =
+          flags !== undefined
+            ? flags
+            : Interpreter.SCRIPT_VERIFY_P2SH |
+              Interpreter.SCRIPT_VERIFY_STRICTENC |
+              Interpreter.SCRIPT_VERIFY_DERSIG |
+              Interpreter.SCRIPT_VERIFY_LOW_S |
+              Interpreter.SCRIPT_VERIFY_NULLFAIL |
+              Interpreter.SCRIPT_ENABLE_SIGHASH_FORKID |
+              Interpreter.SCRIPT_ENABLE_SCHNORR_MULTISIG
+
+        // Verify once and capture both result and error
+        const interpreter = new Interpreter()
+        const isValid = interpreter.verify(
+          input.script,
+          input.output.script,
+          this,
+          i,
+          verifyFlags,
+          BigInt(input.output.satoshis),
+        )
+
+        if (!isValid) {
+          return {
+            success: false,
+            error: `Input ${i} script verification failed: ${interpreter.errstr}`,
+          }
+        }
+      } catch (error: unknown) {
+        return {
+          success: false,
+          error: `Input ${i} script verification error: ${error instanceof Error ? error.message : String(error)}`,
+        }
+      }
+    }
+
+    return { success: true }
   }
 
   /**
@@ -1587,6 +1668,20 @@ export class Transaction {
         return
       }
       clazz = TaprootInput
+      // Create TaprootInput with internal key and merkle root if provided
+      const taprootInput = new TaprootInput({
+        output: new Output({
+          script: unspentOutput.script,
+          satoshis: unspentOutput.satoshis,
+        }),
+        prevTxId: unspentOutput.txId,
+        outputIndex: unspentOutput.outputIndex,
+        script: new Script(),
+        internalPubKey: unspentOutput.internalPubKey,
+        merkleRoot: unspentOutput.merkleRoot,
+      })
+      this.addInput(taprootInput)
+      return
     } else if (unspentOutput.script.isPayToPublicKeyHash()) {
       clazz = PublicKeyHashInput
     } else if (unspentOutput.script.isPublicKeyOut()) {
