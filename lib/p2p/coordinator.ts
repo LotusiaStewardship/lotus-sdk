@@ -242,6 +242,9 @@ export class P2PCoordinator extends EventEmitter {
     // Setup event handlers
     this._setupEventHandlers()
 
+    // Register protocol stream handlers (must happen after node is created)
+    this._registerProtocolStreamHandlers()
+
     // Start node
     await this.node.start()
 
@@ -311,20 +314,9 @@ export class P2PCoordinator extends EventEmitter {
 
     this.protocolHandlers.set(handler.protocolName, handler)
 
-    // Register stream handler with libp2p if handler supports it
-    if (handler.handleStream && this.node) {
-      const streamHandler: StreamHandler = async (stream, connection) => {
-        try {
-          await handler.handleStream!(stream, connection)
-        } catch (error) {
-          console.error(
-            `Error in stream handler for ${handler.protocolName}:`,
-            error,
-          )
-        }
-      }
-      this.node.handle(handler.protocolId, streamHandler)
-    }
+    // Stream handler registration is deferred until start() is called
+    // This ensures this.node exists before calling node.handle()
+    // See _registerProtocolStreamHandlers() which is called from start()
   }
 
   /**
@@ -1009,6 +1001,36 @@ export class P2PCoordinator extends EventEmitter {
       }
     }
     this.node.handle('/lotus/message/1.0.0', messageHandler)
+  }
+
+  /**
+   * Register stream handlers for all protocol handlers
+   * Must be called after this.node is created
+   */
+  private _registerProtocolStreamHandlers(): void {
+    if (!this.node) {
+      throw new Error(
+        'Cannot register protocol stream handlers: node not created',
+      )
+    }
+
+    // Iterate through all registered protocol handlers
+    for (const handler of this.protocolHandlers.values()) {
+      // Register stream handler with libp2p if handler supports it
+      if (handler.handleStream) {
+        const streamHandler: StreamHandler = async (stream, connection) => {
+          try {
+            await handler.handleStream!(stream, connection)
+          } catch (error) {
+            console.error(
+              `Error in stream handler for ${handler.protocolName}:`,
+              error,
+            )
+          }
+        }
+        this.node.handle(handler.protocolId, streamHandler)
+      }
+    }
   }
 
   /**
