@@ -16,6 +16,7 @@ import {
   MuSigSession,
   MuSigSessionPhase,
 } from '../../bitcore/musig2/session.js'
+import { PeerInfo } from '../types.js'
 
 // ============================================================================
 // Event Names
@@ -60,6 +61,7 @@ export enum MuSig2Event {
   SESSION_FAILOVER_EXHAUSTED = 'session:failover-exhausted',
 
   // Peer Connection Events
+  PEER_DISCOVERED = 'peer:discovered', // Peer discovered via bootstrap (before connection)
   PEER_CONNECTED = 'peer:connected',
   PEER_DISCONNECTED = 'peer:disconnected',
 
@@ -141,6 +143,7 @@ export type MuSig2EventMap = {
   ) => void
 
   // Peer Connection Events
+  [MuSig2Event.PEER_DISCOVERED]: (peerInfo: PeerInfo) => void
   [MuSig2Event.PEER_CONNECTED]: (peerId: string) => void
   [MuSig2Event.PEER_DISCONNECTED]: (peerId: string) => void
 
@@ -355,6 +358,20 @@ export interface MuSig2P2PConfig {
    * Set to 0 to disable maturation requirement
    */
   burnMaturationPeriod?: number
+
+  /**
+   * Enable automatic connection to discovered peers
+   * Default: true
+   * When enabled, automatically attempts to connect to peers discovered via bootstrap
+   */
+  enableAutoConnect?: boolean
+
+  /**
+   * Minimum reputation score required for auto-connection (0-100)
+   * Default: 0 (connect to all discovered peers)
+   * Only applies when enableBurnBasedIdentity is true
+   */
+  minReputationForAutoConnect?: number
 }
 
 /**

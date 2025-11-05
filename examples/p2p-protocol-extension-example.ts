@@ -86,17 +86,33 @@ class ChatProtocolHandler implements IProtocolHandler {
   }
 
   /**
-   * Handle peer connection
+   * Handle peer discovery (before connection)
+   * Called when bootstrap nodes discover peers
+   */
+  async onPeerDiscovered(peerInfo: PeerInfo): Promise<void> {
+    console.log(
+      `[Chat] Peer discovered: ${peerInfo.peerId.substring(0, 12)}...`,
+    )
+    console.log(
+      `       Multiaddrs: ${peerInfo.multiaddrs?.length || 0} addresses`,
+    )
+    // Protocol can react to discovery (e.g., check if peer supports chat)
+    // Bootstrap module will automatically attempt to connect
+  }
+
+  /**
+   * Handle peer connection (after successful connection)
    */
   async onPeerConnected(peerId: string): Promise<void> {
-    console.log(`[Chat] New peer connected: ${peerId}`)
+    console.log(`[Chat] New peer connected: ${peerId.substring(0, 12)}...`)
+    console.log(`       Ready for chat protocol operations`)
   }
 
   /**
    * Handle peer disconnection
    */
   async onPeerDisconnected(peerId: string): Promise<void> {
-    console.log(`[Chat] Peer disconnected: ${peerId}`)
+    console.log(`[Chat] Peer disconnected: ${peerId.substring(0, 12)}...`)
     // Remove from all chat rooms
     for (const members of this.chatRooms.values()) {
       members.delete(peerId)

@@ -165,6 +165,9 @@ export class P2PCoordinator extends EventEmitter {
       services.pubsub = gossipsub({
         allowPublishToZeroTopicPeers: true,
         emitSelf: false,
+        // Enable peer exchange (PX) for subscription info propagation
+        // This allows peers to discover topic subscribers through intermediate nodes
+        doPX: true, // Critical for relaying subscription info through bootstrap nodes
       })
     }
 
@@ -229,8 +232,8 @@ export class P2PCoordinator extends EventEmitter {
       peerDiscovery,
       services,
       connectionManager: {
-        minConnections: this.config.connectionManager?.minConnections || 0,
-        maxConnections: this.config.connectionManager?.maxConnections || 100,
+        minConnections: this.config.connectionManager?.minConnections ?? 0,
+        maxConnections: this.config.connectionManager?.maxConnections ?? 50, // Sane default: 50 connections
       },
     }
 
@@ -885,8 +888,21 @@ export class P2PCoordinator extends EventEmitter {
     this.node.addEventListener('peer:connect', event => {
       const peerId = event.detail.toString()
 
+      // Get existing peer info (may have multiaddrs from discovery)
+      const existing = this.peerInfo.get(peerId)
+
+      // Get fresh multiaddrs from active connections
+      const connections = this.node!.getConnections(event.detail)
+      const multiaddrs = connections.flatMap(conn =>
+        conn.remoteAddr ? [conn.remoteAddr.toString()] : [],
+      )
+
+      // Merge with existing data, preferring fresh connection multiaddrs
       const peerInfo: PeerInfo = {
         peerId,
+        multiaddrs: multiaddrs.length > 0 ? multiaddrs : existing?.multiaddrs,
+        publicKey: existing?.publicKey,
+        metadata: existing?.metadata,
         lastSeen: Date.now(),
       }
       this.peerInfo.set(peerId, peerInfo)
@@ -936,6 +952,16 @@ export class P2PCoordinator extends EventEmitter {
 
       this.peerInfo.set(peerId, peerInfo)
       this.emit(ConnectionEvent.DISCOVERED, peerInfo)
+
+      // Notify protocol handlers about discovered peer
+      for (const handler of this.protocolHandlers.values()) {
+        handler.onPeerDiscovered?.(peerInfo).catch(error => {
+          console.error(
+            `Error in onPeerDiscovered for ${handler.protocolName}:`,
+            error,
+          )
+        })
+      }
     })
 
     // Register default message handler

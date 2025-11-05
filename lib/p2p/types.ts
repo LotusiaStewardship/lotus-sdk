@@ -273,6 +273,9 @@ export interface IProtocolHandler {
   /** Handle incoming message */
   handleMessage(message: P2PMessage, from: PeerInfo): Promise<void>
 
+  /** Handle peer discovery (before connection is established) */
+  onPeerDiscovered?(peerInfo: PeerInfo): Promise<void>
+
   /** Handle peer connection */
   onPeerConnected?(peerId: string): Promise<void>
 

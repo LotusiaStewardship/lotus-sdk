@@ -11,7 +11,7 @@
  */
 
 import { P2PCoordinator } from '../coordinator.js'
-import { P2PConfig } from '../types.js'
+import { P2PConfig, PeerInfo } from '../types.js'
 import { P2PProtocol } from '../protocol.js'
 import { P2PMessage } from '../types.js'
 import {
@@ -115,6 +115,8 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     chronikUrl: string | string[]
     enableBurnBasedIdentity: boolean
     burnMaturationPeriod: number
+    enableAutoConnect: boolean
+    minReputationForAutoConnect: number
   }
 
   constructor(p2pConfig: P2PConfig, musig2Config?: Partial<MuSig2P2PConfig>) {
@@ -163,6 +165,9 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       burnMaturationPeriod:
         musig2Config?.burnMaturationPeriod ??
         MUSIG2_MATURATION_PERIODS.IDENTITY_REGISTRATION,
+      enableAutoConnect: musig2Config?.enableAutoConnect ?? true,
+      minReputationForAutoConnect:
+        musig2Config?.minReputationForAutoConnect ?? 0,
     }
 
     // Initialize identity manager if burn-based identity is enabled
@@ -243,8 +248,8 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
 
           const hashbuf = Hash.sha256(participationData)
           const sig = new Signature({
-            r: new BN(data.signature.slice(0, 32), 'be'),
-            s: new BN(data.signature.slice(32, 64), 'be'),
+            r: new BN(data.signature.subarray(0, 32), 'be'),
+            s: new BN(data.signature.subarray(32, 64), 'be'),
             isSchnorr: true,
           })
 
@@ -1198,8 +1203,8 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     if (request.creatorSignature.length !== 64) {
       throw new Error('Invalid signature length')
     }
-    const r = new BN(request.creatorSignature.slice(0, 32), 'be')
-    const s = new BN(request.creatorSignature.slice(32, 64), 'be')
+    const r = new BN(request.creatorSignature.subarray(0, 32), 'be')
+    const s = new BN(request.creatorSignature.subarray(32, 64), 'be')
     const sig = new Signature({ r, s, isSchnorr: true })
 
     if (!Schnorr.verify(hashbuf3, sig, request.creatorPublicKey, 'big')) {
@@ -1954,7 +1959,102 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
   }
 
   /**
-   * Handle peer connection
+   * Handle peer discovery (before connection)
+   * Called when bootstrap nodes discover peers
+   */
+  _onPeerDiscovered(peerInfo: PeerInfo): void {
+    // Log discovery for debugging
+    console.log(
+      `[MuSig2P2P] Peer discovered: ${peerInfo.peerId.substring(0, 12)}... (${peerInfo.multiaddrs?.length || 0} addresses)`,
+    )
+
+    // Check if we're already connected to this peer
+    const isAlreadyConnected = this.isConnected(peerInfo.peerId)
+    if (isAlreadyConnected) {
+      console.log(
+        `[MuSig2P2P]   Already connected to ${peerInfo.peerId.substring(0, 12)}...`,
+      )
+      this.emit(MuSig2Event.PEER_DISCOVERED, peerInfo)
+      return
+    }
+
+    // Check if peer has known identity and reputation
+    let shouldAutoConnect = true
+    let reputation = 0
+
+    if (this.identityManager) {
+      const identity = this.identityManager.getIdentity(peerInfo.peerId)
+      if (identity) {
+        reputation = identity.reputation.score
+        console.log(
+          `[MuSig2P2P]   Known identity with reputation: ${reputation}/100`,
+        )
+
+        // Check minimum reputation for auto-connect
+        const minReputation = this.musig2Config.minReputationForAutoConnect ?? 0
+        if (reputation < minReputation) {
+          console.log(
+            `[MuSig2P2P]   Reputation ${reputation} below minimum ${minReputation} - skipping auto-connect`,
+          )
+          shouldAutoConnect = false
+        }
+      }
+    }
+
+    // Emit discovery event for applications to react
+    this.emit(MuSig2Event.PEER_DISCOVERED, peerInfo)
+
+    // Attempt automatic connection if enabled
+    const autoConnectEnabled = this.musig2Config.enableAutoConnect ?? true
+    if (autoConnectEnabled && shouldAutoConnect && peerInfo.multiaddrs) {
+      // Attempt connection asynchronously (don't block discovery event)
+      this._attemptAutoConnect(peerInfo, reputation).catch(error => {
+        console.warn(
+          `[MuSig2P2P] Auto-connect failed for ${peerInfo.peerId.substring(0, 12)}...:`,
+          error.message,
+        )
+      })
+    }
+  }
+
+  /**
+   * Attempt automatic connection to a discovered peer
+   * Called asynchronously from _onPeerDiscovered
+   */
+  private async _attemptAutoConnect(
+    peerInfo: PeerInfo,
+    reputation: number,
+  ): Promise<void> {
+    if (!peerInfo.multiaddrs || peerInfo.multiaddrs.length === 0) {
+      return
+    }
+
+    console.log(
+      `[MuSig2P2P] Attempting auto-connect to ${peerInfo.peerId.substring(0, 12)}...`,
+    )
+
+    // Try each multiaddr until one succeeds
+    for (const addr of peerInfo.multiaddrs) {
+      try {
+        await this.connectToPeer(addr)
+        console.log(
+          `[MuSig2P2P] ✅ Auto-connected to ${peerInfo.peerId.substring(0, 12)}... at ${addr}`,
+        )
+        return // Success - stop trying
+      } catch (error) {
+        // Try next multiaddr
+        continue
+      }
+    }
+
+    // All connection attempts failed
+    console.warn(
+      `[MuSig2P2P] ⚠️  Failed to auto-connect to ${peerInfo.peerId.substring(0, 12)}... (tried ${peerInfo.multiaddrs.length} addresses)`,
+    )
+  }
+
+  /**
+   * Handle peer connection (after successful connection)
    */
   _onPeerConnected(peerId: string): void {
     // Could notify active sessions
@@ -2071,8 +2171,8 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       }
 
       // Parse as Schnorr signature (64 bytes)
-      const r = new BN(announcement.creatorSignature.slice(0, 32), 'be')
-      const s = new BN(announcement.creatorSignature.slice(32, 64), 'be')
+      const r = new BN(announcement.creatorSignature.subarray(0, 32), 'be')
+      const s = new BN(announcement.creatorSignature.subarray(32, 64), 'be')
       signature = new Signature({ r, s, isSchnorr: true })
     } catch (error) {
       console.error('[MuSig2P2P] Failed to parse signature:', error)
@@ -2651,8 +2751,8 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
 
             // Construct Signature object from buffer
             const signature = new Signature({
-              r: new BN(signatureBuffer.slice(0, 32), 'be'),
-              s: new BN(signatureBuffer.slice(32, 64), 'be'),
+              r: new BN(signatureBuffer.subarray(0, 32), 'be'),
+              s: new BN(signatureBuffer.subarray(32, 64), 'be'),
               isSchnorr: true,
             })
 

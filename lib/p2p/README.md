@@ -121,6 +121,56 @@ const resources = await coordinator.discoverResources('session')
 await coordinator.stop()
 ```
 
+### Connection Management Configuration
+
+The P2P layer supports configurable connection limits via environment variables or programmatic configuration.
+
+**Environment Variables** (via `.env` file):
+
+```bash
+# Maximum number of general P2P connections
+# Default: 50 (adequate for most client nodes)
+# Recommended: 20-100 for clients, 100-500 for bootstrap nodes
+P2P_MAX_CONNECTIONS=50
+
+# Minimum number of P2P connections to maintain
+# Default: 10 (maintains network health)
+# Recommended: 5-20 for clients, 20-50 for bootstrap nodes
+P2P_MIN_CONNECTIONS=10
+```
+
+**Programmatic Configuration**:
+
+```typescript
+import { P2P } from 'lotus-lib/utils/settings'
+
+const coordinator = new P2PCoordinator({
+  listen: ['/ip4/0.0.0.0/tcp/0'],
+  connectionManager: {
+    minConnections: P2P.minConnections, // From .env or defaults to 10
+    maxConnections: P2P.maxConnections, // From .env or defaults to 50
+  },
+})
+```
+
+**Important Notes**:
+
+1. **General P2P connections** are for network health (DHT, GossipSub, peer discovery)
+2. **Session-specific connections** (e.g., MuSig2 signers) are managed separately
+3. libp2p maintains connections within the min/max range automatically
+4. Sane defaults are provided if `.env` is not configured:
+   - Default max: 50 connections
+   - Default min: 10 connections
+
+**Recommended Configurations**:
+
+| Node Type      | Max Connections | Min Connections | Use Case              |
+| -------------- | --------------- | --------------- | --------------------- |
+| Wallet Client  | 20-50           | 5-10            | Lightweight wallet UX |
+| Full Client    | 50-100          | 10-20           | Standard client node  |
+| Bootstrap Node | 100-500         | 20-50           | Public discovery node |
+| Relay Node     | 200-1000        | 50-100          | NAT traversal relay   |
+
 ---
 
 ## Components
@@ -158,8 +208,20 @@ class MyProtocol implements IProtocolHandler {
     // Handle libp2p streams (optional)
   }
 
+  async onPeerDiscovered(peerInfo: PeerInfo): Promise<void> {
+    // Handle peer discovery (e.g., from bootstrap nodes)
+    // Called before connection is established
+    console.log('Discovered peer:', peerInfo.peerId, peerInfo.multiaddrs)
+  }
+
   async onPeerConnected(peerId: string): Promise<void> {
-    // Handle peer connection
+    // Handle peer connection (after successful connection)
+    console.log('Connected to peer:', peerId)
+  }
+
+  async onPeerDisconnected(peerId: string): Promise<void> {
+    // Handle peer disconnection
+    console.log('Disconnected from peer:', peerId)
   }
 }
 
@@ -293,8 +355,9 @@ interface IProtocolHandler {
 
   handleMessage(message: P2PMessage, from: PeerInfo): Promise<void>
   handleStream?(stream, connection): Promise<void> // Optional libp2p stream handler
-  onPeerConnected?(peerId: string): Promise<void>
-  onPeerDisconnected?(peerId: string): Promise<void>
+  onPeerDiscovered?(peerInfo: PeerInfo): Promise<void> // Peer discovered (before connection)
+  onPeerConnected?(peerId: string): Promise<void> // Peer connected
+  onPeerDisconnected?(peerId: string): Promise<void> // Peer disconnected
 }
 ```
 
@@ -337,19 +400,35 @@ const coordinator = new P2PCoordinator({
 ### 3. Peer Discovery
 
 ```typescript
-// Bootstrap discovery
+// Bootstrap discovery - automatically connects to bootstrap nodes
 const coordinator = new P2PCoordinator({
   listen: ['/ip4/0.0.0.0/tcp/0'],
-  bootstrapPeers: [
-    '/dnsaddr/bootstrap.libp2p.io/p2p/QmBootstrap1...',
-    '/dnsaddr/bootstrap.libp2p.io/p2p/QmBootstrap2...',
-  ],
+  bootstrapPeers: ['/dns4/bootstrap.lotusia.org/tcp/4001/p2p/12D3Koo...'],
 })
 
-// Listen for discovered peers
-coordinator.on('peer:discovery', peer => {
-  console.log('Discovered peer:', peer.peerId)
+// Listen for discovered peers at coordinator level
+coordinator.on('peer:discovery', (peerInfo: PeerInfo) => {
+  console.log('Discovered peer:', peerInfo.peerId, peerInfo.multiaddrs)
+  // Bootstrap module will automatically attempt to connect
 })
+
+// OR implement onPeerDiscovered in your protocol handler
+class MyProtocol implements IProtocolHandler {
+  // ... other methods ...
+
+  async onPeerDiscovered(peerInfo: PeerInfo): Promise<void> {
+    // React to peer discovery (e.g., check if peer offers your service)
+    console.log('Protocol notified of discovery:', peerInfo.peerId)
+
+    // Optionally attempt connection if not auto-connecting
+    // await coordinator.connectToPeer(peerInfo.multiaddrs[0])
+  }
+
+  async onPeerConnected(peerId: string): Promise<void> {
+    // Peer successfully connected - ready for protocol operations
+    console.log('Peer connected:', peerId)
+  }
+}
 ```
 
 ### 4. Stream Protocols
