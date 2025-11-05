@@ -223,6 +223,11 @@ class MyProtocol implements IProtocolHandler {
     // Handle peer disconnection
     console.log('Disconnected from peer:', peerId)
   }
+
+  async onPeerUpdated(peerInfo: PeerInfo): Promise<void> {
+    // Handle peer information update (e.g., multiaddrs changed)
+    console.log('Peer updated:', peerInfo.peerId, peerInfo.multiaddrs)
+  }
 }
 
 coordinator.registerProtocol(new MyProtocol())
@@ -324,6 +329,7 @@ class P2PCoordinator extends EventEmitter {
   on('peer:connect', (peer: PeerInfo) => void)
   on('peer:disconnect', (peer: PeerInfo) => void)
   on('peer:discovery', (peer: PeerInfo) => void)
+  on('peer:update', (peer: PeerInfo) => void)
   on('message', (message: P2PMessage, from: PeerInfo) => void)
   on('error', (error: Error) => void)
 }
@@ -358,6 +364,7 @@ interface IProtocolHandler {
   onPeerDiscovered?(peerInfo: PeerInfo): Promise<void> // Peer discovered (before connection)
   onPeerConnected?(peerId: string): Promise<void> // Peer connected
   onPeerDisconnected?(peerId: string): Promise<void> // Peer disconnected
+  onPeerUpdated?(peerInfo: PeerInfo): Promise<void> // Peer information updated (e.g., multiaddrs changed)
 }
 ```
 
@@ -428,8 +435,32 @@ class MyProtocol implements IProtocolHandler {
     // Peer successfully connected - ready for protocol operations
     console.log('Peer connected:', peerId)
   }
+
+  async onPeerUpdated(peerInfo: PeerInfo): Promise<void> {
+    // Peer information updated (e.g., multiaddrs changed)
+    // This happens when a peer's network configuration changes
+    console.log('Peer updated:', peerInfo.peerId, peerInfo.multiaddrs)
+
+    // Example: Update cached peer information
+    // this.peerCache.set(peerInfo.peerId, peerInfo)
+  }
 }
 ```
+
+**When is `peer:update` fired?**
+
+The `peer:update` event is emitted by libp2p when a peer's information changes, typically:
+
+- Multiaddrs change (e.g., NAT traversal completes, IP address changes)
+- Peer establishes a new transport connection
+- Network configuration changes (e.g., relay → direct connection upgrade via DCUTR)
+
+This event is useful for:
+
+- Keeping cached peer information up-to-date
+- Updating UI displays of peer connection status
+- Refreshing connection strategies when peer addresses change
+- Tracking network topology changes
 
 ### 4. Stream Protocols
 

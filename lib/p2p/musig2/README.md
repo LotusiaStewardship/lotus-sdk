@@ -1433,6 +1433,57 @@ coordinator.on('signer:discovered', (advertisement: SignerAdvertisement) => {
 })
 ```
 
+#### Peer Connection Events
+
+**peer:discovered**
+
+Fired when a peer is discovered via bootstrap nodes (before connection is established).
+
+```typescript
+coordinator.on('peer:discovered', (peerInfo: PeerInfo) => {
+  console.log('Discovered peer:', peerInfo.peerId, peerInfo.multiaddrs)
+})
+```
+
+**peer:connected**
+
+Fired when a peer connection is successfully established.
+
+```typescript
+coordinator.on('peer:connected', (peerId: string) => {
+  console.log('Connected to peer:', peerId)
+})
+```
+
+**peer:disconnected**
+
+Fired when a peer disconnects.
+
+```typescript
+coordinator.on('peer:disconnected', (peerId: string) => {
+  console.log('Peer disconnected:', peerId)
+})
+```
+
+**peer:updated**
+
+Fired when a peer's information is updated (e.g., multiaddrs change due to NAT traversal, DCUTR upgrade, or IP address change).
+
+```typescript
+coordinator.on('peer:updated', (peerInfo: PeerInfo) => {
+  console.log('Peer updated:', peerInfo.peerId, peerInfo.multiaddrs)
+  // The coordinator automatically updates cached signer advertisements
+  // with the new multiaddrs when this event fires
+})
+```
+
+This event is particularly useful for:
+
+- Tracking when relay connections are upgraded to direct P2P via DCUTR
+- Monitoring network topology changes in signing sessions
+- Updating cached peer information in your application
+- Debugging connection issues in distributed signing scenarios
+
 #### Security Events
 
 ```typescript

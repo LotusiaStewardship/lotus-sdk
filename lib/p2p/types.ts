@@ -105,6 +105,7 @@ export enum ConnectionEvent {
   CONNECTED = 'peer:connect',
   DISCONNECTED = 'peer:disconnect',
   DISCOVERED = 'peer:discovery',
+  UPDATED = 'peer:update',
   MESSAGE = 'message',
   ERROR = 'error',
 }
@@ -281,6 +282,9 @@ export interface IProtocolHandler {
 
   /** Handle peer disconnection */
   onPeerDisconnected?(peerId: string): Promise<void>
+
+  /** Handle peer information update */
+  onPeerUpdated?(peerInfo: PeerInfo): Promise<void>
 
   /** Handle incoming stream (optional) */
   handleStream?(stream: Stream, connection: Connection): Promise<void>

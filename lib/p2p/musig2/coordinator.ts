@@ -2086,6 +2086,36 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     this.emit(MuSig2Event.PEER_DISCONNECTED, peerId)
   }
 
+  /**
+   * Handle peer information update
+   * Called when libp2p fires peer:update event (e.g., when multiaddrs change)
+   */
+  _onPeerUpdated(peerInfo: PeerInfo): void {
+    console.log(
+      `[MuSig2P2P] Peer updated: ${peerInfo.peerId.substring(0, 12)}... (${peerInfo.multiaddrs?.length || 0} addresses)`,
+    )
+
+    // Update signer advertisements if this peer has advertised
+    for (const [publicKeyHex, advertisement] of this.signerAdvertisements) {
+      if (advertisement.peerId === peerInfo.peerId) {
+        // Update multiaddrs in the cached advertisement (only if provided)
+        if (peerInfo.multiaddrs) {
+          const updatedAdvertisement = {
+            ...advertisement,
+            multiaddrs: peerInfo.multiaddrs,
+          }
+          this.signerAdvertisements.set(publicKeyHex, updatedAdvertisement)
+          console.log(
+            `[MuSig2P2P]   Updated multiaddrs for signer advertisement: ${publicKeyHex.substring(0, 12)}...`,
+          )
+        }
+      }
+    }
+
+    // Emit event for external consumers
+    this.emit('peer:updated' as MuSig2Event, peerInfo)
+  }
+
   // Private helper methods for messaging
 
   /**

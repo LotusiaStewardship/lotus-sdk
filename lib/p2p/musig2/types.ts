@@ -64,6 +64,7 @@ export enum MuSig2Event {
   PEER_DISCOVERED = 'peer:discovered', // Peer discovered via bootstrap (before connection)
   PEER_CONNECTED = 'peer:connected',
   PEER_DISCONNECTED = 'peer:disconnected',
+  PEER_UPDATED = 'peer:updated', // Peer information updated (e.g., multiaddrs changed)
 
   // MuSig2 Protocol Round Events
   ROUND1_COMPLETE = 'round1:complete',
@@ -146,6 +147,7 @@ export type MuSig2EventMap = {
   [MuSig2Event.PEER_DISCOVERED]: (peerInfo: PeerInfo) => void
   [MuSig2Event.PEER_CONNECTED]: (peerId: string) => void
   [MuSig2Event.PEER_DISCONNECTED]: (peerId: string) => void
+  [MuSig2Event.PEER_UPDATED]: (peerInfo: PeerInfo) => void
 
   // MuSig2 Protocol Round Events
   [MuSig2Event.ROUND1_COMPLETE]: (sessionId: string) => void

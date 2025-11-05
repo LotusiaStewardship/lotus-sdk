@@ -214,6 +214,15 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
   }
 
   /**
+   * Handle peer information update
+   */
+  async onPeerUpdated(peerInfo: PeerInfo): Promise<void> {
+    if (this.coordinator) {
+      this.coordinator._onPeerUpdated(peerInfo)
+    }
+  }
+
+  /**
    * Handle session announcement
    */
   private async _handleSessionAnnounce(

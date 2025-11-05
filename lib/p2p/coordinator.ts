@@ -964,6 +964,42 @@ export class P2PCoordinator extends EventEmitter {
       }
     })
 
+    this.node.addEventListener('peer:update', event => {
+      const detail = event.detail
+      const peer = detail.peer
+      const peerId = peer.id.toString()
+
+      // Get existing peer info
+      const existing = this.peerInfo.get(peerId)
+
+      // Get fresh multiaddrs from active connections if available
+      const connections = this.node!.getConnections(peer.id)
+      const multiaddrs = connections.flatMap(conn =>
+        conn.remoteAddr ? [conn.remoteAddr.toString()] : [],
+      )
+
+      const peerInfo: PeerInfo = {
+        peerId,
+        multiaddrs: multiaddrs.length > 0 ? multiaddrs : existing?.multiaddrs,
+        publicKey: existing?.publicKey,
+        metadata: existing?.metadata,
+        lastSeen: Date.now(),
+      }
+
+      this.peerInfo.set(peerId, peerInfo)
+      this.emit(ConnectionEvent.UPDATED, peerInfo)
+
+      // Notify protocol handlers about updated peer
+      for (const handler of this.protocolHandlers.values()) {
+        handler.onPeerUpdated?.(peerInfo).catch(error => {
+          console.error(
+            `Error in onPeerUpdated for ${handler.protocolName}:`,
+            error,
+          )
+        })
+      }
+    })
+
     // Register default message handler
     const messageHandler: StreamHandler = async (stream, connection) => {
       try {
