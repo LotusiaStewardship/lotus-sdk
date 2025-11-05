@@ -10,7 +10,13 @@
  * Implements IProtocolHandler for MuSig2 coordination
  */
 
-import type { P2PMessage, PeerInfo, IProtocolHandler } from '../types.js'
+import type {
+  P2PMessage,
+  PeerInfo,
+  IProtocolHandler,
+  Stream,
+  Connection,
+} from '../types.js'
 import type { MuSig2P2PCoordinator } from './coordinator.js'
 import {
   MuSig2MessageType,
@@ -57,6 +63,77 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
    */
   setSecurityManager(securityManager: SecurityManager): void {
     this.securityManager = securityManager
+  }
+
+  /**
+   * Handle incoming stream (required for protocol advertisement registration)
+   */
+  async handleStream(stream: Stream, connection: Connection): Promise<void> {
+    try {
+      const data: Uint8Array[] = []
+      let totalSize = 0
+      const MAX_MESSAGE_SIZE = 100_000 // 100KB limit (DoS protection)
+
+      // Stream is AsyncIterable - iterate directly
+      for await (const chunk of stream) {
+        if (chunk instanceof Uint8Array) {
+          totalSize += chunk.length
+
+          // SECURITY: Check total size to prevent memory exhaustion
+          if (totalSize > MAX_MESSAGE_SIZE) {
+            console.warn(
+              `[MuSig2P2P] Oversized message from ${connection.remotePeer.toString()}: ${totalSize} bytes (max: ${MAX_MESSAGE_SIZE})`,
+            )
+            stream.abort(new Error('Message too large'))
+            return
+          }
+
+          data.push(chunk.subarray())
+        } else {
+          // Handle Uint8ArrayList
+          totalSize += chunk.length
+
+          // SECURITY: Check total size
+          if (totalSize > MAX_MESSAGE_SIZE) {
+            console.warn(
+              `[MuSig2P2P] Oversized message from ${connection.remotePeer.toString()}: ${totalSize} bytes (max: ${MAX_MESSAGE_SIZE})`,
+            )
+            stream.abort(new Error('Message too large'))
+            return
+          }
+
+          data.push(chunk.subarray())
+        }
+      }
+
+      // Check if we received any data
+      if (data.length === 0) {
+        // Stream closed without sending data - this can happen during shutdown
+        return
+      }
+
+      // Combine chunks
+      const combined = Buffer.concat(data.map(d => Buffer.from(d)))
+
+      // Check if combined buffer is empty
+      if (combined.length === 0) {
+        return
+      }
+
+      // Deserialize message
+      const message: P2PMessage = JSON.parse(combined.toString('utf8'))
+
+      // Get peer info
+      const from: PeerInfo = {
+        peerId: connection.remotePeer.toString(),
+        lastSeen: Date.now(),
+      }
+
+      // Route to message handler
+      await this.handleMessage(message, from)
+    } catch (error) {
+      console.error(`[MuSig2P2P] Error processing incoming stream:`, error)
+    }
   }
 
   /**
