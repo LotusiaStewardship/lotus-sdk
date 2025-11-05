@@ -5,8 +5,7 @@
  */
 
 import { PublicKey } from '../bitcore/publickey.js'
-import type { Connection, Stream } from '@libp2p/interface'
-import type { PeerId } from '@libp2p/interface-peer-id'
+import type { Connection, Stream, PeerId } from '@libp2p/interface'
 import type { Multiaddr } from '@multiformats/multiaddr'
 import type { Libp2p } from 'libp2p'
 import type { PeerInfoMapper } from '@libp2p/kad-dht'
@@ -114,13 +113,24 @@ export enum ConnectionEvent {
  * P2P Configuration
  */
 export interface P2PConfig {
+  /**
+   * Fixed peer identity (optional - for persistent node identity across restarts)
+   * When provided, the node will use this PeerId instead of generating a random one
+   * The PeerId contains both public and private keys for node authentication
+   */
+  peerId?: PeerId
+
   /** Listen addresses (multiaddrs) */
   listen?: string[]
 
   /** Announce addresses (multiaddrs) */
   announce?: string[]
 
-  /** Bootstrap peer addresses */
+  /**
+   * Bootstrap peer addresses (multiaddrs with peer IDs)
+   * When provided, the node will automatically connect to these peers on startup
+   * Example: ['/ip4/135.148.150.142/tcp/6969/p2p/12D3KooW...']
+   */
   bootstrapPeers?: string[]
 
   /** Enable Kad-DHT */

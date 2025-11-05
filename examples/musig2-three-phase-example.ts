@@ -59,7 +59,7 @@ async function threePhaseExample() {
   // ========================================================================
 
   const aliceCoordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/0.0.0.0/tcp/0'], // TCP transport (primary for Node.js)
+    listen: ['/ip4/127.0.0.1/tcp/0'], // TCP transport (primary for Node.js)
     enableDHT: true,
     enableDHTServer: false,
     enableRelay: true, // Circuit Relay v2 (PRIMARY NAT solution)
@@ -74,7 +74,7 @@ async function threePhaseExample() {
   })
 
   const bobCoordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/0.0.0.0/tcp/0'],
+    listen: ['/ip4/127.0.0.1/tcp/0'],
     enableDHT: true,
     enableDHTServer: false,
     enableRelay: true,
@@ -87,7 +87,7 @@ async function threePhaseExample() {
   })
 
   const charlieCoordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/0.0.0.0/tcp/0'],
+    listen: ['/ip4/127.0.0.1/tcp/0'],
     enableDHT: true,
     enableDHTServer: false,
     enableRelay: true,
@@ -433,7 +433,7 @@ async function advertisementExample() {
   console.log('\n=== Signer Advertisement Example ===\n')
 
   const coordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/0.0.0.0/tcp/0'],
+    listen: ['/ip4/127.0.0.1/tcp/0'],
     enableDHT: true,
     enableRelay: true,
     enableAutoNAT: true,
@@ -565,7 +565,7 @@ async function matchmakingDHTExample() {
 
   // Bob runs a signing service (Circuit Relay enabled for NAT traversal)
   const bobCoordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/0.0.0.0/tcp/0'],
+    listen: ['/ip4/127.0.0.1/tcp/0'],
     enableDHT: true,
     enableDHTServer: true, // Bob participates in DHT routing
     enableRelay: true, // Circuit Relay for NAT traversal
@@ -579,7 +579,7 @@ async function matchmakingDHTExample() {
 
   // Charlie runs a signing service (Circuit Relay enabled for NAT traversal)
   const charlieCoordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/0.0.0.0/tcp/0'],
+    listen: ['/ip4/127.0.0.1/tcp/0'],
     enableDHT: true,
     enableDHTServer: true, // Charlie participates in DHT routing
     enableRelay: true, // Circuit Relay for NAT traversal
@@ -710,7 +710,7 @@ async function matchmakingDHTExample() {
 
   // Alice creates her coordinator (client mode with Circuit Relay)
   const aliceCoordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/0.0.0.0/tcp/0'],
+    listen: ['/ip4/127.0.0.1/tcp/0'],
     enableDHT: true,
     enableDHTServer: false, // Alice is a client, not a DHT server
     enableRelay: true, // Circuit Relay for NAT traversal
@@ -1067,7 +1067,7 @@ async function matchmakingGossipSubExample() {
   console.log('--- Phase 1: Alice Joins and Subscribes ---\n')
 
   const aliceCoordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/0.0.0.0/tcp/0'],
+    listen: ['/ip4/127.0.0.1/tcp/0'],
     enableDHT: true,
     enableDHTServer: false,
     enableGossipSub: true,
@@ -1119,7 +1119,7 @@ async function matchmakingGossipSubExample() {
   console.log('--- Phase 2: Bob & Charlie Join and Advertise ---\n')
 
   const bobCoordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/0.0.0.0/tcp/0'],
+    listen: ['/ip4/127.0.0.1/tcp/0'],
     enableDHT: true,
     enableDHTServer: true,
     enableGossipSub: true,
@@ -1130,7 +1130,7 @@ async function matchmakingGossipSubExample() {
   })
 
   const charlieCoordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/0.0.0.0/tcp/0'],
+    listen: ['/ip4/127.0.0.1/tcp/0'],
     enableDHT: true,
     enableDHTServer: true,
     enableGossipSub: true,
@@ -1364,7 +1364,7 @@ async function eventDrivenExample() {
   console.log('\n=== Event-Driven Discovery Example ===\n')
 
   const coordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/0.0.0.0/tcp/0'],
+    listen: ['/ip4/127.0.0.1/tcp/0'],
     enableDHT: true,
     enableRelay: true,
     enableAutoNAT: true,

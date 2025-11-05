@@ -26,6 +26,7 @@ import { circuitRelayServer } from '@libp2p/circuit-relay-v2'
 import { autoNAT } from '@libp2p/autonat'
 import { dcutr } from '@libp2p/dcutr'
 import { uPnPNAT } from '@libp2p/upnp-nat'
+import { bootstrap } from '@libp2p/bootstrap'
 import { multiaddr, Multiaddr } from '@multiformats/multiaddr'
 import { peerIdFromString } from '@libp2p/peer-id'
 import type { Connection, Stream, PeerId } from '@libp2p/interface'
@@ -105,26 +106,14 @@ export class P2PCoordinator extends EventEmitter {
     let peerInfoMapper = this.config.dhtPeerInfoMapper
 
     if (!peerInfoMapper) {
-      // Auto-detect: If listening on localhost OR bootstraps are localhost, use passthroughMapper
-      // If listening on public addresses AND no localhost bootstraps, use removePrivateAddressesMapper
+      // Auto-detect: If listening on localhost, use passthroughMapper
+      // If listening on public addresses, use removePrivateAddressesMapper
       const listenAddrs = this.config.listen || ['/ip4/0.0.0.0/tcp/0']
-      const bootstrapAddrs = this.config.bootstrapPeers || []
-
-      const isListenLocalhost = listenAddrs.some(
-        addr => addr.includes('127.0.0.1') || addr.includes('localhost'),
-      )
-      const isBootstrapLocalhost = bootstrapAddrs.some(
+      const isLocalhost = listenAddrs.some(
         addr => addr.includes('127.0.0.1') || addr.includes('localhost'),
       )
 
-      // Use passthroughMapper if EITHER listen or bootstrap uses localhost
-      // This fixes DHT in local testing scenarios where 0.0.0.0 is used for listen
-      // but all actual connections are on 127.0.0.1
-      if (
-        isListenLocalhost ||
-        isBootstrapLocalhost ||
-        bootstrapAddrs.length === 0
-      ) {
+      if (isLocalhost) {
         // Development/testing on localhost - allow private addresses
         peerInfoMapper = passthroughMapper
       } else {
@@ -213,8 +202,23 @@ export class P2PCoordinator extends EventEmitter {
       services.upnpNAT = uPnPNAT()
     }
 
+    // Peer discovery configuration
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const peerDiscovery: any[] = []
+
+    // Bootstrap peer discovery (automatic connection to bootstrap nodes)
+    // If bootstrapPeers are configured, automatically connect on startup
+    if (this.config.bootstrapPeers && this.config.bootstrapPeers.length > 0) {
+      peerDiscovery.push(
+        bootstrap({
+          list: this.config.bootstrapPeers,
+        }),
+      )
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const config: any = {
+      peerId: this.config.peerId, // Use fixed peerId if provided (for persistent identity)
       addresses: {
         listen: this.config.listen || ['/ip4/0.0.0.0/tcp/0'],
         announce: this.config.announce || [],
@@ -222,6 +226,7 @@ export class P2PCoordinator extends EventEmitter {
       transports,
       connectionEncrypters: [noise()],
       streamMuxers: [yamux()],
+      peerDiscovery,
       services,
       connectionManager: {
         minConnections: this.config.connectionManager?.minConnections || 0,
@@ -474,17 +479,10 @@ export class P2PCoordinator extends EventEmitter {
         const keyBytes = Buffer.from(key, 'utf8')
         const valueBytes = Buffer.from(JSON.stringify(announcement), 'utf8')
 
-        console.log(
-          `[DHT] Storing to DHT: ${key} (routing table: ${dhtStats.routingTableSize} peers)`,
-        )
         await this._putDHT(keyBytes, valueBytes, 5000)
-        console.log(`[DHT] ✅ Stored to DHT: ${key}`)
-      } else {
-        console.log(
-          `[DHT] ⚠️  Skipping DHT storage for ${key} (routing table not ready: ${dhtStats.routingTableSize} peers)`,
-        )
       }
-      // Resource is still in local cache regardless
+      // Else: Routing table empty, skip DHT propagation
+      // Resource is still in local cache for later propagation
     }
 
     this.emit('resource:announced', announcement)
