@@ -15,6 +15,7 @@ import {
 } from '../lib/p2p/musig2/index.js'
 import { PrivateKey } from '../lib/bitcore/privatekey.js'
 import { PublicKey } from '../lib/bitcore/publickey.js'
+import { resolve } from 'path'
 
 // ============================================================================
 // Example: Complete Three-Phase MuSig2 Coordination
@@ -1064,12 +1065,61 @@ async function matchmakingGossipSubExample() {
   // Phase 1: Alice Connects and Subscribes FIRST
   // ========================================================================
 
+  // ========================================================================
+  // Phase 2: Service Providers Connect and Advertise
+  // ========================================================================
+
+  console.log('--- Phase 2: Bob & Charlie Join and Advertise ---\n')
+
+  const bobCoordinator = new MuSig2P2PCoordinator({
+    listen: ['/ip4/127.0.0.1/tcp/0'],
+    bootstrapPeers: [zoeBootstrapAddr],
+    enableDHT: true,
+    enableDHTServer: true,
+    enableGossipSub: true,
+    enableRelay: true,
+    enableAutoNAT: true,
+    enableDCUTR: true,
+    enableUPnP: false,
+  })
+
+  const charlieCoordinator = new MuSig2P2PCoordinator({
+    listen: ['/ip4/127.0.0.1/tcp/0'],
+    bootstrapPeers: [zoeBootstrapAddr],
+    enableDHT: true,
+    enableDHTServer: true,
+    enableGossipSub: true,
+    enableRelay: true,
+    enableAutoNAT: true,
+    enableDCUTR: true,
+    enableUPnP: false,
+  })
+
+  await Promise.all([bobCoordinator.start(), charlieCoordinator.start()])
+
+  console.log('✅ Service providers started')
+  console.log(`   Bob: ${bobCoordinator.peerId}`)
+  console.log(`   Charlie: ${charlieCoordinator.peerId}\n`)
+
+  // Connect to bootstrap
+  /* console.log('🔗 Bob & Charlie connecting to Zoe...')
+  await Promise.all([
+    bobCoordinator.connectToPeer(zoeBootstrapAddr),
+    charlieCoordinator.connectToPeer(zoeBootstrapAddr),
+  ])
+  console.log('✅ Connected\n') */
+
+  // Wait for GossipSub mesh to form
+  console.log('⏳ Waiting for GossipSub mesh to form...\n')
+  await new Promise(resolve => setTimeout(resolve, 1000))
+
   console.log('--- Phase 1: Alice Joins and Subscribes ---\n')
 
   const aliceCoordinator = new MuSig2P2PCoordinator({
     listen: ['/ip4/127.0.0.1/tcp/0'],
+    bootstrapPeers: [zoeBootstrapAddr],
     enableDHT: true,
-    enableDHTServer: false,
+    enableDHTServer: true,
     enableGossipSub: true,
     enableRelay: true,
     enableAutoNAT: true,
@@ -1082,7 +1132,7 @@ async function matchmakingGossipSubExample() {
 
   // Connect to bootstrap
   console.log('🔗 Alice connecting to Zoe...')
-  await aliceCoordinator.connectToPeer(zoeBootstrapAddr)
+  //await aliceCoordinator.connectToPeer(zoeBootstrapAddr)
   console.log('✅ Connected\n')
 
   // Subscribe BEFORE advertisers join
@@ -1110,53 +1160,7 @@ async function matchmakingGossipSubExample() {
   console.log('✅ Alice subscribed and waiting for advertisements\n')
 
   // Wait for subscription to propagate
-  await new Promise(resolve => setTimeout(resolve, 500))
-
-  // ========================================================================
-  // Phase 2: Service Providers Connect and Advertise
-  // ========================================================================
-
-  console.log('--- Phase 2: Bob & Charlie Join and Advertise ---\n')
-
-  const bobCoordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/127.0.0.1/tcp/0'],
-    enableDHT: true,
-    enableDHTServer: true,
-    enableGossipSub: true,
-    enableRelay: true,
-    enableAutoNAT: true,
-    enableDCUTR: true,
-    enableUPnP: false,
-  })
-
-  const charlieCoordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/127.0.0.1/tcp/0'],
-    enableDHT: true,
-    enableDHTServer: true,
-    enableGossipSub: true,
-    enableRelay: true,
-    enableAutoNAT: true,
-    enableDCUTR: true,
-    enableUPnP: false,
-  })
-
-  await Promise.all([bobCoordinator.start(), charlieCoordinator.start()])
-
-  console.log('✅ Service providers started')
-  console.log(`   Bob: ${bobCoordinator.peerId}`)
-  console.log(`   Charlie: ${charlieCoordinator.peerId}\n`)
-
-  // Connect to bootstrap
-  console.log('🔗 Bob & Charlie connecting to Zoe...')
-  await Promise.all([
-    bobCoordinator.connectToPeer(zoeBootstrapAddr),
-    charlieCoordinator.connectToPeer(zoeBootstrapAddr),
-  ])
-  console.log('✅ Connected\n')
-
-  // Wait for GossipSub mesh to form
-  console.log('⏳ Waiting for GossipSub mesh to form...\n')
-  await new Promise(resolve => setTimeout(resolve, 1000))
+  await new Promise(resolve => setTimeout(resolve, 2000))
 
   // Advertise (Alice will receive via GossipSub!)
   console.log('📡 Bob and Charlie advertising...')
@@ -1439,7 +1443,7 @@ async function eventDrivenExample() {
 
 async function main() {
   try {
-    // Run full three-phase example
+    /* // Run full three-phase example
     await threePhaseExample()
 
     // Run advertisement example
@@ -1450,7 +1454,7 @@ async function main() {
     // Run matchmaking example (DHT-based discovery)
     await matchmakingDHTExample()
 
-    await new Promise(resolve => setTimeout(resolve, 1500))
+    await new Promise(resolve => setTimeout(resolve, 1500)) */
 
     // Run GossipSub example (event-driven discovery)
     await matchmakingGossipSubExample()

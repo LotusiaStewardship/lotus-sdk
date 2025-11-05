@@ -186,7 +186,17 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
   }
 
   /**
-   * Handle peer connection
+   * Handle peer discovery (before connection established)
+   * Called when bootstrap nodes discover peers on the network
+   */
+  async onPeerDiscovered(peerInfo: PeerInfo): Promise<void> {
+    if (this.coordinator) {
+      this.coordinator._onPeerDiscovered(peerInfo)
+    }
+  }
+
+  /**
+   * Handle peer connection (after successful connection)
    */
   async onPeerConnected(peerId: string): Promise<void> {
     if (this.coordinator) {

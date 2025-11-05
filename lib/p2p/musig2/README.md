@@ -1455,6 +1455,61 @@ security.on('peer:should-ban', (peerId: string, reason: string) => {
 
 ### Configuration
 
+#### Connection Management
+
+**Important**: MuSig2 uses TWO separate types of peer connections:
+
+1. **General P2P Connections** (for network health)
+   - DHT queries, GossipSub pub/sub, peer discovery
+   - Configured via `.env` or P2PConfig
+   - Subject to `P2P_MAX_CONNECTIONS` limit
+   - Maintained automatically by libp2p
+
+2. **Session-Specific Connections** (for signing sessions)
+   - Direct connections to MuSig2 signers
+   - Established on-demand for signing sessions
+   - **NOT counted against general P2P limits**
+   - Automatically closed after session completion
+
+**Environment Configuration**:
+
+```bash
+# General P2P connection limits (in .env file)
+P2P_MAX_CONNECTIONS=50  # Default: 50 (adequate for most wallets)
+P2P_MIN_CONNECTIONS=10  # Default: 10 (maintains network health)
+
+# MuSig2-specific settings
+MUSIG2_ENABLE_AUTO_CONNECT=true  # Default: true
+MUSIG2_MIN_REPUTATION_AUTO_CONNECT=0  # Default: 0 (connect to all)
+```
+
+**Example: Wallet UX with Connection Management**:
+
+```typescript
+import { P2P } from 'lotus-lib/utils/settings'
+
+// Create coordinator with .env settings (or sane defaults)
+const coordinator = new MuSig2P2PCoordinator(
+  // P2P Configuration
+  {
+    listen: ['/ip4/0.0.0.0/tcp/0'],
+    bootstrapPeers: ['/dns4/bootstrap.lotusia.org/tcp/6969/p2p/12D3Koo...'],
+    connectionManager: {
+      minConnections: P2P.minConnections, // From .env or 10
+      maxConnections: P2P.maxConnections, // From .env or 50
+    },
+  },
+  // MuSig2 Configuration
+  {
+    enableAutoConnect: true, // Auto-connect to discovered signers
+    minReputationForAutoConnect: 50, // Only connect to reputable signers
+  },
+)
+
+// General P2P peers (for network health): ~10-50 connections
+// Session peers (for signing): 1-N additional connections (temporary)
+```
+
 #### Complete Configuration Example
 
 ```typescript
@@ -1469,6 +1524,10 @@ const coordinator = new MuSig2P2PCoordinator(
       '/dns4/bootstrap2.lotusia.org/tcp/4001/p2p/12D3Koo...',
     ],
     dhtProtocol: '/lotus/kad/1.0.0',
+    connectionManager: {
+      minConnections: 10, // Maintain at least 10 general P2P connections
+      maxConnections: 50, // Limit general P2P connections to 50
+    },
   },
   // MuSig2 Configuration
   {
@@ -1476,6 +1535,10 @@ const coordinator = new MuSig2P2PCoordinator(
     sessionTimeout: 2 * 60 * 60 * 1000, // 2 hours
     sessionResourceType: 'musig2-session',
     enableSessionDiscovery: true,
+
+    // Peer management
+    enableAutoConnect: true, // Auto-connect to discovered signers
+    minReputationForAutoConnect: 0, // Reputation threshold (0-100)
 
     // Coordinator election
     enableCoordinatorElection: true,
