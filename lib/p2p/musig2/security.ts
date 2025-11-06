@@ -129,13 +129,16 @@ export class PeerKeyTracker {
     const pubKeyStr = publicKey.toString()
 
     // Check if key already registered to different peer
-    const existingPeer = this.keyToPeer.get(pubKeyStr)
+    // 11/6/25: Disable this, because peers generate new peerIds at every startup
+    // More important is that the signature is valid for the advertisement, which
+    // is already done in the MuSig2 protocol handler
+    /* const existingPeer = this.keyToPeer.get(pubKeyStr)
     if (existingPeer && existingPeer !== peerId) {
       console.warn(
         `[Security] Key ${pubKeyStr.slice(0, 20)}... already owned by ${existingPeer}`,
       )
       return false
-    }
+    } */
 
     // Get peer's current keys
     let peerKeySet = this.peerKeys.get(peerId)
