@@ -31,6 +31,7 @@ import { multiaddr, Multiaddr } from '@multiformats/multiaddr'
 import { peerIdFromString } from '@libp2p/peer-id'
 import type { Connection, Stream, PeerId } from '@libp2p/interface'
 import type { StreamHandler } from '@libp2p/interface'
+import { isPrivate } from '@libp2p/utils'
 
 import {
   P2PConfig,
@@ -109,11 +110,11 @@ export class P2PCoordinator extends EventEmitter {
       // Auto-detect: If listening on localhost, use passthroughMapper
       // If listening on public addresses, use removePrivateAddressesMapper
       const listenAddrs = this.config.listen || ['/ip4/0.0.0.0/tcp/0']
-      const isLocalhost = listenAddrs.some(
-        addr => addr.includes('127.0.0.1') || addr.includes('localhost'),
+      const isPrivateListenAddresses = listenAddrs.some(addr =>
+        isPrivate(multiaddr(addr)),
       )
 
-      if (isLocalhost) {
+      if (isPrivateListenAddresses) {
         // Development/testing on localhost - allow private addresses
         peerInfoMapper = passthroughMapper
       } else {
