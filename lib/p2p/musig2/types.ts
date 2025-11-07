@@ -481,14 +481,6 @@ export interface SignerCriteria {
 
   /** Maximum XPI amount (in satoshis) */
   maxAmount?: number
-
-  /** Trust requirements */
-  trustRequirements?: {
-    /** Minimum reputation score (0-100) */
-    reputation?: number
-    /** Requires identity verification */
-    requiresVerification?: boolean
-  }
 }
 
 /**
@@ -518,14 +510,6 @@ export interface SignerAdvertisement {
     fees?: number
     /** Average response time (milliseconds) */
     responseTime?: number
-    /** Reputation data */
-    reputation?: {
-      score: number // 0-100
-      completedSignings: number
-      failedSignings: number
-      averageResponseTime: number
-      verifiedIdentity: boolean
-    }
   }
 
   /** Creation timestamp */
@@ -566,9 +550,6 @@ export interface SignerSearchFilters {
 
   /** Maximum XPI amount (in satoshis) */
   maxAmount?: number
-
-  /** Minimum reputation score (0-100) */
-  minReputation?: number
 
   /** Maximum number of results to return */
   maxResults?: number

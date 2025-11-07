@@ -870,14 +870,6 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
         continue
       }
 
-      if (
-        filters.minReputation &&
-        advertisement.metadata?.reputation &&
-        advertisement.metadata.reputation.score < filters.minReputation
-      ) {
-        continue
-      }
-
       results.push(advertisement)
       seenPublicKeys.add(advertisement.publicKey.toString())
 
@@ -916,14 +908,6 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
           filters.maxAmount &&
           advertisement.criteria.minAmount &&
           advertisement.criteria.minAmount > filters.maxAmount
-        ) {
-          continue
-        }
-
-        if (
-          filters.minReputation &&
-          advertisement.metadata?.reputation &&
-          advertisement.metadata.reputation.score < filters.minReputation
         ) {
           continue
         }
