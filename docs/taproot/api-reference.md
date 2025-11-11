@@ -20,6 +20,10 @@ Welcome! This is your one-stop reference for building with Taproot on Lotus. Whe
   - [NFTUtil](#nftutil-class)
   - [TaprootInput](#taprootinput-class)
 - [MuSig2 Integration](#musig2-integration)
+  - [High-Level API](#high-level-api)
+  - [MuSig2Signer Class](#musig2signer-class)
+  - [Session-Based Signing](#session-based-signing)
+  - [Low-Level Taproot Functions](#low-level-taproot-functions)
 - [Types & Interfaces](#types--interfaces)
 - [Constants](#constants)
 - [Transaction Integration](#transaction-integration)
@@ -1420,7 +1424,649 @@ isFullySigned(): boolean
 
 Multi-signature using MuSig2 key aggregation with Taproot.
 
-### `buildMuSigTaprootKey()`
+### High-Level API
+
+For most use cases, use the high-level `MuSig2Signer` class which simplifies the MuSig2 workflow.
+
+#### `MuSig2Signer` Class
+
+Simplified, developer-friendly wrapper for MuSig2 operations.
+
+**Features:**
+
+- Simplified 2-step workflow (prepare → sign)
+- Automatic message hashing (ensures 32-byte messages)
+- Built-in validation and error handling
+- Taproot transaction signing support
+- Session-based coordination
+
+**Constructor:**
+
+```typescript
+new MuSig2Signer(config: MuSig2SignerConfig)
+
+interface MuSig2SignerConfig {
+  signers: PublicKey[]        // All signers' public keys (in order)
+  myPrivateKey: PrivateKey    // This signer's private key
+  extraInput?: Buffer         // Optional: Extra randomness for nonce generation
+}
+```
+
+**Example - Simple 2-of-2 Signing:**
+
+```typescript
+import { MuSig2Signer, PrivateKey } from 'lotus-lib'
+
+const alice = new PrivateKey()
+const bob = new PrivateKey()
+
+// Alice creates signer
+const aliceSigner = new MuSig2Signer({
+  signers: [alice.publicKey, bob.publicKey],
+  myPrivateKey: alice,
+})
+
+// Bob creates signer
+const bobSigner = new MuSig2Signer({
+  signers: [alice.publicKey, bob.publicKey],
+  myPrivateKey: bob,
+})
+
+const message = Buffer.from('Sign this message', 'utf8')
+
+// Round 1: Generate nonces
+const alicePrepare = aliceSigner.prepare(message)
+const bobPrepare = bobSigner.prepare(message)
+
+// Share public nonces...
+
+// Round 2: Create partial signatures
+const alicePartialSig = aliceSigner.createPartialSignature(
+  alicePrepare,
+  [alicePrepare.myPublicNonces, bobPrepare.myPublicNonces],
+  message,
+)
+
+const bobPartialSig = bobSigner.createPartialSignature(
+  bobPrepare,
+  [alicePrepare.myPublicNonces, bobPrepare.myPublicNonces],
+  message,
+)
+
+// Share partial signatures...
+
+// Aggregate into final signature
+const finalSig = aliceSigner.sign(
+  alicePrepare,
+  [alicePrepare.myPublicNonces, bobPrepare.myPublicNonces],
+  message,
+  [alicePartialSig, bobPartialSig],
+)
+
+console.log('Final signature:', finalSig.signature.toString())
+```
+
+---
+
+#### `MuSig2Signer` Methods
+
+##### `prepare()`
+
+Prepare for signing (Round 1: Generate nonces).
+
+```typescript
+prepare(message: Buffer | string, useSession?: boolean): MuSig2PrepareResult
+```
+
+**Parameters:**
+
+- `message` - Message to sign (will be hashed to 32 bytes if needed)
+- `useSession` - If true, use session manager for state tracking
+
+**Returns:**
+
+```typescript
+interface MuSig2PrepareResult {
+  keyAggContext: MuSigKeyAggContext
+  myPublicNonces: [Point, Point] // Share with other signers
+  mySecretNonces: [BN, BN] // KEEP PRIVATE!
+  myIndex: number
+  sessionId?: string
+}
+```
+
+**Security Note:** Automatically adds 32 bytes of random entropy for defense-in-depth on top of RFC6979 deterministic generation.
+
+---
+
+##### `createPartialSignature()`
+
+Create your partial signature (Round 2).
+
+```typescript
+createPartialSignature(
+  prepare: MuSig2PrepareResult,
+  allPublicNonces: Array<[Point, Point]>,
+  message: Buffer | string,
+): BN
+```
+
+**Parameters:**
+
+- `prepare` - Result from `prepare()` method
+- `allPublicNonces` - All signers' public nonces (in signer order!)
+- `message` - Same message used in `prepare()`
+
+**Returns:** Partial signature (BN) to share with other signers
+
+**Important:** Nonces must be in the same order as signers array!
+
+---
+
+##### `verifyPartialSignature()`
+
+Verify a partial signature from another signer.
+
+```typescript
+verifyPartialSignature(
+  partialSig: BN,
+  publicNonce: [Point, Point],
+  publicKey: PublicKey,
+  signerIndex: number,
+  prepare: MuSig2PrepareResult,
+  allPublicNonces: Array<[Point, Point]>,
+  message: Buffer | string,
+): boolean
+```
+
+**Returns:** `true` if partial signature is valid
+
+**Example:**
+
+```typescript
+const isValid = aliceSigner.verifyPartialSignature(
+  bobPartialSig,
+  bobPrepare.myPublicNonces,
+  bob.publicKey,
+  1, // Bob's index
+  alicePrepare,
+  [alicePrepare.myPublicNonces, bobPrepare.myPublicNonces],
+  message,
+)
+
+if (!isValid) {
+  throw new Error('Invalid partial signature from Bob!')
+}
+```
+
+---
+
+##### `sign()`
+
+Aggregate all partial signatures into final signature.
+
+```typescript
+sign(
+  prepare: MuSig2PrepareResult,
+  allPublicNonces: Array<[Point, Point]>,
+  message: Buffer | string,
+  allPartialSigs: BN[],
+): MuSig2SignResult
+```
+
+**Parameters:**
+
+- `prepare` - Result from `prepare()`
+- `allPublicNonces` - All signers' public nonces (in order)
+- `message` - Message being signed
+- `allPartialSigs` - All partial signatures (in signer order!)
+
+**Returns:**
+
+```typescript
+interface MuSig2SignResult {
+  signature: Signature
+  aggregatedPubKey: PublicKey
+  isAggregator: boolean
+}
+```
+
+---
+
+##### `prepareTaproot()`
+
+Prepare for Taproot MuSig2 signing.
+
+```typescript
+prepareTaproot(merkleRoot?: Buffer): MuSigTaprootKeyResult & {
+  keyAggContext: MuSigKeyAggContext
+}
+```
+
+**Parameters:**
+
+- `merkleRoot` - Optional script tree merkle root (default: all zeros for key-only)
+
+**Returns:** Taproot-specific preparation result with commitment, script, tweak, etc.
+
+**Example:**
+
+```typescript
+const taprootPrep = aliceSigner.prepareTaproot()
+
+console.log('Taproot address:', taprootPrep.script.toAddress().toString())
+console.log('Commitment:', taprootPrep.commitment.toString())
+```
+
+---
+
+##### `signTaprootInput()`
+
+Create partial signature for Taproot transaction input.
+
+```typescript
+signTaprootInput(
+  prepare: MuSigTaprootKeyResult & { keyAggContext: MuSigKeyAggContext },
+  allPublicNonces: Array<[Point, Point]>,
+  transaction: Transaction,
+  inputIndex: number,
+  amount: number,
+  sighashType?: number,
+): BN
+```
+
+**Parameters:**
+
+- `prepare` - Result from `prepareTaproot()`
+- `allPublicNonces` - All signers' public nonces
+- `transaction` - Transaction being signed
+- `inputIndex` - Index of input to sign
+- `amount` - Amount of output being spent (in satoshis)
+- `sighashType` - Signature hash type (default: SIGHASH_ALL | SIGHASH_LOTUS)
+
+**Returns:** Partial signature for Taproot spending
+
+**Example:**
+
+```typescript
+const taprootPrep = aliceSigner.prepareTaproot()
+
+// Prepare nonces
+const alicePrepare = aliceSigner.prepare(Buffer.from('taproot-tx', 'utf8'))
+const bobPrepare = bobSigner.prepare(Buffer.from('taproot-tx', 'utf8'))
+
+// Create transaction
+const tx = new Transaction()
+  .from({
+    txId: 'previous_tx',
+    outputIndex: 0,
+    script: taprootPrep.script,
+    satoshis: 100000,
+  })
+  .to('lotus:qz...', 95000)
+
+// Sign
+const alicePartialSig = aliceSigner.signTaprootInput(
+  taprootPrep,
+  [alicePrepare.myPublicNonces, bobPrepare.myPublicNonces],
+  tx,
+  0, // Input index
+  100000, // Amount
+)
+```
+
+---
+
+##### `completeTaprootSigning()`
+
+Aggregate all partial signatures for Taproot spending.
+
+```typescript
+completeTaprootSigning(
+  prepare: MuSigTaprootKeyResult & { keyAggContext: MuSigKeyAggContext },
+  allPublicNonces: Array<[Point, Point]>,
+  allPartialSigs: BN[],
+  transaction: Transaction,
+  inputIndex: number,
+  amount: number,
+  sighashType?: number,
+): Signature
+```
+
+**Returns:** Final signature for Taproot input
+
+---
+
+##### `createSession()`
+
+Create a session for coordinated multi-party signing.
+
+```typescript
+createSession(
+  message: Buffer | string,
+  metadata?: Record<string, unknown>,
+): {
+  manager: MuSigSessionManager
+  session: MuSigSession
+}
+```
+
+**Returns:** Session manager and initialized session
+
+**When to use:** Advanced scenarios requiring fine-grained control over the signing process.
+
+---
+
+##### Properties
+
+```typescript
+signer.myPublicKey // PublicKey - This signer's public key
+signer.allSigners // PublicKey[] - All signers' public keys
+signer.myIndex // number - This signer's index (sorted order)
+```
+
+---
+
+#### `createMuSig2Signer()`
+
+Helper function to quickly create a MuSig2 signer.
+
+```typescript
+function createMuSig2Signer(
+  signers: PublicKey[],
+  myPrivateKey: PrivateKey,
+): MuSig2Signer
+```
+
+**Example:**
+
+```typescript
+const signer = createMuSig2Signer(
+  [alice.publicKey, bob.publicKey, carol.publicKey],
+  alice,
+)
+```
+
+---
+
+### Session-Based Signing
+
+For coordinated multi-party signing with state management, use `MuSigSessionManager`.
+
+#### `MuSigSessionManager` Class
+
+Manages the lifecycle of MuSig2 signing sessions including nonce exchange, partial signature collection, and finalization.
+
+**Methods:**
+
+```typescript
+// Create new session
+createSession(
+  signers: PublicKey[],
+  myPrivateKey: PrivateKey,
+  message: Buffer,
+  metadata?: Record<string, unknown>,
+): MuSigSession
+
+// Generate nonces (Round 1)
+generateNonces(
+  session: MuSigSession,
+  privateKey: PrivateKey,
+  extraInput?: Buffer,
+): [Point, Point]
+
+// Receive nonce from another signer
+receiveNonce(
+  session: MuSigSession,
+  signerIndex: number,
+  publicNonce: [Point, Point],
+): void
+
+// Check if all nonces received
+hasAllNonces(session: MuSigSession): boolean
+
+// Create partial signature (Round 2)
+createPartialSignature(
+  session: MuSigSession,
+  privateKey: PrivateKey,
+): BN
+
+// Receive partial signature from another signer
+receivePartialSignature(
+  session: MuSigSession,
+  signerIndex: number,
+  partialSig: BN,
+): void
+
+// Check if all partial signatures received
+hasAllPartialSignatures(session: MuSigSession): boolean
+
+// Get final aggregated signature
+getFinalSignature(session: MuSigSession): Signature
+
+// Abort session
+abortSession(session: MuSigSession, reason: string): void
+
+// Get session status
+getSessionStatus(session: MuSigSession): {
+  phase: MuSigSessionPhase
+  noncesCollected: number
+  noncesTotal: number
+  partialSigsCollected: number
+  partialSigsTotal: number
+  isComplete: boolean
+  isAborted: boolean
+  abortReason?: string
+}
+```
+
+**Example - Session-Based Signing:**
+
+```typescript
+import { MuSigSessionManager, MuSigSessionPhase } from 'lotus-lib'
+
+const manager = new MuSigSessionManager()
+
+// Create session
+const session = manager.createSession(
+  [alice.publicKey, bob.publicKey],
+  alice,
+  Buffer.from('Sign this', 'utf8'),
+)
+
+// Generate nonces
+const myNonces = manager.generateNonces(session, alice)
+// Share myNonces with Bob...
+
+// Receive Bob's nonces
+manager.receiveNonce(session, 1, bobNonces)
+
+// Check if ready to sign
+if (manager.hasAllNonces(session)) {
+  // Create partial signature
+  const myPartialSig = manager.createPartialSignature(session, alice)
+  // Share myPartialSig with Bob...
+
+  // Receive Bob's partial signature
+  manager.receivePartialSignature(session, 1, bobPartialSig)
+
+  // Check if complete
+  if (manager.hasAllPartialSignatures(session)) {
+    const finalSig = manager.getFinalSignature(session)
+    console.log('Complete!', finalSig.toString())
+  }
+}
+
+// Check status
+const status = manager.getSessionStatus(session)
+console.log('Phase:', status.phase)
+console.log(
+  'Progress:',
+  `${status.noncesCollected}/${status.noncesTotal} nonces`,
+)
+```
+
+---
+
+#### `MuSigSessionPhase` Enum
+
+Session lifecycle phases:
+
+```typescript
+enum MuSigSessionPhase {
+  INIT = 'init', // Session created
+  NONCE_EXCHANGE = 'nonce-exchange', // Round 1: Collecting nonces
+  PARTIAL_SIG_EXCHANGE = 'partial-sig-exchange', // Round 2: Collecting signatures
+  COMPLETE = 'complete', // Signature aggregated
+  ABORTED = 'aborted', // Session aborted (validation failure)
+}
+```
+
+---
+
+#### `MuSigSession` Interface
+
+Represents a single multi-party signing session:
+
+```typescript
+interface MuSigSession {
+  sessionId: string
+  signers: PublicKey[]
+  myIndex: number
+  keyAggContext: MuSigKeyAggContext
+  message: Buffer
+  metadata?: Record<string, unknown>
+
+  // Round 1 state
+  mySecretNonce?: MuSigNonce
+  myPublicNonce?: [Point, Point]
+  receivedPublicNonces: Map<number, [Point, Point]>
+
+  // Round 2 state
+  aggregatedNonce?: MuSigAggregatedNonce
+  myPartialSig?: BN
+  receivedPartialSigs: Map<number, BN>
+
+  // Final state
+  finalSignature?: Signature
+  phase: MuSigSessionPhase
+  createdAt: number
+  updatedAt: number
+  abortReason?: string
+}
+```
+
+---
+
+### MuSig2 Security Best Practices
+
+**🔒 Critical Security Rules:**
+
+1. **NEVER Reuse Nonces**
+
+   ```typescript
+   // ❌ WRONG - Nonce reuse reveals private key!
+   const nonce = signer.prepare(message1)
+   const sig1 = signer.sign(nonce, allNonces, message1, partialSigs1)
+   const sig2 = signer.sign(nonce, allNonces, message2, partialSigs2) // DANGER!
+
+   // ✅ CORRECT - Generate fresh nonces for each message
+   const nonce1 = signer.prepare(message1)
+   const sig1 = signer.sign(nonce1, allNonces1, message1, partialSigs1)
+   const nonce2 = signer.prepare(message2) // Fresh nonces
+   const sig2 = signer.sign(nonce2, allNonces2, message2, partialSigs2)
+   ```
+
+2. **Always Verify Partial Signatures**
+
+   ```typescript
+   // ✅ Verify before aggregating
+   const isValid = aliceSigner.verifyPartialSignature(
+     bobPartialSig,
+     bobNonce,
+     bob.publicKey,
+     1,
+     prepare,
+     allNonces,
+     message,
+   )
+
+   if (!isValid) {
+     throw new Error('Invalid partial signature - aborting')
+   }
+   ```
+
+3. **Consistent Signer Ordering**
+
+   ```typescript
+   // ✅ CORRECT - Same order everywhere
+   const signers = [alice.publicKey, bob.publicKey, carol.publicKey]
+   const allNonces = [aliceNonce, bobNonce, carolNonce] // Same order!
+   const allPartialSigs = [alicePartialSig, bobPartialSig, carolPartialSig] // Same order!
+
+   // ❌ WRONG - Different orderings will fail
+   const signers = [alice.publicKey, bob.publicKey, carol.publicKey]
+   const allNonces = [bobNonce, aliceNonce, carolNonce] // Wrong order!
+   ```
+
+4. **Secure Nonce Generation**
+   - The `MuSig2Signer` automatically adds 32 bytes of random entropy
+   - This provides defense-in-depth on top of RFC6979 deterministic generation
+   - For testing with known vectors, pass `Buffer.alloc(32)` as `extraInput`
+
+5. **Never Share Secret Nonces**
+
+   ```typescript
+   const prepare = signer.prepare(message)
+
+   // ✅ Share this
+   shareWithOthers(prepare.myPublicNonces)
+
+   // ❌ NEVER share this!
+   // prepare.mySecretNonces - Keep private!
+   ```
+
+**Common MuSig2 Errors:**
+
+| Error                                              | Cause                                      | Solution                                               |
+| -------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------ |
+| "Nonces already generated for this session"        | Attempting nonce reuse                     | Generate fresh nonces for each signing session         |
+| "Invalid number of public nonces"                  | Nonces array length mismatch               | Ensure nonces array matches signers array length       |
+| "Invalid partial signature from signer X"          | Corrupted or malicious signature           | Verify signatures before aggregating; abort if invalid |
+| "My private key does not correspond to any signer" | Private key not in signers list            | Ensure private key's public key is in signers array    |
+| "Cannot receive nonce from self"                   | Trying to add own nonce to received nonces | Only add nonces from other signers                     |
+| "Missing nonce from signer X"                      | Incomplete nonce collection                | Wait for all signers to share nonces before signing    |
+
+**Session State Management:**
+
+When using `MuSigSessionManager`, always check session phase:
+
+```typescript
+const status = manager.getSessionStatus(session)
+
+if (status.phase === MuSigSessionPhase.ABORTED) {
+  console.error('Session aborted:', status.abortReason)
+  // Handle error...
+}
+
+if (status.phase === MuSigSessionPhase.COMPLETE) {
+  const finalSig = manager.getFinalSignature(session)
+  // Use signature...
+}
+
+console.log(`Progress: ${status.noncesCollected}/${status.noncesTotal} nonces`)
+console.log(
+  `Progress: ${status.partialSigsCollected}/${status.partialSigsTotal} signatures`,
+)
+```
+
+---
+
+### Low-Level Taproot Functions
+
+For advanced use cases, these low-level functions provide direct access to Taproot MuSig2 operations.
+
+#### `buildMuSigTaprootKey()`
 
 Create a MuSig2 aggregated key for Taproot (key-path only).
 
@@ -1666,6 +2312,72 @@ interface TaprootVerifyResult {
 ### MuSig2 Types
 
 ```typescript
+// High-Level API Types
+
+interface MuSig2SignerConfig {
+  signers: PublicKey[] // All signers' public keys (in order)
+  myPrivateKey: PrivateKey // This signer's private key
+  extraInput?: Buffer // Optional: Extra randomness for nonce generation
+}
+
+interface MuSig2PrepareResult {
+  keyAggContext: MuSigKeyAggContext
+  myPublicNonces: [Point, Point] // Share with other signers
+  mySecretNonces: [BN, BN] // KEEP PRIVATE!
+  myIndex: number
+  sessionId?: string
+}
+
+interface MuSig2SignResult {
+  signature: Signature
+  aggregatedPubKey: PublicKey
+  isAggregator: boolean
+}
+
+interface MuSig2TaprootSignResult extends MuSig2SignResult {
+  commitment: PublicKey
+  script: Script
+  address: Address
+}
+
+// Session Management Types
+
+interface MuSigSession {
+  sessionId: string
+  signers: PublicKey[]
+  myIndex: number
+  keyAggContext: MuSigKeyAggContext
+  message: Buffer
+  metadata?: Record<string, unknown>
+
+  // Round 1 state
+  mySecretNonce?: MuSigNonce
+  myPublicNonce?: [Point, Point]
+  receivedPublicNonces: Map<number, [Point, Point]>
+
+  // Round 2 state
+  aggregatedNonce?: MuSigAggregatedNonce
+  myPartialSig?: BN
+  receivedPartialSigs: Map<number, BN>
+
+  // Final state
+  finalSignature?: Signature
+  phase: MuSigSessionPhase
+  createdAt: number
+  updatedAt: number
+  abortReason?: string
+}
+
+enum MuSigSessionPhase {
+  INIT = 'init',
+  NONCE_EXCHANGE = 'nonce-exchange',
+  PARTIAL_SIG_EXCHANGE = 'partial-sig-exchange',
+  COMPLETE = 'complete',
+  ABORTED = 'aborted',
+}
+
+// Low-Level Types
+
 interface MuSigTaprootKeyResult {
   aggregatedPubKey: PublicKey
   commitment: PublicKey
@@ -1677,7 +2389,19 @@ interface MuSigTaprootKeyResult {
 
 interface MuSigKeyAggContext {
   aggregatedPubKey: PublicKey
+  pubkeys: PublicKey[] // Sorted signers
   keyAggCoeffs: BN[]
+  // Internal fields omitted
+}
+
+interface MuSigNonce {
+  secretNonces: [BN, BN]
+  publicNonces: [Point, Point]
+}
+
+interface MuSigAggregatedNonce {
+  R1: Point
+  R2: Point
   // Internal fields omitted
 }
 ```
@@ -2023,18 +2747,115 @@ const tx = new Transaction()
 **Use case:** Private multi-sig (looks like single-sig)
 
 ```typescript
-import { buildMuSigTaprootKey } from 'lotus-lib'
+import { MuSig2Signer, Transaction, Signature } from 'lotus-lib'
 
-const result = buildMuSigTaprootKey([
-  alice.publicKey,
-  bob.publicKey,
-  carol.publicKey,
-])
+// Setup: 3-of-3 MuSig2 (all must sign)
+const alice = new PrivateKey()
+const bob = new PrivateKey()
+const carol = new PrivateKey()
 
-// Send to result.script.toAddress()
-// Requires all 3 to cooperatively sign
-// On-chain footprint: identical to single-sig!
+// Each party creates a signer
+const aliceSigner = new MuSig2Signer({
+  signers: [alice.publicKey, bob.publicKey, carol.publicKey],
+  myPrivateKey: alice,
+})
+
+const bobSigner = new MuSig2Signer({
+  signers: [alice.publicKey, bob.publicKey, carol.publicKey],
+  myPrivateKey: bob,
+})
+
+const carolSigner = new MuSig2Signer({
+  signers: [alice.publicKey, bob.publicKey, carol.publicKey],
+  myPrivateKey: carol,
+})
+
+// Create Taproot output
+const taprootPrep = aliceSigner.prepareTaproot()
+const multisigAddress = taprootPrep.script.toAddress()
+console.log('3-of-3 MuSig2 address:', multisigAddress.toString())
+
+// Send funds to multisigAddress...
+
+// Later: Spend the funds cooperatively
+
+// Step 1: Create transaction
+const tx = new Transaction()
+  .from({
+    txId: 'funding_tx',
+    outputIndex: 0,
+    script: taprootPrep.script,
+    satoshis: 100000,
+  })
+  .to('lotus:qz...recipient', 95000)
+
+// Step 2: Round 1 - Generate nonces
+const alicePrepare = aliceSigner.prepare(tx.id)
+const bobPrepare = bobSigner.prepare(tx.id)
+const carolPrepare = carolSigner.prepare(tx.id)
+
+// Share public nonces with all parties...
+const allNonces = [
+  alicePrepare.myPublicNonces,
+  bobPrepare.myPublicNonces,
+  carolPrepare.myPublicNonces,
+]
+
+// Step 3: Round 2 - Create partial signatures
+const alicePartialSig = aliceSigner.signTaprootInput(
+  taprootPrep,
+  allNonces,
+  tx,
+  0, // input index
+  100000, // amount
+)
+
+const bobPartialSig = bobSigner.signTaprootInput(
+  taprootPrep,
+  allNonces,
+  tx,
+  0,
+  100000,
+)
+
+const carolPartialSig = carolSigner.signTaprootInput(
+  taprootPrep,
+  allNonces,
+  tx,
+  0,
+  100000,
+)
+
+// Share partial signatures with all parties...
+const allPartialSigs = [alicePartialSig, bobPartialSig, carolPartialSig]
+
+// Step 4: Aggregate signatures
+const finalSignature = aliceSigner.completeTaprootSigning(
+  taprootPrep,
+  allNonces,
+  allPartialSigs,
+  tx,
+  0,
+  100000,
+)
+
+// Add signature to transaction
+tx.inputs[0].setScript(Script.fromBuffer(finalSignature.toBuffer()))
+
+console.log('Transaction signed with 3-of-3 MuSig2')
+console.log('On-chain footprint: identical to single-sig!')
+console.log('Privacy: No one knows it was multi-sig')
+
+// Broadcast
+await broadcast(tx.serialize())
 ```
+
+**Benefits:**
+
+- ✅ On-chain looks identical to single-sig (perfect privacy)
+- ✅ Lower transaction fees than script-based multisig
+- ✅ All parties must cooperate (true n-of-n)
+- ✅ No revealing of multi-sig setup unless spending via script path
 
 ---
 
@@ -2679,7 +3500,15 @@ import {
   isPayToTaproot,
   NFT,
   NFTUtil,
+  // MuSig2 - High-Level API
+  MuSig2Signer,
+  createMuSig2Signer,
+  MuSigSessionManager,
+  MuSigSessionPhase,
+  // MuSig2 - Low-Level
   buildMuSigTaprootKey,
+  buildMuSigTaprootKeyWithScripts,
+  signTaprootKeyPathWithMuSig2,
 } from 'lotus-lib'
 
 // CREATE TAPROOT OUTPUT
@@ -2713,7 +3542,57 @@ const nft = new NFT({ metadata, ownerKey: publicKey })
 const nft = NFT.fromScript(script, metadata, satoshis)
 const transferTx = nft.transfer(newOwner, currentOwner)
 
-// MUSIG2
+// MUSIG2 - High-Level API (Recommended)
+import { MuSig2Signer, createMuSig2Signer } from 'lotus-lib'
+
+// Create signer
+const signer = new MuSig2Signer({
+  signers: [alice.publicKey, bob.publicKey],
+  myPrivateKey: alice,
+})
+// Or use helper
+const signer = createMuSig2Signer([alice.publicKey, bob.publicKey], alice)
+
+// Round 1: Generate nonces
+const prepare = signer.prepare(message)
+// Share prepare.myPublicNonces
+
+// Round 2: Create partial signature
+const partialSig = signer.createPartialSignature(prepare, allNonces, message)
+// Share partialSig
+
+// Aggregate signatures
+const finalSig = signer.sign(prepare, allNonces, message, allPartialSigs)
+
+// Taproot MuSig2
+const taprootPrep = signer.prepareTaproot()
+const taprootPartialSig = signer.signTaprootInput(
+  taprootPrep,
+  allNonces,
+  tx,
+  inputIndex,
+  amount,
+)
+const taprootSig = signer.completeTaprootSigning(
+  taprootPrep,
+  allNonces,
+  allPartialSigs,
+  tx,
+  inputIndex,
+  amount,
+)
+
+// MUSIG2 - Session-Based (Advanced)
+import { MuSigSessionManager } from 'lotus-lib'
+const manager = new MuSigSessionManager()
+const session = manager.createSession(signers, myPrivateKey, message)
+const nonces = manager.generateNonces(session, myPrivateKey)
+manager.receiveNonce(session, signerIndex, theirNonces)
+const partialSig = manager.createPartialSignature(session, myPrivateKey)
+manager.receivePartialSignature(session, signerIndex, theirPartialSig)
+const finalSig = manager.getFinalSignature(session)
+
+// MUSIG2 - Low-Level Functions
 const result = buildMuSigTaprootKey([alice, bob, carol])
 const address = result.script.toAddress()
 
