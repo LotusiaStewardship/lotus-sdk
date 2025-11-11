@@ -70,7 +70,8 @@ const requestId = await p2pCoordinator.announceSigningRequest(
   {
     metadata: {
       swapPoolId: poolId,
-      transactionType: 'swapsig-settlement',
+      transactionType: TransactionType.SWAP,
+      swapPhase: SwapPhase.SETTLEMENT,
       // ... more metadata
     },
   },
@@ -84,7 +85,10 @@ Participants automatically discover and join signing requests:
 ```typescript
 // Event handler (automatic in SwapSigCoordinator)
 coordinator.on('signing-request:received', async request => {
-  if (request.metadata?.transactionType === 'swapsig-settlement') {
+  if (
+    request.metadata?.transactionType === TransactionType.SWAP &&
+    request.metadata?.swapPhase === SwapPhase.SETTLEMENT
+  ) {
     // Automatically join if we're a required signer
     await p2pCoordinator.joinSigningRequest(request.requestId, myPrivateKey)
     // Session auto-created when ALL participants join (n-of-n)

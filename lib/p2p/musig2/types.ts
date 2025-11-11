@@ -29,8 +29,8 @@ import { PeerInfo } from '../types.js'
  */
 export enum MuSig2Event {
   // Phase 0: Signer Advertisement Events
-  SIGNER_ADVERTISED = 'signer:advertised',
-  SIGNER_DISCOVERED = 'signer:discovered',
+  SIGNER_ADVERTISED = 'signer:advertised', // we advertised ourselves successfully
+  SIGNER_DISCOVERED = 'signer:discovered', // we discovered a signer via DHT
   SIGNER_UNAVAILABLE = 'signer:unavailable',
   SIGNER_WITHDRAWN = 'signer:withdrawn',
 

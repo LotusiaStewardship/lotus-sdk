@@ -105,8 +105,8 @@ class SwapSigCoordinator extends MuSig2P2PCoordinator {
   private _setupSwapSigEventHandlers(): void {
     // ✅ Can consume parent events via super
     super.on(MuSig2Event.SIGNING_REQUEST_RECEIVED, async request => {
-      // Properly typed from parent
-      if (request.metadata?.transactionType !== 'swapsig-settlement') {
+      // Properly typed from parent - uses TransactionType enum
+      if (request.metadata?.transactionType !== TransactionType.SWAP) {
         return
       }
 

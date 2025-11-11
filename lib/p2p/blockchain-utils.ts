@@ -5,7 +5,11 @@
  * Provides infrastructure for burn verification without enforcing policy
  */
 
-import { ChronikClient } from 'chronik-client'
+import {
+  ChronikClient,
+  type BlockchainInfo,
+  type Tx as ChronikTx,
+} from 'chronik-client'
 import { Hash } from '../bitcore/crypto/hash.js'
 import { Script } from '../bitcore/script.js'
 
@@ -287,4 +291,194 @@ export function xpiToSatoshis(xpi: number): number {
 export function formatXPI(satoshis: number): string {
   const xpi = satoshisToXPI(satoshis)
   return `${xpi.toFixed(6)} XPI`
+}
+
+// ============================================================================
+// Transaction Monitoring
+// ============================================================================
+
+/**
+ * Transaction confirmation info
+ */
+export interface TxConfirmationInfo {
+  txId: string
+  blockHeight: number
+  confirmations: number
+  isConfirmed: boolean
+}
+
+/**
+ * Transaction monitor for SwapSig
+ * Tracks transaction confirmations and emits events
+ */
+export class TransactionMonitor {
+  private chronik: ChronikClient
+  private monitoredTxs: Map<string, number> = new Map() // txId -> required confirmations
+
+  constructor(chronikUrl: string | string[]) {
+    this.chronik = new ChronikClient(chronikUrl)
+  }
+
+  /**
+   * Check if transaction is confirmed
+   *
+   * @param txId - Transaction ID
+   * @param requiredConfirmations - Minimum confirmations needed (default: 1)
+   * @returns Confirmation info or null if not found
+   */
+  async checkConfirmations(
+    txId: string,
+    requiredConfirmations: number = 1,
+  ): Promise<TxConfirmationInfo | null> {
+    let tx: ChronikTx | null = null
+    try {
+      tx = await this.chronik.tx(txId)
+    } catch (error) {
+      console.error(
+        `[TxMonitor] Error checking confirmations for ${txId}:`,
+        error,
+      )
+      return null
+    }
+
+    if (!tx) {
+      return null
+    }
+
+    if (!tx.block) {
+      // Transaction not yet mined
+      return {
+        txId,
+        blockHeight: -1, // -1 === transaction in mempool
+        confirmations: 0,
+        isConfirmed: false,
+      }
+    }
+
+    // Calculate confirmations
+    let blockchainInfo: BlockchainInfo | null = null
+    try {
+      blockchainInfo = await this.chronik.blockchainInfo()
+    } catch (error) {
+      console.error(`[TxMonitor] Error getting blockchain info:`, error)
+      return null
+    }
+
+    const currentHeight = blockchainInfo.tipHeight
+    const confirmations = currentHeight - tx.block.height + 1
+
+    return {
+      txId,
+      blockHeight: tx.block.height,
+      confirmations,
+      isConfirmed: confirmations >= requiredConfirmations,
+    }
+  }
+
+  /**
+   * Wait for transaction to be confirmed
+   *
+   * Polls every N seconds until transaction reaches required confirmations
+   *
+   * @param txId - Transaction ID
+   * @param requiredConfirmations - Minimum confirmations needed
+   * @param pollInterval - Polling interval in milliseconds (default: 5000)
+   * @param timeout - Maximum wait time in milliseconds (default: 600000 = 10 min)
+   * @returns Confirmation info or null if timeout
+   */
+  async waitForConfirmations(
+    txId: string,
+    requiredConfirmations: number = 1,
+    pollInterval: number = 5000,
+    timeout: number = 600000,
+  ): Promise<TxConfirmationInfo | null> {
+    const startTime = Date.now()
+
+    while (Date.now() - startTime < timeout) {
+      const info = await this.checkConfirmations(txId, requiredConfirmations)
+
+      if (info && info.isConfirmed) {
+        return info
+      }
+
+      // Wait before next poll
+      await new Promise(resolve => setTimeout(resolve, pollInterval))
+    }
+
+    console.warn(`[TxMonitor] Timeout waiting for ${txId} confirmations`)
+    return null
+  }
+
+  /**
+   * Broadcast transaction to blockchain
+   *
+   * @param txHex - Raw transaction hex
+   * @returns Transaction ID or null if failed
+   */
+  async broadcastTransaction(txHex: string): Promise<string | null> {
+    try {
+      const result = await this.chronik.broadcastTx(txHex)
+      console.log(`[TxMonitor] Broadcast successful: ${result.txid}`)
+      return result.txid
+    } catch (error) {
+      console.error('[TxMonitor] Broadcast failed:', error)
+      return null
+    }
+  }
+
+  /**
+   * Get transaction details
+   *
+   * @param txId - Transaction ID
+   * @returns Transaction details or null
+   */
+  async getTransaction(txId: string) {
+    try {
+      return await this.chronik.tx(txId)
+    } catch (error) {
+      console.error(`[TxMonitor] Error fetching transaction ${txId}:`, error)
+      return null
+    }
+  }
+
+  /**
+   * Get UTXO details for an address
+   *
+   * @param address - Lotus address
+   * @returns Array of UTXOs
+   */
+  async getUtxos(address: string) {
+    try {
+      const script = Script.fromAddress(address)
+      const scriptHex = script.toHex()
+      const utxos = await this.chronik.script('p2pkh', scriptHex).utxos()
+      return utxos[0]?.utxos || []
+    } catch (error) {
+      console.error(`[TxMonitor] Error fetching UTXOs for ${address}:`, error)
+      return []
+    }
+  }
+
+  /**
+   * Batch check confirmations for multiple transactions
+   *
+   * @param txIds - Array of transaction IDs
+   * @param requiredConfirmations - Minimum confirmations needed
+   * @returns Map of txId to confirmation info
+   */
+  async batchCheckConfirmations(
+    txIds: string[],
+    requiredConfirmations: number = 1,
+  ): Promise<Map<string, TxConfirmationInfo | null>> {
+    const results = new Map<string, TxConfirmationInfo | null>()
+
+    // Process in parallel
+    const promises = txIds.map(async txId => {
+      const info = await this.checkConfirmations(txId, requiredConfirmations)
+      results.set(txId, info)
+    })
+
+    await Promise.all(promises)
+    return results
+  }
 }

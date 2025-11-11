@@ -262,8 +262,8 @@ Handler Called:
 private _setupSwapSigEventHandlers(): void {
   // ✅ Listen to parent MuSig2 events
   super.on(MuSig2Event.SIGNING_REQUEST_RECEIVED, async (request) => {
-    // Filter for SwapSig-specific requests
-    if (request.metadata?.transactionType !== 'swapsig-settlement') {
+    // Filter for SwapSig-specific requests using TransactionType enum
+    if (request.metadata?.transactionType !== TransactionType.SWAP) {
       return
     }
 

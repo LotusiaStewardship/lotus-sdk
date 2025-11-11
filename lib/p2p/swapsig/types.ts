@@ -26,6 +26,35 @@ export enum SwapPhase {
 }
 
 /**
+ * Metadata for SwapSig MuSig2 signing requests
+ *
+ * Used to identify and filter SwapSig-specific signing requests
+ * in the MuSig2 P2P layer.
+ */
+export interface SwapSigSigningMetadata {
+  /** Transaction type (must be 'swap' for SwapSig) */
+  transactionType: 'swap'
+
+  /** SwapSig protocol phase */
+  swapPhase: SwapPhase.SETTLEMENT // Only settlement uses MuSig2
+
+  /** Pool identifier */
+  swapPoolId: string
+
+  /** Which shared output is being spent (for settlement) */
+  outputIndex?: number
+
+  /** Pre-built transaction hex */
+  transactionHex?: string
+
+  /** Whether this is a Taproot key-path spend */
+  taprootKeyPath?: boolean
+
+  /** Index signature for additional metadata */
+  [key: string]: unknown
+}
+
+/**
  * Group size strategy for dynamic group sizing
  */
 export interface GroupSizeStrategy {
@@ -103,7 +132,7 @@ export interface SwapParticipant {
 export interface SharedOutput {
   // Signers (n-of-n MuSig2)
   signers: PublicKey[] // 2, 3, 5, or 10 signers
-  participantIndices: number[] // Their indices
+  participantIndices?: number[] // Their indices
 
   // MuSig2 aggregation
   aggregatedKey: PublicKey // MuSig2 aggregated key
@@ -112,13 +141,14 @@ export interface SharedOutput {
   // Output details
   amount: number // Satoshis in this output
   txId?: string // Setup transaction ID
-  outputIndex?: number // Output index in setup tx
+  outputIndex: number // Output index in setup tx
+  confirmed?: boolean // Setup transaction confirmed
 
   // Settlement (Round 2)
-  receiverIndex: number // Who receives from this output
+  receiverIndex?: number // Who receives from this output
   receiverAddress?: Address // Receiver's final address
   settlementTxId?: string // Settlement transaction ID
-  settlementConfirmed: boolean
+  settlementConfirmed?: boolean
 }
 
 /**

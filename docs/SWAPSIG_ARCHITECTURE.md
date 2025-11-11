@@ -330,7 +330,7 @@ private async _advertiseSwapSigner(
   await this.p2pCoordinator.advertiseSigner(
     this.privateKey,
     {
-      transactionTypes: ['swapsig-settlement'],
+      transactionTypes: [TransactionType.SWAP],
       minAmount: pool.denomination,
       maxAmount: pool.denomination,
     },
@@ -348,7 +348,7 @@ private async _advertiseSwapSigner(
 **DHT Storage:**
 
 ```
-Key: "signer-advertisement:swapsig-settlement:<publicKey>"
+Key: "signer-advertisement:swap:<publicKey>"
 Value: {
   publicKey: PublicKey,
   criteria: { transactionTypes, minAmount, maxAmount },
@@ -381,7 +381,7 @@ const requestId = await this.p2pCoordinator.announceSigningRequest(
     metadata: {
       swapPoolId: poolId,
       outputIndex: output.outputIndex,
-      transactionType: 'swapsig-settlement',
+      transactionType: TransactionType.SWAP,
       transactionHex: settlementTx.toString(),
       taprootKeyPath: true,
     },
@@ -407,7 +407,7 @@ Participants automatically discover and join signing requests:
 // Event handler in SwapSigCoordinator
 this.p2pCoordinator.on('signing-request:received', async request => {
   // Check if this is a SwapSig settlement request
-  if (request.metadata?.transactionType !== 'swapsig-settlement') return
+  if (request.metadata?.transactionType !== TransactionType.SWAP) return
 
   // Check if we're a required signer
   const myPubKey = this.privateKey.publicKey.toString()
@@ -671,7 +671,7 @@ For Each Shared Output:
          [signer1, signer2],  // 2-of-2 (n-of-n)
          sigHashBuffer,
          myPrivateKey,
-         { metadata: { swapPoolId, transactionType: 'swapsig-settlement' } }
+         { metadata: { swapPoolId, transactionType: TransactionType.SWAP } }
        )
 
   ═══ PHASE 3: AUTOMATIC DISCOVERY & JOINING ═══
@@ -1209,7 +1209,7 @@ const pools = await coordinator.discoverPools({
 await p2pCoordinator.advertiseSigner(
   privateKey,
   {
-    transactionTypes: ['swapsig-settlement'],
+    transactionTypes: [TransactionType.SWAP],
     minAmount: denomination,
     maxAmount: denomination,
   },
@@ -1217,8 +1217,8 @@ await p2pCoordinator.advertiseSigner(
 )
 
 // DHT Multi-Index:
-//   "signer-advertisement:swapsig-settlement:<publicKey>"
-//   "signer-advertisement:type:swapsig-settlement"
+//   "signer-advertisement:swap:<publicKey>"
+//   "signer-advertisement:type:swap"
 ```
 
 **Signing Request (Phase 2):**
@@ -1329,7 +1329,7 @@ coordinator.on('pool:completed', poolId => {
 // Signing request discovered
 p2pCoordinator.on('signing-request:received', request => {
   // Automatically handled by SwapSigCoordinator
-  // if transactionType === 'swapsig-settlement'
+  // if transactionType === TransactionType.SWAP
 })
 
 // Session ready (all participants joined)
@@ -1528,7 +1528,7 @@ const requestId = await p2pCoordinator.announceSigningRequest(
   output.signers as [PublicKey, PublicKey],
   sigHashBuffer,
   this.privateKey,
-  { metadata: { swapPoolId, transactionType: 'swapsig-settlement' } },
+  { metadata: { swapPoolId, transactionType: TransactionType.SWAP } },
 )
 
 // Phase 3: Join request (automatic via event handler)
@@ -1807,9 +1807,9 @@ private _setupThreePhaseEventHandlers(): void {
       try {
         // Check if this is a SwapSig settlement request
         const metadata = request.metadata as
-          | { transactionType?: string; swapPoolId?: string }
+          | { transactionType?: TransactionType; swapPoolId?: string }
           | undefined
-        if (metadata?.transactionType !== 'swapsig-settlement') {
+        if (metadata?.transactionType !== TransactionType.SWAP) {
           return // Not a SwapSig request
         }
 

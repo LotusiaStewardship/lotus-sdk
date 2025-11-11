@@ -115,8 +115,8 @@ export class Transaction {
   static readonly NULL_HASH = NULL_HASH
 
   // Instance subclasses
-  static Output: typeof Output
-  static Input: typeof Input
+  /* static Output: typeof Output
+  static Input: typeof Input */
 
   // Instance properties
   inputs: Input[] = []
@@ -1864,6 +1864,5 @@ export class Transaction {
   }
 }
 
-// Add input/output constructors as subclasses
-Transaction.Input = Input
-Transaction.Output = Output
+// Note: Transaction.Input and Transaction.Output static properties removed
+// to avoid circular dependency issues. Import Input/Output directly instead.
