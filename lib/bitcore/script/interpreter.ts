@@ -2412,7 +2412,7 @@ export class Interpreter {
           }
 
           try {
-            this.tx?.verifySignature(
+            const isValid = this.tx?.verifySignature(
               sig,
               pubkey,
               this.nin!,
@@ -2421,6 +2421,11 @@ export class Interpreter {
               sigFlags,
               'schnorr',
             )
+
+            if (!isValid) {
+              this.errstr = 'SCRIPT_ERR_TAPROOT_VERIFY_SIGNATURE_FAILED'
+              return false
+            }
           } catch (e) {
             this.errstr = 'SCRIPT_ERR_TAPROOT_VERIFY_SIGNATURE_FAILED'
             return false

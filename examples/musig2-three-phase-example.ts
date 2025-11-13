@@ -470,13 +470,6 @@ async function advertisementExample() {
         description: 'Multi-purpose wallet, responsive, privacy-focused',
         fees: 0,
         responseTime: 30000, // 30 seconds average
-        reputation: {
-          score: 95,
-          completedSignings: 150,
-          failedSignings: 2,
-          averageResponseTime: 25000,
-          verifiedIdentity: false,
-        },
       },
     },
   )
@@ -642,13 +635,6 @@ async function matchmakingDHTExample() {
           description: 'Fast and reliable swap co-signer',
           fees: 5000, // 5k satoshis
           responseTime: 15000, // 15 seconds average
-          reputation: {
-            score: 92,
-            completedSignings: 87,
-            failedSignings: 3,
-            averageResponseTime: 15000,
-            verifiedIdentity: false,
-          },
         },
       },
     ),
@@ -666,13 +652,6 @@ async function matchmakingDHTExample() {
           description: 'Low-fee swap service',
           fees: 1000, // 1k satoshis
           responseTime: 30000, // 30 seconds average
-          reputation: {
-            score: 88,
-            completedSignings: 45,
-            failedSignings: 2,
-            averageResponseTime: 28000,
-            verifiedIdentity: true,
-          },
         },
       },
     ),
@@ -682,8 +661,7 @@ async function matchmakingDHTExample() {
   console.log(`   Public Key: ${bobKey.publicKey.toString().slice(0, 40)}...`)
   console.log(`   Types: swap, spend, coinjoin`)
   console.log(`   Amount Range: 5-100 XPI`)
-  console.log(`   Fees: 5,000 satoshis`)
-  console.log(`   Reputation: 92/100 (87 completed signings)\n`)
+  console.log(`   Fees: 5,000 satoshis\n`)
 
   console.log('✅ Charlie advertised availability:')
   console.log(
@@ -691,8 +669,7 @@ async function matchmakingDHTExample() {
   )
   console.log(`   Types: swap, spend`)
   console.log(`   Amount Range: 1-50 XPI`)
-  console.log(`   Fees: 1,000 satoshis`)
-  console.log(`   Reputation: 88/100 (45 completed signings)\n`)
+  console.log(`   Fees: 1,000 satoshis\n`)
 
   console.log('💡 Advertisements are stored in DHT via Zoe (bootstrap node)\n')
 
@@ -774,13 +751,6 @@ async function matchmakingDHTExample() {
       `   Transaction Types: ${signer.criteria.transactionTypes.join(', ')}`,
     )
     console.log(`   Fees: ${signer.metadata?.fees || 0} satoshis`)
-    console.log(`   Reputation: ${signer.metadata?.reputation?.score || 'N/A'}`)
-    console.log(
-      `   Completed Signings: ${signer.metadata?.reputation?.completedSignings || 0}`,
-    )
-    console.log(
-      `   Verified: ${signer.metadata?.reputation?.verifiedIdentity ? '✓' : '✗'}`,
-    )
     console.log('')
   })
 
@@ -799,21 +769,19 @@ async function matchmakingDHTExample() {
 
   console.log('✅ Sufficient signers found for 3-of-3 multisig (MuSig2)\n')
 
-  // Alice selects the two best signers based on reputation and fees
+  // Alice selects the two best signers based on fees (lower is better)
   const selectedSigners = signers
     .sort((a, b) => {
-      const aScore =
-        (a.metadata?.reputation?.score || 0) - (a.metadata?.fees || 0) / 1000
-      const bScore =
-        (b.metadata?.reputation?.score || 0) - (b.metadata?.fees || 0) / 1000
-      return bScore - aScore
+      const aFees = a.metadata?.fees || 0
+      const bFees = b.metadata?.fees || 0
+      return aFees - bFees // Lower fees first
     })
     .slice(0, 2)
 
   console.log('📋 Alice selected co-signers:')
   selectedSigners.forEach((signer, idx) => {
     console.log(
-      `   ${idx + 1}. ${signer.metadata?.nickname} (Rep: ${signer.metadata?.reputation?.score}, Fees: ${signer.metadata?.fees} sats)`,
+      `   ${idx + 1}. ${signer.metadata?.nickname} (Fees: ${signer.metadata?.fees} sats)`,
     )
   })
   console.log('')
@@ -972,7 +940,7 @@ async function matchmakingDHTExample() {
   console.log(
     `  5. ✅ Alice discovered ${signers.length} signers WITHOUT knowing keys beforehand`,
   )
-  console.log(`  6. ✅ Alice selected best co-signers (reputation + fees)`)
+  console.log(`  6. ✅ Alice selected best co-signers (lowest fees)`)
   console.log(`  7. ✅ Alice created signing request with discovered keys`)
   console.log(`  8. ✅ Bob and Charlie discovered and joined request`)
   console.log(`  9. ✅ Session ready for MuSig2 signing! 🎉\n`)
@@ -1065,54 +1033,6 @@ async function matchmakingGossipSubExample() {
   // Phase 1: Alice Connects and Subscribes FIRST
   // ========================================================================
 
-  // ========================================================================
-  // Phase 2: Service Providers Connect and Advertise
-  // ========================================================================
-
-  console.log('--- Phase 2: Bob & Charlie Join and Advertise ---\n')
-
-  const bobCoordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/127.0.0.1/tcp/0'],
-    bootstrapPeers: [zoeBootstrapAddr],
-    enableDHT: true,
-    enableDHTServer: true,
-    enableGossipSub: true,
-    enableRelay: true,
-    enableAutoNAT: true,
-    enableDCUTR: true,
-    enableUPnP: false,
-  })
-
-  const charlieCoordinator = new MuSig2P2PCoordinator({
-    listen: ['/ip4/127.0.0.1/tcp/0'],
-    bootstrapPeers: [zoeBootstrapAddr],
-    enableDHT: true,
-    enableDHTServer: true,
-    enableGossipSub: true,
-    enableRelay: true,
-    enableAutoNAT: true,
-    enableDCUTR: true,
-    enableUPnP: false,
-  })
-
-  await Promise.all([bobCoordinator.start(), charlieCoordinator.start()])
-
-  console.log('✅ Service providers started')
-  console.log(`   Bob: ${bobCoordinator.peerId}`)
-  console.log(`   Charlie: ${charlieCoordinator.peerId}\n`)
-
-  // Connect to bootstrap
-  /* console.log('🔗 Bob & Charlie connecting to Zoe...')
-  await Promise.all([
-    bobCoordinator.connectToPeer(zoeBootstrapAddr),
-    charlieCoordinator.connectToPeer(zoeBootstrapAddr),
-  ])
-  console.log('✅ Connected\n') */
-
-  // Wait for GossipSub mesh to form
-  console.log('⏳ Waiting for GossipSub mesh to form...\n')
-  await new Promise(resolve => setTimeout(resolve, 1000))
-
   console.log('--- Phase 1: Alice Joins and Subscribes ---\n')
 
   const aliceCoordinator = new MuSig2P2PCoordinator({
@@ -1162,6 +1082,66 @@ async function matchmakingGossipSubExample() {
   // Wait for subscription to propagate
   await new Promise(resolve => setTimeout(resolve, 2000))
 
+  // ========================================================================
+  // Phase 2: Service Providers Connect and Advertise
+  // ========================================================================
+
+  console.log('--- Phase 2: Bob & Charlie Join and Advertise ---\n')
+
+  const bobCoordinator = new MuSig2P2PCoordinator({
+    listen: ['/ip4/127.0.0.1/tcp/0'],
+    bootstrapPeers: [zoeBootstrapAddr],
+    enableDHT: true,
+    enableDHTServer: true,
+    enableGossipSub: true,
+    enableRelay: true,
+    enableAutoNAT: true,
+    enableDCUTR: true,
+    enableUPnP: false,
+  })
+
+  const charlieCoordinator = new MuSig2P2PCoordinator({
+    listen: ['/ip4/127.0.0.1/tcp/0'],
+    bootstrapPeers: [zoeBootstrapAddr],
+    enableDHT: true,
+    enableDHTServer: true,
+    enableGossipSub: true,
+    enableRelay: true,
+    enableAutoNAT: true,
+    enableDCUTR: true,
+    enableUPnP: false,
+  })
+
+  await Promise.all([bobCoordinator.start(), charlieCoordinator.start()])
+
+  console.log('✅ Service providers started')
+  console.log(`   Bob: ${bobCoordinator.peerId}`)
+  console.log(`   Charlie: ${charlieCoordinator.peerId}\n`)
+
+  // Connect to bootstrap
+  /* console.log('🔗 Bob & Charlie connecting to Zoe...')
+  await Promise.all([
+    bobCoordinator.connectToPeer(zoeBootstrapAddr),
+    charlieCoordinator.connectToPeer(zoeBootstrapAddr),
+  ])
+  console.log('✅ Connected\n') */
+  await Promise.all([
+    new Promise(resolve => {
+      bobCoordinator.on(MuSig2Event.PEER_CONNECTED, () => {
+        resolve(true)
+      })
+    }),
+    new Promise(resolve => {
+      charlieCoordinator.on(MuSig2Event.PEER_CONNECTED, () => {
+        resolve(true)
+      })
+    }),
+  ])
+
+  // Wait for GossipSub mesh to form
+  console.log('⏳ Waiting for GossipSub mesh to form...\n')
+  await new Promise(resolve => setTimeout(resolve, 1000))
+
   // Advertise (Alice will receive via GossipSub!)
   console.log('📡 Bob and Charlie advertising...')
   console.log('   → Publishing to GossipSub: musig2:signers:swap')
@@ -1179,13 +1159,6 @@ async function matchmakingGossipSubExample() {
         metadata: {
           nickname: 'Bob',
           fees: 5000,
-          reputation: {
-            score: 92,
-            completedSignings: 87,
-            failedSignings: 3,
-            averageResponseTime: 15000,
-            verifiedIdentity: false,
-          },
         },
       },
     ),
@@ -1200,13 +1173,6 @@ async function matchmakingGossipSubExample() {
         metadata: {
           nickname: 'Charlie',
           fees: 1000,
-          reputation: {
-            score: 88,
-            completedSignings: 45,
-            failedSignings: 2,
-            averageResponseTime: 28000,
-            verifiedIdentity: true,
-          },
         },
       },
     ),
@@ -1230,7 +1196,6 @@ async function matchmakingGossipSubExample() {
   discoveredSigners.forEach((signer, idx) => {
     console.log(`${idx + 1}. ${signer.metadata?.nickname}`)
     console.log(`   Fees: ${signer.metadata?.fees} satoshis`)
-    console.log(`   Reputation: ${signer.metadata?.reputation?.score}/100`)
     console.log('')
   })
 
@@ -1286,6 +1251,8 @@ async function matchmakingGossipSubExample() {
 
     // Wait for propagation
     await new Promise(resolve => setTimeout(resolve, 1000))
+
+    console.log("Zoe's DHT stats:", zoeCoordinator.getDHTStats())
 
     // ========================================================================
     // Phase 5: Co-signers Join

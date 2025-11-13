@@ -26,6 +26,10 @@ import { BufferUtil } from './util/buffer.js'
 import { JSUtil } from './util/js.js'
 import { Signature } from './crypto/signature.js'
 import { Chunk } from './chunk.js'
+import {
+  TAPROOT_SIZE_WITH_STATE,
+  TAPROOT_SIZE_WITHOUT_STATE,
+} from './taproot.js'
 
 export interface ScriptData {
   chunks: Chunk[]
@@ -33,6 +37,13 @@ export interface ScriptData {
 }
 
 export type ScriptInput = Buffer | string | ScriptData | PublicKey | Address
+export type ScriptType =
+  | 'p2pk'
+  | 'p2pkh'
+  | 'p2sh'
+  | 'p2tr-commitment'
+  | 'p2tr-state'
+  | 'other'
 
 export class Script {
   chunks!: Chunk[]
@@ -582,8 +593,6 @@ export class Script {
    */
   isPayToTaproot(): boolean {
     const buf = this.toBuffer()
-    const TAPROOT_SIZE_WITHOUT_STATE = 36 // OP_SCRIPTTYPE + OP_1 + 0x21 + 33 bytes
-    const TAPROOT_SIZE_WITH_STATE = 69 // Above + 0x20 + 32 bytes
 
     if (buf.length < TAPROOT_SIZE_WITHOUT_STATE) {
       return false
@@ -1022,6 +1031,37 @@ export class Script {
    */
   isStandard(): boolean {
     return this.classify() !== ScriptTypes.UNKNOWN
+  }
+
+  /**
+   * Get script type compatible with chronik-client ScriptType
+   *
+   * Returns one of:
+   * - "p2pk": Pay-to-Public-Key
+   * - "p2pkh": Pay-to-Public-Key-Hash
+   * - "p2sh": Pay-to-Script-Hash
+   * - "p2tr-commitment": Pay-to-Taproot (without state)
+   * - "p2tr-state": Pay-to-Taproot (with state)
+   * - "other": Non-standard or unknown script type
+   */
+  getType(): ScriptType {
+    // Check output script types
+    if (this.isPayToTaproot()) {
+      const buf = this.toBuffer()
+      // If script has state (69 bytes), return p2tr-state, otherwise p2tr-commitment
+      return buf.length === TAPROOT_SIZE_WITH_STATE
+        ? 'p2tr-state'
+        : 'p2tr-commitment'
+    } else if (this.isPublicKeyOut()) {
+      return 'p2pk'
+    } else if (this.isPublicKeyHashOut()) {
+      return 'p2pkh'
+    } else if (this.isScriptHashOut()) {
+      return 'p2sh'
+    }
+
+    // not a recognized format
+    return 'other'
   }
 
   /**

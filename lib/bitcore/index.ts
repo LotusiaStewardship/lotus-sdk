@@ -103,6 +103,7 @@ export { Opcode } from './opcode.js'
 export { Interpreter } from './script/interpreter.js'
 export { Chunk } from './chunk.js'
 export {
+  ScriptType,
   ScriptTypes,
   buildMultisigOut,
   buildWitnessMultisigOutFromScript,
