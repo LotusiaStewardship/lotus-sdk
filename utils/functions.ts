@@ -6,7 +6,7 @@
 import { NODE_GEOIP_URL, PlatformURL } from './constants.js'
 import * as RPC from '../lib/rpc.js'
 import * as Bitcore from '../lib/bitcore/index.js'
-import type { GeoIPResponse } from './types.js'
+import type { GeoIPResponse, Wallet } from './types.js'
 import {
   ScriptChunkPlatformUTF8,
   ScriptChunkSentimentUTF8,
@@ -488,4 +488,42 @@ export const Util = {
       return crypto.randomUUID()
     },
   },
+}
+
+/**
+ * Creates a wallet object from a mnemonic or generates a new one if not provided.
+ *
+ * @param {Bitcore.Mnemonic | string} [mnemonic] - The mnemonic phrase or a Bitcore.Mnemonic instance to derive the wallet from.
+ *   If not provided, a new random mnemonic and wallet will be generated.
+ * @returns {Wallet} The generated wallet object containing the private key (WIF), public key (hex),
+ *   address, script, script type, and script payload.
+ */
+export function createWallet(
+  mnemonic?: Bitcore.Mnemonic | string,
+  path?: string,
+): Wallet {
+  if (mnemonic) {
+    if (typeof mnemonic === 'string') {
+      mnemonic = new Bitcore.Mnemonic(mnemonic)
+    }
+  } else {
+    mnemonic = new Bitcore.Mnemonic()
+  }
+  if (!path) {
+    path = "m/44'/10605'/0'/0/0"
+  }
+  const hdPrivateKey = mnemonic.toHDPrivateKey()
+  const privateKey = hdPrivateKey.deriveChild(path).privateKey
+  const publicKey = privateKey.publicKey
+  const address = privateKey.toAddress(Bitcore.Networks.mainnet)
+  const script = Bitcore.Script.fromAddress(address)
+  return {
+    hdPrivateKey: hdPrivateKey.toString(),
+    privateKey: privateKey.toWIF(),
+    publicKey: publicKey.toString(),
+    address: address,
+    script: script,
+    scriptType: script.getType(),
+    scriptPayload: script.getData().toString('hex'),
+  }
 }
