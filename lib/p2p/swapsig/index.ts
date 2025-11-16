@@ -74,3 +74,6 @@ export {
   SwapSigMessageType,
   DEFAULT_BURN_CONFIG,
 } from './types.js'
+
+// Validation functions
+export * from './validation.js'

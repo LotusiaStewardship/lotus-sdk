@@ -23,6 +23,9 @@ export * from './blockchain-utils.js'
 export {
   createPeerIdFromPrivateKey,
   createRandomPeerId,
+  parsePeerId,
+  serializePeerId,
+  parseMultiaddrs,
   waitForEvent,
 } from './utils.js'
 
@@ -32,3 +35,9 @@ export {
   removePrivateAddressesMapper,
   removePublicAddressesMapper,
 } from '@libp2p/kad-dht'
+
+// MuSig2 P2P coordination
+export * from './musig2/index.js'
+
+// SwapSig protocol
+export * from './swapsig/index.js'
