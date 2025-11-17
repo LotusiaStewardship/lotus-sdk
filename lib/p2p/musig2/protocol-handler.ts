@@ -779,6 +779,12 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
       )
       const signature = Buffer.from(payload.signature, 'hex')
 
+      // Check if participant already joined (prevent duplicate processing)
+      // The coordinator's PARTICIPANT_JOINED handler will check for duplicates,
+      // but we can also check here to avoid unnecessary event emission
+      // Note: We rely on the coordinator's internal duplicate prevention
+      // since activeSigningSessions is private
+
       // Emit event for coordinator to handle
       this.coordinator.emit(MuSig2Event.PARTICIPANT_JOINED, {
         requestId: payload.requestId,

@@ -263,6 +263,12 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
             return
           }
 
+          // Prevent duplicate participant processing
+          if (activeSession.participants.has(data.participantIndex)) {
+            // Participant already joined, skip duplicate processing
+            return
+          }
+
           // Add participant
           activeSession.participants.set(
             data.participantIndex,
@@ -1132,7 +1138,10 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       protocol: 'musig2',
     })
 
-    this.emit(MuSig2Event.SIGNING_REQUEST_CREATED, request)
+    // Prevent duplicate emissions
+    if (this._shouldEmitEvent(requestId, MuSig2Event.SIGNING_REQUEST_CREATED)) {
+      this.emit(MuSig2Event.SIGNING_REQUEST_CREATED, request)
+    }
 
     return requestId
   }
@@ -1339,7 +1348,10 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       await this._createMuSigSessionFromRequest(activeSession)
     }
 
-    this.emit(MuSig2Event.SIGNING_REQUEST_JOINED, requestId)
+    // Prevent duplicate emissions
+    if (this._shouldEmitEvent(requestId, MuSig2Event.SIGNING_REQUEST_JOINED)) {
+      this.emit(MuSig2Event.SIGNING_REQUEST_JOINED, requestId)
+    }
   }
 
   /**
@@ -1506,6 +1518,7 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     // Get session from either architecture
     let session: MuSigSession
     let participants: Map<number, string>
+    let currentPhase: MuSigSessionPhase | 'waiting' | 'ready'
 
     if (signingSession) {
       // New architecture
@@ -1514,12 +1527,33 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       }
       session = signingSession.session
       participants = signingSession.participants
+      currentPhase = signingSession.phase
     } else if (activeSession) {
       // Old architecture
       session = activeSession.session
       participants = activeSession.participants
+      currentPhase = activeSession.phase
     } else {
       throw new Error(`Session ${sessionId} not found`)
+    }
+
+    // Normalize phase for new architecture (waiting/ready -> INIT)
+    const normalizedPhase: MuSigSessionPhase =
+      currentPhase === 'waiting' || currentPhase === 'ready'
+        ? MuSigSessionPhase.INIT
+        : currentPhase
+
+    // Prevent duplicate Round 2 calls - check if already in PARTIAL_SIG_EXCHANGE phase
+    if (normalizedPhase === MuSigSessionPhase.PARTIAL_SIG_EXCHANGE) {
+      // Round 2 already started, skip duplicate processing
+      return
+    }
+
+    // Verify we're in the correct phase to start Round 2
+    if (normalizedPhase !== MuSigSessionPhase.NONCE_EXCHANGE) {
+      throw new Error(
+        `Cannot start Round 2: session is in phase ${normalizedPhase}, expected NONCE_EXCHANGE`,
+      )
     }
 
     // Create partial signature
