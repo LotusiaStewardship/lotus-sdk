@@ -816,7 +816,12 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
   ): Promise<void> {
     if (!this.coordinator) return
 
-    // Just emit event - coordinator handles it
+    // When receiving SESSION_READY broadcast, ensure our own session is created
+    // This handles the case where we receive the broadcast before our local
+    // session creation completes (race condition)
+    await this.coordinator.ensureSessionCreated(payload.requestId)
+
+    // Emit event - coordinator handles it
     this.coordinator.emit(MuSig2Event.SESSION_READY, payload.requestId)
   }
 }

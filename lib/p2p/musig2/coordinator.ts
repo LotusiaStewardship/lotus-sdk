@@ -1258,6 +1258,38 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
   }
 
   /**
+   * Ensure session is created for a signing request
+   *
+   * This is called when receiving SESSION_READY broadcasts to ensure
+   * our local session is created even if we received the broadcast
+   * before our local session creation completed.
+   *
+   * @param requestId - Request ID (which is also the session ID)
+   * @returns true if session was created or already exists, false otherwise
+   */
+  async ensureSessionCreated(requestId: string): Promise<boolean> {
+    const activeSession = this.activeSigningSessions.get(requestId)
+    if (!activeSession) {
+      return false // No active session found
+    }
+
+    if (activeSession.session) {
+      return true // Session already exists
+    }
+
+    // Session doesn't exist yet - create it if we have all participants
+    if (
+      activeSession.participants.size ===
+      activeSession.request.requiredPublicKeys.length
+    ) {
+      await this._createMuSigSessionFromRequest(activeSession)
+      return true
+    }
+
+    return false // Not all participants have joined yet
+  }
+
+  /**
    * Internal: Create MuSig session from signing request when ALL participants joined
    *
    * MuSig2 requires n-of-n signing (all participants must sign)
