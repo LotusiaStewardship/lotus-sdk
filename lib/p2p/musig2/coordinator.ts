@@ -1727,24 +1727,52 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
 
     // Use activeSession for validation (create wrapper if using new architecture)
     if (signingSession && !activeSession) {
-      // Check if session is ready (must exist to receive nonces)
+      // If session doesn't exist yet, try to create it (handles race conditions)
       if (!signingSession.session) {
-        throw new Error(
-          `Session ${sessionId} not ready - threshold not met. Cannot receive nonces yet.`,
-        )
-      }
-      // Create temporary ActiveSession wrapper for validation
-      activeSession = {
-        sessionId: signingSession.sessionId,
-        session: signingSession.session,
-        participants: signingSession.participants,
-        phase:
-          signingSession.phase === 'ready' || signingSession.phase === 'waiting'
-            ? MuSigSessionPhase.INIT
-            : signingSession.phase,
-        createdAt: signingSession.createdAt,
-        updatedAt: signingSession.updatedAt,
-        lastSequenceNumbers: signingSession.lastSequenceNumbers,
+        const created = await this.ensureSessionCreated(sessionId)
+        if (!created) {
+          throw new Error(
+            `Session ${sessionId} not ready - threshold not met. Cannot receive nonces yet.`,
+          )
+        }
+        // Re-fetch signingSession after creation to get updated reference
+        const updatedSigningSession = this.activeSigningSessions.get(sessionId)
+        if (!updatedSigningSession || !updatedSigningSession.session) {
+          throw new Error(
+            `Session ${sessionId} not ready - session creation failed.`,
+          )
+        }
+        // Use updated reference (we know session exists from check above)
+        const sessionToUse = updatedSigningSession
+        const session = updatedSigningSession.session // TypeScript knows this is defined
+        // Create temporary ActiveSession wrapper for validation
+        activeSession = {
+          sessionId: sessionToUse.sessionId,
+          session,
+          participants: sessionToUse.participants,
+          phase:
+            sessionToUse.phase === 'ready' || sessionToUse.phase === 'waiting'
+              ? MuSigSessionPhase.INIT
+              : sessionToUse.phase,
+          createdAt: sessionToUse.createdAt,
+          updatedAt: sessionToUse.updatedAt,
+          lastSequenceNumbers: sessionToUse.lastSequenceNumbers,
+        }
+      } else {
+        // Session already exists - create wrapper
+        activeSession = {
+          sessionId: signingSession.sessionId,
+          session: signingSession.session,
+          participants: signingSession.participants,
+          phase:
+            signingSession.phase === 'ready' ||
+            signingSession.phase === 'waiting'
+              ? MuSigSessionPhase.INIT
+              : signingSession.phase,
+          createdAt: signingSession.createdAt,
+          updatedAt: signingSession.updatedAt,
+          lastSequenceNumbers: signingSession.lastSequenceNumbers,
+        }
       }
     }
 
