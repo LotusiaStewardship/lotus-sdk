@@ -554,6 +554,13 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
             return // Drop rate-limited advertisement
           }
 
+          // Prevent duplicate emissions - check if signer already discovered
+          const pubKeyStr = advertisement.publicKey.toString()
+          if (this.signerAdvertisements.has(pubKeyStr)) {
+            // Already discovered this signer, skip duplicate emission
+            return
+          }
+
           // All security checks passed - emit event
           this.emit(MuSig2Event.SIGNER_DISCOVERED, advertisement)
 
@@ -1687,6 +1694,17 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     const oldSessions = Array.from(this.activeSessions.keys())
     const newSessions = Array.from(this.activeSigningSessions.keys())
     return [...oldSessions, ...newSessions]
+  }
+
+  /**
+   * Check if a signer advertisement exists for the given public key
+   * Used for duplicate prevention when receiving advertisements from multiple channels
+   *
+   * @param publicKeyStr - Public key as string (from PublicKey.toString())
+   * @returns true if advertisement exists, false otherwise
+   */
+  hasSignerAdvertisement(publicKeyStr: string): boolean {
+    return this.signerAdvertisements.has(publicKeyStr)
   }
 
   /**

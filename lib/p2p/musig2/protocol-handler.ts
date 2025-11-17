@@ -641,6 +641,13 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
         return // Drop rate-limited advertisement
       }
 
+      // Prevent duplicate emissions - check if signer already discovered
+      const pubKeyStr = advertisement.publicKey.toString()
+      if (this.coordinator.hasSignerAdvertisement(pubKeyStr)) {
+        // Already discovered this signer, skip duplicate emission
+        return
+      }
+
       // All security checks passed - emit event
       this.coordinator.emit(MuSig2Event.SIGNER_DISCOVERED, advertisement)
     } catch (error) {
