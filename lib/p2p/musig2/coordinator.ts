@@ -1231,10 +1231,21 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     let activeSession = this.activeSigningSessions.get(requestId)
 
     if (!activeSession) {
+      // Find creator's index in required keys
+      const creatorIndex = request.requiredPublicKeys.findIndex(
+        pk => pk.toString() === request.creatorPublicKey.toString(),
+      )
+
+      // Initialize participants map with creator (known from request)
+      const participants = new Map<number, string>()
+      if (creatorIndex !== -1) {
+        participants.set(creatorIndex, request.creatorPeerId)
+      }
+
       activeSession = {
         sessionId: requestId,
         request,
-        participants: new Map(),
+        participants,
         myIndex,
         myPrivateKey,
         phase: 'waiting',
@@ -1245,8 +1256,10 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       this.activeSigningSessions.set(requestId, activeSession)
     }
 
-    // Add myself to participants
-    activeSession.participants.set(myIndex, this.peerId)
+    // Add myself to participants (if not already present)
+    if (!activeSession.participants.has(myIndex)) {
+      activeSession.participants.set(myIndex, this.peerId)
+    }
 
     // Create participation signature
     const participationData = Buffer.concat([
