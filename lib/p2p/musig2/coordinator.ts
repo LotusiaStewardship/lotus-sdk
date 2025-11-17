@@ -1695,10 +1695,16 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
 
     // Use activeSession for validation (create wrapper if using new architecture)
     if (signingSession && !activeSession) {
+      // Check if session is ready (must exist to receive nonces)
+      if (!signingSession.session) {
+        throw new Error(
+          `Session ${sessionId} not ready - threshold not met. Cannot receive nonces yet.`,
+        )
+      }
       // Create temporary ActiveSession wrapper for validation
       activeSession = {
         sessionId: signingSession.sessionId,
-        session: signingSession.session!,
+        session: signingSession.session,
         participants: signingSession.participants,
         phase:
           signingSession.phase === 'ready' || signingSession.phase === 'waiting'
@@ -1712,6 +1718,13 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
 
     if (!activeSession) {
       throw new Error(`Session ${sessionId} not found`)
+    }
+
+    // Ensure session exists before proceeding
+    if (!activeSession.session) {
+      throw new Error(
+        `Session ${sessionId} not ready - session object not initialized`,
+      )
     }
 
     // Validate protocol phase (must be in NONCE_EXCHANGE to accept NONCE_SHARE)
