@@ -2958,7 +2958,30 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     publicNonce: [Point, Point],
     participants: Map<number, string>,
   ): Promise<void> {
-    const activeSession = this.activeSessions.get(sessionId)
+    // Support both old and new architecture
+    let activeSession = this.activeSessions.get(sessionId)
+    const signingSession = this.activeSigningSessions.get(sessionId)
+
+    // If using new architecture, create temporary wrapper for compatibility
+    if (signingSession && !activeSession) {
+      if (!signingSession.session) {
+        throw new Error(`Session ${sessionId} not ready - threshold not met`)
+      }
+      // Create temporary ActiveSession wrapper for compatibility
+      activeSession = {
+        sessionId: signingSession.sessionId,
+        session: signingSession.session,
+        participants: signingSession.participants,
+        phase:
+          signingSession.phase === 'ready' || signingSession.phase === 'waiting'
+            ? MuSigSessionPhase.INIT
+            : signingSession.phase,
+        createdAt: signingSession.createdAt,
+        updatedAt: signingSession.updatedAt,
+        lastSequenceNumbers: signingSession.lastSequenceNumbers,
+      }
+    }
+
     if (!activeSession) {
       throw new Error(`Session ${sessionId} not found`)
     }
@@ -2990,7 +3013,30 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     partialSig: BN,
     participants: Map<number, string>,
   ): Promise<void> {
-    const activeSession = this.activeSessions.get(sessionId)
+    // Support both old and new architecture
+    let activeSession = this.activeSessions.get(sessionId)
+    const signingSession = this.activeSigningSessions.get(sessionId)
+
+    // If using new architecture, create temporary wrapper for compatibility
+    if (signingSession && !activeSession) {
+      if (!signingSession.session) {
+        throw new Error(`Session ${sessionId} not ready - threshold not met`)
+      }
+      // Create temporary ActiveSession wrapper for compatibility
+      activeSession = {
+        sessionId: signingSession.sessionId,
+        session: signingSession.session,
+        participants: signingSession.participants,
+        phase:
+          signingSession.phase === 'ready' || signingSession.phase === 'waiting'
+            ? MuSigSessionPhase.INIT
+            : signingSession.phase,
+        createdAt: signingSession.createdAt,
+        updatedAt: signingSession.updatedAt,
+        lastSequenceNumbers: signingSession.lastSequenceNumbers,
+      }
+    }
+
     if (!activeSession) {
       throw new Error(`Session ${sessionId} not found`)
     }
