@@ -9,6 +9,50 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./lib/p2p/musig2": {
+      "types": "./dist/lib/p2p/musig2/index.d.ts",
+      "import": "./dist/lib/p2p/musig2/index.js"
+    },
+    "./lib/p2p/musig2/*": {
+      "types": "./dist/lib/p2p/musig2/*.d.ts",
+      "import": "./dist/lib/p2p/musig2/*.js"
+    },
+    "./lib/p2p": {
+      "types": "./dist/lib/p2p/index.d.ts",
+      "import": "./dist/lib/p2p/index.js"
+    },
+    "./lib/p2p/*": {
+      "types": "./dist/lib/p2p/*.d.ts",
+      "import": "./dist/lib/p2p/*.js"
+    },
+    "./lib/p2p/swapsig": {
+      "types": "./dist/lib/p2p/swapsig/index.d.ts",
+      "import": "./dist/lib/p2p/swapsig/index.js"
+    },
+    "./lib/p2p/swapsig/*": {
+      "types": "./dist/lib/p2p/swapsig/*.d.ts",
+      "import": "./dist/lib/p2p/swapsig/*.js"
+    },
+    "./lib/bitcore": {
+      "types": "./dist/lib/bitcore/index.d.ts",
+      "import": "./dist/lib/bitcore/index.js"
+    },
+    "./lib/bitcore/*": {
+      "types": "./dist/lib/bitcore/*.d.ts",
+      "import": "./dist/lib/bitcore/*.js"
+    },
+    "./lib/rank": {
+      "types": "./dist/lib/rank/index.d.ts",
+      "import": "./dist/lib/rank/index.js"
+    },
+    "./lib/rank/*": {
+      "types": "./dist/lib/rank/*.d.ts",
+      "import": "./dist/lib/rank/*.js"
+    },
+    "./lib/*": {
+      "types": "./dist/lib/*.d.ts",
+      "import": "./dist/lib/*.js"
     }
   },
   "directories": {
