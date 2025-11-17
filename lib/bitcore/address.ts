@@ -741,6 +741,19 @@ export class Address {
    * Will return an X address string
    */
   toXAddress(network?: Network | string): string {
+    // For Taproot addresses, XAddress encodes only the 33-byte commitment,
+    // not the full script. This matches lotusd's implementation.
+    // Reference: lotusd/src/addresses/xaddress.cpp:175-180
+    if (this.isPayToTaproot()) {
+      const xaddr = new XAddress(
+        this.hashBuffer, // 33-byte commitment only
+        network ?? this.network,
+        this.type,
+      )
+      return xaddr.toString()
+    }
+
+    // For other address types, use the full script
     const script = Script.fromAddress(this)
     const xaddr = new XAddress(
       script.toBuffer(),
