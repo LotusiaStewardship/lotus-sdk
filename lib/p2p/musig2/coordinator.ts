@@ -1384,9 +1384,16 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
    * Internal: Create MuSig session from signing request when ALL participants joined
    *
    * MuSig2 requires n-of-n signing (all participants must sign)
+   *
+   * This method is called automatically when all participants have joined,
+   * or when SESSION_READY is received but the session doesn't exist yet.
+   *
+   * @param requestId - Request ID
+   * @param skipBroadcast - If true, skip broadcasting SESSION_READY (used when called from SESSION_READY handler)
    */
-  private async _createMuSigSessionFromRequest(
+  async _createMuSigSessionFromRequest(
     requestId: string,
+    skipBroadcast: boolean = false,
   ): Promise<void> {
     const metadata = this.p2pMetadata.get(requestId)
     if (!metadata) {
@@ -1428,22 +1435,25 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     delete metadata.myPrivateKey
     delete metadata.request
 
-    // CRITICAL: Only broadcast SESSION_READY, do NOT emit locally
-    // The creator will receive its own broadcast via GossipSub handler,
-    // ensuring all peers (including creator) emit SESSION_READY in the same order
-    await this.broadcast({
-      type: MuSig2MessageType.SESSION_READY,
-      from: this.peerId,
-      payload: {
-        requestId: requestId,
-        sessionId: session.sessionId,
-        participantIndex: session.myIndex,
-      },
-      timestamp: Date.now(),
-      messageId: this.messageProtocol.createMessage('', {}, this.peerId)
-        .messageId,
-      protocol: 'musig2',
-    })
+    // CRITICAL: Only broadcast SESSION_READY if this is the first time creating the session
+    // Skip broadcast if called from SESSION_READY handler (to prevent duplicate broadcasts)
+    if (!skipBroadcast) {
+      // The creator will receive its own broadcast via GossipSub handler,
+      // ensuring all peers (including creator) emit SESSION_READY in the same order
+      await this.broadcast({
+        type: MuSig2MessageType.SESSION_READY,
+        from: this.peerId,
+        payload: {
+          requestId: requestId,
+          sessionId: session.sessionId,
+          participantIndex: session.myIndex,
+        },
+        timestamp: Date.now(),
+        messageId: this.messageProtocol.createMessage('', {}, this.peerId)
+          .messageId,
+        protocol: 'musig2',
+      })
+    }
 
     // NOTE: Do NOT emit SESSION_READY locally here!
     // The creator receives its own broadcast and the handler emits the event.

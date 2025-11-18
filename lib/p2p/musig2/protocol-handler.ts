@@ -895,8 +895,22 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
   ): Promise<void> {
     if (!this.coordinator) return
 
+    // CRITICAL: Ensure session is created before emitting SESSION_READY
+    // The session might not exist yet if we receive SESSION_READY before
+    // processing all PARTICIPANT_JOINED messages
+    const session = this.coordinator.getSession(payload.sessionId)
+    if (!session) {
+      // Session doesn't exist yet - create it from the request
+      // This can happen if the creator broadcasts SESSION_READY before
+      // we've processed all PARTICIPANT_JOINED events
+      // Pass skipBroadcast=true to prevent duplicate SESSION_READY broadcasts
+      await this.coordinator._createMuSigSessionFromRequest(
+        payload.requestId,
+        true,
+      )
+    }
+
     // Emit event with sessionId (hash-based ID) - all protocol operations use this after session creation
-    // Note: Session should already be created by joinSigningRequest before receiving this broadcast
     this.coordinator.emitEventWithDuplicatePrevention(
       MuSig2Event.SESSION_READY,
       payload.sessionId,
