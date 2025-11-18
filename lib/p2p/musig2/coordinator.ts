@@ -52,6 +52,8 @@ import {
   MuSigSession,
   MuSigSessionPhase,
 } from '../../bitcore/musig2/session.js'
+import { signTaprootKeyPathWithMuSig2 } from '../../bitcore/taproot/musig2.js'
+import { calculateTapTweak } from '../../bitcore/taproot.js'
 import { PublicKey } from '../../bitcore/publickey.js'
 import { PrivateKey } from '../../bitcore/privatekey.js'
 import { Signature } from '../../bitcore/crypto/signature.js'
@@ -1538,11 +1540,50 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     }
 
     // Create partial signature
-    // (createPartialSignature transitions session phase to PARTIAL_SIG_EXCHANGE)
-    const partialSig = this.sessionManager.createPartialSignature(
-      session,
-      privateKey,
-    )
+    // For Taproot, use Taproot-aware signing that accounts for the tweak
+    let partialSig: BN
+    if (session.metadata?.inputScriptType === 'taproot') {
+      // Taproot key-path spending requires special handling
+      // Compute Taproot tweak (merkle root is all zeros for key-path only)
+      const merkleRoot = Buffer.alloc(32)
+      const tweak = calculateTapTweak(
+        session.keyAggContext.aggregatedPubKey,
+        merkleRoot,
+      )
+
+      // Use Taproot-aware signing function
+      if (!session.mySecretNonce) {
+        throw new Error(
+          'Secret nonce not found - cannot create Taproot partial signature',
+        )
+      }
+      if (!session.aggregatedNonce) {
+        throw new Error(
+          'Aggregated nonce not found - cannot create Taproot partial signature',
+        )
+      }
+
+      partialSig = signTaprootKeyPathWithMuSig2(
+        session.mySecretNonce,
+        privateKey,
+        session.keyAggContext,
+        session.myIndex,
+        session.aggregatedNonce,
+        session.message,
+        tweak,
+      )
+
+      // Transition to PARTIAL_SIG_EXCHANGE phase
+      session.myPartialSig = partialSig
+      session.phase = MuSigSessionPhase.PARTIAL_SIG_EXCHANGE
+    } else {
+      // Regular MuSig2 signing (non-Taproot)
+      // (createPartialSignature transitions session phase to PARTIAL_SIG_EXCHANGE)
+      partialSig = this.sessionManager.createPartialSignature(
+        session,
+        privateKey,
+      )
+    }
 
     // Session phase is updated by createPartialSignature, update timestamp
     session.updatedAt = Date.now()

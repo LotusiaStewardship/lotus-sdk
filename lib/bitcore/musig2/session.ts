@@ -30,6 +30,8 @@ import {
   type MuSigNonce,
   type MuSigAggregatedNonce,
 } from '../crypto/musig2.js'
+import { verifyTaprootKeyPathMuSigPartial } from '../taproot/musig2.js'
+import { calculateTapTweak, tweakPublicKey } from '../taproot.js'
 
 /**
  * Session phases in the MuSig2 protocol
@@ -444,15 +446,39 @@ export class MuSigSessionManager {
       )
     }
 
-    const isValid = musigPartialSigVerify(
-      partialSig,
-      publicNonce,
-      session.signers[signerIndex],
-      session.keyAggContext,
-      signerIndex,
-      session.aggregatedNonce!,
-      session.message,
-    )
+    // For Taproot, use Taproot-aware verification that accounts for the tweak
+    let isValid: boolean
+    if (session.metadata?.inputScriptType === 'taproot') {
+      // Taproot key-path spending requires special verification
+      // Compute Taproot tweak (merkle root is all zeros for key-path only)
+      const merkleRoot = Buffer.alloc(32)
+      const tweak = calculateTapTweak(
+        session.keyAggContext.aggregatedPubKey,
+        merkleRoot,
+      )
+
+      isValid = verifyTaprootKeyPathMuSigPartial(
+        partialSig,
+        publicNonce,
+        session.signers[signerIndex],
+        session.keyAggContext,
+        signerIndex,
+        session.aggregatedNonce!,
+        session.message,
+        tweak,
+      )
+    } else {
+      // Regular MuSig2 verification (non-Taproot)
+      isValid = musigPartialSigVerify(
+        partialSig,
+        publicNonce,
+        session.signers[signerIndex],
+        session.keyAggContext,
+        signerIndex,
+        session.aggregatedNonce!,
+        session.message,
+      )
+    }
 
     if (!isValid) {
       this._abortSession(
@@ -629,11 +655,23 @@ export class MuSigSessionManager {
     }
 
     // Aggregate into final signature
+    // For Taproot, use the commitment (tweaked pubkey) instead of aggregated pubkey
+    // because the partial signatures were created using the commitment in the challenge hash
+    let pubKeyForAggregation = session.keyAggContext.aggregatedPubKey
+    if (session.metadata?.inputScriptType === 'taproot') {
+      // Compute Taproot commitment (merkle root is all zeros for key-path only)
+      const merkleRoot = Buffer.alloc(32)
+      pubKeyForAggregation = tweakPublicKey(
+        session.keyAggContext.aggregatedPubKey,
+        merkleRoot,
+      )
+    }
+
     session.finalSignature = musigSigAgg(
       allPartialSigs,
       session.aggregatedNonce,
       session.message,
-      session.keyAggContext.aggregatedPubKey,
+      pubKeyForAggregation,
     )
 
     session.phase = MuSigSessionPhase.COMPLETE
