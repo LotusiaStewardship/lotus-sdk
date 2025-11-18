@@ -1550,13 +1550,14 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
         ? MuSigSessionPhase.INIT
         : currentPhase
 
-    // Prevent duplicate Round 2 calls - check if already in PARTIAL_SIG_EXCHANGE phase
-    if (normalizedPhase === MuSigSessionPhase.PARTIAL_SIG_EXCHANGE) {
-      // Round 2 already started, skip duplicate processing
+    // Check if we've already created our partial signature
+    if (session.myPartialSig) {
+      // Already created, skip duplicate processing
       return
     }
 
     // Verify we're in the correct phase to start Round 2
+    // Phase should be NONCE_EXCHANGE (it transitions to PARTIAL_SIG_EXCHANGE after we create our signature)
     if (normalizedPhase !== MuSigSessionPhase.NONCE_EXCHANGE) {
       throw new Error(
         `Cannot start Round 2: session is in phase ${normalizedPhase}, expected NONCE_EXCHANGE`,
@@ -1564,12 +1565,14 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     }
 
     // Create partial signature
+    // (createPartialSignature transitions session phase to PARTIAL_SIG_EXCHANGE)
     const partialSig = this.sessionManager.createPartialSignature(
       session,
       privateKey,
     )
 
-    // Sync phase (createPartialSignature transitions to PARTIAL_SIG_EXCHANGE)
+    // Sync phase after creating partial signature
+    // (session.phase is now PARTIAL_SIG_EXCHANGE after createPartialSignature)
     if (signingSession) {
       signingSession.phase = session.phase
       signingSession.updatedAt = Date.now()
@@ -2076,26 +2079,12 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       return
     }
 
-    // ROOT CAUSE FIX: Transition phase to PARTIAL_SIG_EXCHANGE when all nonces are received.
-    // This ensures the phase correctly reflects that Round 2 can begin, preventing
-    // protocol violations when peers receive SESSION_NONCES_COMPLETE and immediately
-    // start Round 2 (which sends partial signatures).
-    if (session.phase === MuSigSessionPhase.NONCE_EXCHANGE) {
-      session.phase = MuSigSessionPhase.PARTIAL_SIG_EXCHANGE
-      session.updatedAt = Date.now()
-
-      // Sync phase to coordinator's session tracking
-      if (signingSession) {
-        signingSession.phase = session.phase
-        signingSession.updatedAt = Date.now()
-      } else if (activeSession) {
-        activeSession.phase = session.phase
-        activeSession.updatedAt = Date.now()
-      }
-    }
-
-    // Emit event AFTER phase transition to ensure protocol consistency
-    // Prevent duplicate emissions
+    // Emit event to signal that Round 2 can begin
+    // Note: We do NOT transition the phase here. The phase remains NONCE_EXCHANGE
+    // until someone actually creates a partial signature (in startRound2/createPartialSignature).
+    // This maintains semantic correctness: phase = what we're doing, not what we're ready for.
+    // The protocol validation will allow receiving partial signatures in NONCE_EXCHANGE
+    // if all nonces are received (see _validateProtocolPhase).
     if (this._shouldEmitEvent(sessionId, MuSig2Event.SESSION_NONCES_COMPLETE)) {
       this.emit(MuSig2Event.SESSION_NONCES_COMPLETE, sessionId)
     }
@@ -2703,17 +2692,27 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
         return true
 
       case MuSig2MessageType.PARTIAL_SIG_SHARE:
-        // PARTIAL_SIG_SHARE only allowed in PARTIAL_SIG_EXCHANGE phase
-        // The phase should have been transitioned in _handleAllNoncesReceived
-        // when all nonces were received and aggregated
-        if (currentPhase !== MuSigSessionPhase.PARTIAL_SIG_EXCHANGE) {
-          console.error(
-            `[MuSig2P2P] ⚠️ PROTOCOL VIOLATION in session ${activeSession.sessionId}: ` +
-              `PARTIAL_SIG_SHARE not allowed in phase ${currentPhase} (must be PARTIAL_SIG_EXCHANGE)`,
-          )
-          return false
+        // PARTIAL_SIG_SHARE allowed in:
+        // 1. PARTIAL_SIG_EXCHANGE phase (normal case - Round 2 has started)
+        // 2. NONCE_EXCHANGE phase IF all nonces have been received and aggregated
+        //    (this handles the case where SESSION_NONCES_COMPLETE was emitted but
+        //     no one has created their partial signature yet, so phase is still NONCE_EXCHANGE)
+        if (currentPhase === MuSigSessionPhase.PARTIAL_SIG_EXCHANGE) {
+          return true
         }
-        return true
+        if (currentPhase === MuSigSessionPhase.NONCE_EXCHANGE) {
+          // Check if all nonces are received (aggregated nonce exists)
+          const session = activeSession.session
+          if (session && session.aggregatedNonce) {
+            // All nonces received, ready to accept partial signatures
+            return true
+          }
+        }
+        console.error(
+          `[MuSig2P2P] ⚠️ PROTOCOL VIOLATION in session ${activeSession.sessionId}: ` +
+            `PARTIAL_SIG_SHARE not allowed in phase ${currentPhase} (must be PARTIAL_SIG_EXCHANGE or NONCE_EXCHANGE with all nonces received)`,
+        )
+        return false
 
       case MuSig2MessageType.SESSION_ABORT:
         // ABORT allowed in any phase

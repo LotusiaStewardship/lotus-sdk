@@ -359,10 +359,11 @@ export class MuSigSessionManager {
       throw new Error('Cannot create partial signature: secret nonce not found')
     }
 
-    // Validate phase
+    // Validate phase: Must be in NONCE_EXCHANGE to create partial signature
+    // The phase will transition to PARTIAL_SIG_EXCHANGE after creation
     if (session.phase !== MuSigSessionPhase.NONCE_EXCHANGE) {
       throw new Error(
-        `Cannot create partial signature in phase ${session.phase}`,
+        `Cannot create partial signature in phase ${session.phase}. Must be in NONCE_EXCHANGE.`,
       )
     }
 
@@ -378,6 +379,7 @@ export class MuSigSessionManager {
 
     // Store partial signature
     session.myPartialSig = partialSig
+    // Ensure phase is PARTIAL_SIG_EXCHANGE (it may already be if transitioned early)
     session.phase = MuSigSessionPhase.PARTIAL_SIG_EXCHANGE
     session.updatedAt = Date.now()
 
