@@ -377,15 +377,12 @@ export interface MuSig2P2PConfig {
 }
 
 /**
- * Active session tracking
+ * P2P-specific metadata for MuSig2 sessions
+ * Stored separately from MuSigSession to keep the session type clean
  */
-export interface ActiveSession {
-  sessionId: string
-  session: MuSigSession // MuSigSession type
-  participants: Map<number, string> // signerIndex -> peerId
-  phase: MuSigSessionPhase
-  createdAt: number
-  updatedAt: number
+export interface P2PSessionMetadata {
+  /** P2P peer ID mapping (signerIndex -> peerId) */
+  participants: Map<number, string>
   /** Last seen sequence number per signer (for replay protection) */
   lastSequenceNumbers: Map<number, number>
   /** Coordinator election data (optional) */
@@ -397,11 +394,18 @@ export interface ActiveSession {
   /** Coordinator failover tracking */
   failover?: {
     currentCoordinatorIndex: number
-    broadcastDeadline: number // Timestamp when broadcast should occur
-    broadcastTimeoutId?: NodeJS.Timeout // Timeout handle
-    failoverAttempts: number // Number of failovers that have occurred
+    broadcastDeadline: number
+    broadcastTimeoutId?: NodeJS.Timeout
+    failoverAttempts: number
   }
+  /** Signing request (only for signing request flows before session creation) */
+  request?: SigningRequest
+  /** My private key (only for signing request flows, before session creation) */
+  myPrivateKey?: PrivateKey
 }
+
+// ActiveSession is just MuSigSession - P2P metadata stored separately
+export type ActiveSession = MuSigSession
 
 /**
  * Session announcement metadata
@@ -674,51 +678,7 @@ export interface ParticipantJoinedPayload {
   signature: string // Participant's signature proving ownership
 }
 
-// ============================================================================
-// Updated Active Session (supports dynamic building)
-// ============================================================================
-
-/**
- * Active session tracking (updated for dynamic building)
- */
-export interface ActiveSigningSession {
-  /** Request/Session ID */
-  sessionId: string
-
-  /** Original signing request */
-  request: SigningRequest
-
-  /** Local MuSig session (created when threshold met) */
-  session?: MuSigSession
-
-  /** Participants who have joined (index -> peerId) */
-  participants: Map<number, string>
-
-  /** My index in the signers list */
-  myIndex: number
-
-  /** My private key */
-  myPrivateKey?: PrivateKey
-
-  /** Current phase */
-  phase: 'waiting' | 'ready' | MuSigSessionPhase
-
-  /** Creation timestamp */
-  createdAt: number
-
-  /** Last updated timestamp */
-  updatedAt: number
-
-  /** Last seen sequence number per signer (for replay protection) */
-  lastSequenceNumbers: Map<number, number>
-
-  /** Coordinator election data (optional) */
-  election?: {
-    coordinatorIndex: number
-    coordinatorPeerId?: string
-    electionProof: string
-  }
-}
+// ActiveSigningSession has been merged into ActiveSession above
 
 // ============================================================================
 // Burn-Based Identity Types (Phase 2)
