@@ -256,6 +256,12 @@ export class MuSigSessionManager {
     session.phase = MuSigSessionPhase.NONCE_EXCHANGE
     session.updatedAt = Date.now()
 
+    // RACE CONDITION FIX: If we already have all other nonces (received before we generated ours),
+    // aggregate them now
+    if (this.hasAllNonces(session)) {
+      this._aggregateNonces(session)
+    }
+
     return nonce.publicNonces
   }
 
