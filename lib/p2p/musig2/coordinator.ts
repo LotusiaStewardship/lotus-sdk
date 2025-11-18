@@ -1351,18 +1351,21 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
    * our local session is created even if we received the broadcast
    * before our local session creation completed.
    *
-   * @param requestId - Request ID (which is also the session ID)
+   * @param requestId - Request ID
    * @returns true if session was created or already exists, false otherwise
    */
   async ensureSessionCreated(requestId: string): Promise<boolean> {
-    const session = this.activeSessions.get(requestId)
-    if (session) {
-      return true // Session already exists
-    }
-
     const metadata = this.p2pMetadata.get(requestId)
     if (!metadata) {
       return false // No metadata found
+    }
+
+    // Check if session already exists using the sessionId mapping
+    if (metadata.sessionId) {
+      const session = this.activeSessions.get(metadata.sessionId)
+      if (session) {
+        return true // Session already exists
+      }
     }
 
     // Session doesn't exist yet - create it if we have all participants
@@ -1390,8 +1393,8 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       throw new Error(`Metadata not found for request ${requestId}`)
     }
 
-    // Check if session already exists
-    if (this.activeSessions.has(requestId)) {
+    // Check if session already exists using the sessionId mapping
+    if (metadata.sessionId && this.activeSessions.has(metadata.sessionId)) {
       return // Already created
     }
 
@@ -1411,25 +1414,33 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       metadata.request.metadata,
     )
 
-    // Store the session
-    this.activeSessions.set(requestId, session)
+    // Store the session using session.sessionId (hash-based ID) as the key
+    this.activeSessions.set(session.sessionId, session)
+
+    // Store mapping from requestId to sessionId for lookup
+    metadata.sessionId = session.sessionId
+
+    // CRITICAL: Also store metadata by sessionId for protocol operations
+    // After session creation, all protocol messages use sessionId (not requestId)
+    this.p2pMetadata.set(session.sessionId, metadata)
 
     // Clean up temporary fields from metadata
     delete metadata.myPrivateKey
     delete metadata.request
 
     // Emit ready event (prevent duplicates)
-    // Use requestId as the session identifier for the signing request architecture
-    if (this._shouldEmitEvent(requestId, MuSig2Event.SESSION_READY)) {
-      this.emit(MuSig2Event.SESSION_READY, requestId)
+    // Use session.sessionId as the session identifier
+    if (this._shouldEmitEvent(session.sessionId, MuSig2Event.SESSION_READY)) {
+      this.emit(MuSig2Event.SESSION_READY, session.sessionId)
     }
 
-    // Broadcast session ready
+    // Broadcast session ready with both IDs for transition
     await this.broadcast({
       type: MuSig2MessageType.SESSION_READY,
       from: this.peerId,
       payload: {
         requestId: requestId,
+        sessionId: session.sessionId,
         participantIndex: session.myIndex,
       },
       timestamp: Date.now(),
@@ -1880,25 +1891,14 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     publicNonce: [Point, Point],
     peerId: string,
   ): Promise<void> {
-    let session = this.activeSessions.get(sessionId)
-    let metadata = this.p2pMetadata.get(sessionId)
+    const session = this.activeSessions.get(sessionId)
+    const metadata = this.p2pMetadata.get(sessionId)
 
-    // If session doesn't exist yet, try to create it (handles race conditions)
+    // Session MUST exist - nonces can only be shared after SESSION_READY
     if (!session) {
-      const created = await this.ensureSessionCreated(sessionId)
-      if (!created) {
-        throw new Error(
-          `Session ${sessionId} not ready - threshold not met. Cannot receive nonces yet.`,
-        )
-      }
-      // Re-fetch after creation
-      session = this.activeSessions.get(sessionId)
-      metadata = this.p2pMetadata.get(sessionId)
-      if (!session || !metadata) {
-        throw new Error(
-          `Session ${sessionId} not ready - session creation failed.`,
-        )
-      }
+      throw new Error(
+        `Session ${sessionId} not found. Nonces can only be shared after SESSION_READY.`,
+      )
     }
 
     if (!metadata) {

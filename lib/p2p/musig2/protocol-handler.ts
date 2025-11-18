@@ -199,7 +199,11 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
 
         case MuSig2MessageType.SESSION_READY:
           await this._handleSessionReady(
-            message.payload as { requestId: string; participantIndex: number },
+            message.payload as {
+              requestId: string
+              sessionId: string
+              participantIndex: number
+            },
             from,
           )
           break
@@ -830,7 +834,11 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
    * Handle session ready
    */
   private async _handleSessionReady(
-    payload: { requestId: string; participantIndex: number },
+    payload: {
+      requestId: string
+      sessionId: string
+      participantIndex: number
+    },
     from: PeerInfo,
   ): Promise<void> {
     if (!this.coordinator) return
@@ -839,10 +847,10 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
     // This handles race conditions where we receive SESSION_READY before local session creation completes
     await this.coordinator.ensureSessionCreated(payload.requestId)
 
-    // Emit event with duplicate prevention - coordinator handles it
+    // Emit event with sessionId (hash-based ID) - all protocol operations use this after session creation
     this.coordinator.emitEventWithDuplicatePrevention(
       MuSig2Event.SESSION_READY,
-      payload.requestId,
+      payload.sessionId,
     )
   }
 }

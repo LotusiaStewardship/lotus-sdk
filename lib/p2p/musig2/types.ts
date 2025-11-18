@@ -402,6 +402,8 @@ export interface P2PSessionMetadata {
   request?: SigningRequest
   /** My private key (only for signing request flows, before session creation) */
   myPrivateKey?: PrivateKey
+  /** Session ID (hash-based) - populated after session creation from signing request */
+  sessionId?: string
 }
 
 // ActiveSession is just MuSigSession - P2P metadata stored separately
