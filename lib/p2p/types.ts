@@ -111,6 +111,20 @@ export enum ConnectionEvent {
 }
 
 /**
+ * Relay address monitoring events
+ */
+export enum RelayEvent {
+  /** New relay circuit addresses available */
+  ADDRESSES_AVAILABLE = 'relay:addresses-available',
+  
+  /** Relay connection established */
+  CONNECTED = 'relay:connected',
+  
+  /** Relay connection lost */
+  DISCONNECTED = 'relay:disconnected',
+}
+
+/**
  * P2P Configuration
  */
 export interface P2PConfig {
@@ -258,6 +272,22 @@ export interface P2PConfig {
 
   /** Custom metadata */
   metadata?: Record<string, unknown>
+
+  /**
+   * Relay address monitoring configuration
+   * Enables automatic monitoring and notification of relay address changes
+   * Useful for protocols that need to re-advertise when connectivity changes
+   */
+  relayMonitoring?: {
+    /** Enable relay address monitoring (default: false) */
+    enabled?: boolean
+    
+    /** Check interval in milliseconds (default: 10000) */
+    checkInterval?: number
+    
+    /** Only monitor bootstrap relay connections (default: true) */
+    bootstrapOnly?: boolean
+  }
 }
 
 /**
@@ -288,6 +318,14 @@ export interface IProtocolHandler {
 
   /** Handle incoming stream (optional) */
   handleStream?(stream: Stream, connection: Connection): Promise<void>
+
+  /** Handle relay address change (optional) */
+  onRelayAddressesChanged?(data: {
+    peerId: string
+    reachableAddresses: string[]
+    relayAddresses: string[]
+    timestamp: number
+  }): Promise<void>
 }
 
 /**

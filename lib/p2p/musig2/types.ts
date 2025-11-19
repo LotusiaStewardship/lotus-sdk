@@ -65,6 +65,7 @@ export enum MuSig2Event {
   PEER_CONNECTED = 'peer:connected',
   PEER_DISCONNECTED = 'peer:disconnected',
   PEER_UPDATED = 'peer:updated', // Peer information updated (e.g., multiaddrs changed)
+  RELAY_ADDRESSES_AVAILABLE = 'relay:addresses-available', // New relay circuit addresses available
 
   // MuSig2 Protocol Round Events
   ROUND1_COMPLETE = 'round1:complete',
@@ -148,6 +149,12 @@ export type MuSig2EventMap = {
   [MuSig2Event.PEER_CONNECTED]: (peerId: string) => void
   [MuSig2Event.PEER_DISCONNECTED]: (peerId: string) => void
   [MuSig2Event.PEER_UPDATED]: (peerInfo: PeerInfo) => void
+  [MuSig2Event.RELAY_ADDRESSES_AVAILABLE]: (data: {
+    peerId: string
+    reachableAddresses: string[]
+    relayAddresses: string[]
+    timestamp: number
+  }) => void
 
   // MuSig2 Protocol Round Events
   [MuSig2Event.ROUND1_COMPLETE]: (sessionId: string) => void

@@ -328,6 +328,20 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
   }
 
   /**
+   * Handle relay address changes from core P2P layer
+   */
+  async onRelayAddressesChanged(data: {
+    peerId: string
+    reachableAddresses: string[]
+    relayAddresses: string[]
+    timestamp: number
+  }): Promise<void> {
+    if (this.coordinator) {
+      this.coordinator._onRelayAddressesChanged(data)
+    }
+  }
+
+  /**
    * Handle session announcement
    */
   private async _handleSessionAnnounce(
