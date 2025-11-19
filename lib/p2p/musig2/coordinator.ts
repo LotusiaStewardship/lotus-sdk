@@ -13,7 +13,6 @@
 import { P2PCoordinator } from '../coordinator.js'
 import { P2PConfig, PeerInfo } from '../types.js'
 import { P2PProtocol } from '../protocol.js'
-import { P2PMessage } from '../types.js'
 import {
   MuSig2MessageType,
   MuSig2P2PConfig,
@@ -195,6 +194,9 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     if (this.musig2Config.enableAutoCleanup) {
       this.startSessionCleanup()
     }
+
+    // NOTE: Relay address monitoring is now handled by core P2P layer
+    // Protocol handlers can implement onRelayAddressesChanged to receive notifications
   }
 
   /**
@@ -315,16 +317,10 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
   /**
    * Stop the coordinator and cleanup
    *
-   * Overrides base class to ensure cleanup interval is stopped before node shutdown
    */
   async stop(): Promise<void> {
-    // SECURITY: Stop automatic cleanup interval first (before node shutdown)
-    if (this.sessionCleanupIntervalId) {
-      clearInterval(this.sessionCleanupIntervalId)
-      this.sessionCleanupIntervalId = undefined
-    }
-
     // Call parent stop() which will shutdown the libp2p node
+    // Event listeners are automatically cleaned up when the node stops
     await super.stop()
   }
 
@@ -508,7 +504,7 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
           // SECURITY 1: Message size limit (prevent memory exhaustion DoS)
           if (messageData.length > limits.MAX_ADVERTISEMENT_SIZE) {
             console.warn(
-              `[MuSig2P2P] ⚠️  Oversized advertisement rejected: ${messageData.length} bytes (max: ${limits.MAX_ADVERTISEMENT_SIZE})`,
+              `[MuSig2P2P] Oversized advertisement rejected: ${messageData.length} bytes (max: ${limits.MAX_ADVERTISEMENT_SIZE})`,
             )
             return // Drop oversized message
           }
@@ -521,7 +517,7 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
           const timestampSkew = Math.abs(Date.now() - payload.timestamp)
           if (timestampSkew > limits.MAX_TIMESTAMP_SKEW) {
             console.warn(
-              `[MuSig2P2P] ⚠️  Advertisement timestamp out of range: ${timestampSkew}ms skew (max: ${limits.MAX_TIMESTAMP_SKEW}ms)`,
+              `[MuSig2P2P] Advertisement timestamp out of range: ${timestampSkew}ms skew (max: ${limits.MAX_TIMESTAMP_SKEW}ms)`,
             )
             return // Drop time-invalid advertisement
           }
@@ -529,7 +525,7 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
           // SECURITY 3: Expiry enforcement (drop expired immediately)
           if (payload.expiresAt && payload.expiresAt < Date.now()) {
             console.warn(
-              `[MuSig2P2P] ⚠️  Expired advertisement rejected: ${payload.peerId}`,
+              `[MuSig2P2P] Expired advertisement rejected: ${payload.peerId}`,
             )
             return // Drop expired advertisement
           }
@@ -549,7 +545,7 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
           // Alice cannot trust Zoe - she must verify cryptographic proof locally
           if (!this.verifyAdvertisementSignature(advertisement)) {
             console.warn(
-              `[MuSig2P2P] ⚠️  Rejected invalid advertisement from GossipSub: ${payload.peerId}`,
+              `[MuSig2P2P] Rejected invalid advertisement from GossipSub: ${payload.peerId}`,
             )
             // Track invalid signature
             this.securityManager.recordInvalidSignature(payload.peerId)
@@ -564,7 +560,7 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
             )
           ) {
             console.warn(
-              `[MuSig2P2P] ⚠️  Advertisement rejected from GossipSub (rate/key limit): ${payload.peerId}`,
+              `[MuSig2P2P] Advertisement rejected from GossipSub (rate/key limit): ${payload.peerId}`,
             )
             return // Drop rate-limited advertisement
           }
@@ -585,13 +581,13 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
             // We advertised ourselves successfully (received our own GossipSub message)
             this.emit(MuSig2Event.SIGNER_ADVERTISED, advertisement)
             console.log(
-              `[MuSig2P2P] ✅ Advertisement confirmed (GossipSub): ${payload.metadata?.nickname || payload.peerId}`,
+              `[MuSig2P2P] Advertisement confirmed (GossipSub): ${payload.metadata?.nickname || payload.peerId}`,
             )
           } else {
             // We discovered a signer from another peer
             this.emit(MuSig2Event.SIGNER_DISCOVERED, advertisement)
             console.log(
-              `[MuSig2P2P] 📥 Verified & discovered (GossipSub): ${payload.metadata?.nickname || payload.peerId}`,
+              `[MuSig2P2P] Verified & discovered (GossipSub): ${payload.metadata?.nickname || payload.peerId}`,
             )
           }
         } catch (error) {
@@ -600,7 +596,7 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
         }
       })
 
-      console.log(`[MuSig2P2P] 📡 Subscribed to topic: ${topic}`)
+      console.log(`[MuSig2P2P] Subscribed to topic: ${topic}`)
     }
   }
 
@@ -650,7 +646,10 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     // This is enforced in protocol handlers (_handleSignerAdvertisement)
 
     // Get my multiaddrs for peer discovery
-    const myMultiaddrs = this.getStats().multiaddrs
+    // Use reachable addresses for NAT traversal to ensure DCUtR connectivity
+    const myMultiaddrs = await this.getReachableAddresses()
+    
+    console.log(`[MuSig2P2P] Advertising signer with ${myMultiaddrs.length} reachable addresses`)
 
     // Create advertisement data for signing
     const adData = Buffer.concat([
@@ -682,7 +681,9 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     // Store locally
     this.myAdvertisement = advertisement
     this.signerAdvertisements.set(myPubKey.toString(), advertisement)
-
+    
+    // NOTE: Address tracking is now handled by core P2P layer
+    
     // Announce to DHT with multiple indexes for discoverability
     const indexKeys: string[] = []
 
@@ -759,6 +760,51 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     // NOTE: Do NOT emit SIGNER_ADVERTISED locally!
     // We receive our own broadcast and the protocol handler emits the event.
     // This ensures all peers (including us) emit events in the same order.
+  }
+
+  /**
+   * Advertise signer availability with relay address waiting
+   * 
+   * Production implementation waits for relay addresses to ensure
+   * reliable NAT traversal before advertising signer availability
+   * 
+   * @param myPrivateKey - Your private key
+   * @param criteria - Availability criteria
+   * @param options - Optional configuration
+   */
+  async advertiseSignerWithRelay(
+    myPrivateKey: PrivateKey,
+    criteria: SignerCriteria,
+    options?: {
+      ttl?: number
+      metadata?: SignerAdvertisement['metadata']
+      maxWaitTime?: number // Max time to wait for relay addresses (ms)
+    },
+  ): Promise<void> {
+    const maxWaitTime = options?.maxWaitTime || 30000 // Default: 30 seconds
+    const checkInterval = 1000 // Check every second
+    let waited = 0
+
+    console.log('[MuSig2P2P] Waiting for relay addresses before advertising...')
+
+    // Wait for relay addresses to become available
+    while (waited < maxWaitTime) {
+      if (await this.hasRelayAddresses()) {
+        const relayAddrs = await this.getRelayAddresses()
+        console.log(`[MuSig2P2P] Relay addresses ready: ${relayAddrs.length} found`)
+        break
+      }
+
+      await new Promise(resolve => setTimeout(resolve, checkInterval))
+      waited += checkInterval
+    }
+
+    if (!(await this.hasRelayAddresses())) {
+      console.log('[MuSig2P2P] No relay addresses available, advertising with current addresses')
+    }
+
+    // Advertise with whatever addresses are available
+    await this.advertiseSigner(myPrivateKey, criteria, options)
   }
 
   /**
@@ -847,7 +893,7 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
           // - No additional challenge-response needed
           if (verifyOwnership) {
             console.log(
-              `[MuSig2P2P] ✅ Verified: Signature validated at discovery time`,
+              `[MuSig2P2P] Verified: Signature validated at discovery time`,
             )
           }
 
@@ -2267,7 +2313,7 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       try {
         await this.connectToPeer(addr)
         console.log(
-          `[MuSig2P2P] ✅ Auto-connected to ${peerInfo.peerId.substring(0, 12)}... at ${addr}`,
+          `[MuSig2P2P] Auto-connected to ${peerInfo.peerId.substring(0, 12)}... at ${addr}`,
         )
         return // Success - stop trying
       } catch (error) {
@@ -2278,7 +2324,7 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
 
     // All connection attempts failed
     console.warn(
-      `[MuSig2P2P] ⚠️  Failed to auto-connect to ${peerInfo.peerId.substring(0, 12)}... (tried ${peerInfo.multiaddrs.length} addresses)`,
+      `[MuSig2P2P] Failed to auto-connect to ${peerInfo.peerId.substring(0, 12)}... (tried ${peerInfo.multiaddrs.length} addresses)`,
     )
   }
 
@@ -2346,6 +2392,102 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
 
     // Emit event for external consumers
     this.emit('peer:updated' as MuSig2Event, peerInfo)
+  }
+
+  /**
+   * Handle relay address changes from core P2P layer
+   * Called when new relay circuit addresses become available
+   */
+  _onRelayAddressesChanged(data: {
+    peerId: string
+    reachableAddresses: string[]
+    relayAddresses: string[]
+    timestamp: number
+  }): void {
+    console.log('[MuSig2P2P] Relay addresses changed from core P2P:')
+    console.log(`[MuSig2P2P]   Relay addresses: ${data.relayAddresses.length}`)
+    
+    // Only re-advertise if we have an active signer advertisement
+    if (!this.myAdvertisement) {
+      console.log('[MuSig2P2P] No active signer advertisement to update')
+      return
+    }
+
+    // Re-advertise our signer with the new reachable addresses
+    this._readvertiseWithNewAddresses(data.reachableAddresses).catch(error => {
+      console.error('[MuSig2P2P] Error re-advertising with new addresses:', error)
+    })
+  }
+
+  /**
+   * Re-advertise our signer with updated reachable addresses
+   */
+  private async _readvertiseWithNewAddresses(newAddresses: string[]): Promise<void> {
+    if (!this.myAdvertisement) {
+      return
+    }
+
+    try {
+      console.log('[MuSig2P2P] Re-advertising signer with updated addresses')
+      
+      // Update our advertisement with new addresses
+      const updatedAdvertisement = {
+        ...this.myAdvertisement,
+        multiaddrs: newAddresses,
+        timestamp: Date.now(),
+      }
+
+      // Re-announce to DHT using existing announceResource method
+      const myPubKey = this.myAdvertisement.publicKey
+      await this.announceResource(
+        DHTResourceType.SIGNER_ADVERTISEMENT,
+        `musig2-signer:all:${myPubKey.toString()}`,
+        {
+          peerId: this.peerId,
+          multiaddrs: newAddresses,
+          publicKey: this.myAdvertisement.publicKey,
+          criteria: this.myAdvertisement.criteria,
+          metadata: this.myAdvertisement.metadata,
+          timestamp: updatedAdvertisement.timestamp,
+          expiresAt: this.myAdvertisement.expiresAt,
+          signature: this.myAdvertisement.signature,
+        },
+      )
+      
+      // Broadcast via GossipSub using existing broadcast method
+      await this.broadcast({
+        type: MuSig2MessageType.SIGNER_ADVERTISEMENT,
+        from: this.peerId,
+        payload: {
+          peerId: this.peerId,
+          multiaddrs: newAddresses,
+          publicKey: this.myAdvertisement.publicKey,
+          criteria: this.myAdvertisement.criteria,
+          metadata: this.myAdvertisement.metadata,
+          timestamp: updatedAdvertisement.timestamp,
+          expiresAt: this.myAdvertisement.expiresAt,
+          signature: this.myAdvertisement.signature,
+        },
+        timestamp: Date.now(),
+        messageId: this.messageProtocol.createMessage('', {}, this.peerId).messageId,
+        protocol: 'musig2',
+      })
+
+      // Update our stored advertisement
+      this.myAdvertisement = updatedAdvertisement
+
+      // Emit MuSig2-specific event for backward compatibility
+      this.emit(MuSig2Event.RELAY_ADDRESSES_AVAILABLE, {
+        peerId: this.peerId,
+        reachableAddresses: newAddresses,
+        relayAddresses: newAddresses.filter((addr: string) => addr.includes('/p2p-circuit/p2p/')),
+        timestamp: Date.now(),
+      })
+
+      console.log('[MuSig2P2P] Successfully re-advertised with updated addresses')
+    } catch (error) {
+      console.error('[MuSig2P2P] Failed to re-advertise with new addresses:', error)
+    }
   }
 
   // Private helper methods for messaging
