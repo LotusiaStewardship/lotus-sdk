@@ -288,6 +288,9 @@ export const MUSIG2_SECURITY_LIMITS = {
   /** Maximum advertisement message size in bytes (prevents memory exhaustion) */
   MAX_ADVERTISEMENT_SIZE: 10_000, // 10KB
 
+  /** Maximum signing request message size in bytes (prevents memory exhaustion) */
+  MAX_SIGNING_REQUEST_SIZE: 50_000, // 50KB (larger due to transaction data)
+
   /** Maximum timestamp skew allowed in milliseconds (prevents time-based attacks) */
   MAX_TIMESTAMP_SKEW: 300_000, // 5 minutes
 

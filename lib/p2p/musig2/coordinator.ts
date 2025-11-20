@@ -601,6 +601,111 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
   }
 
   /**
+   * Subscribe to signing requests via GossipSub for NAT traversal
+   * 
+   * This method allows peers behind NAT to receive signing requests
+   * through relay nodes that forward GossipSub messages.
+   * 
+   * @param callback - Optional callback for when signing requests are received
+   */
+  async subscribeToSigningRequests(
+    callback?: (request: SigningRequest) => void,
+  ): Promise<void> {
+    await this.subscribeToTopic(MuSig2MessageType.SIGNING_REQUEST, (messageData: Uint8Array) => {
+      try {
+        // Get security limits (allow config override)
+        const limits =
+          this.musig2Config.securityLimits || MUSIG2_SECURITY_LIMITS
+
+        // SECURITY 1: Message size limit (prevent memory exhaustion DoS)
+        if (messageData.length > limits.MAX_SIGNING_REQUEST_SIZE) {
+          console.warn(
+            `[MuSig2P2P] Oversized signing request rejected: ${messageData.length} bytes (max: ${limits.MAX_SIGNING_REQUEST_SIZE})`,
+          )
+          return // Drop oversized message
+        }
+
+        // Convert Uint8Array to string using Node.js Buffer
+        const messageStr = Buffer.from(messageData).toString('utf8')
+        const payload = JSON.parse(messageStr) as SigningRequestPayload
+
+        // SECURITY 2: Timestamp validation (prevent future/past attacks)
+        const timestampSkew = Math.abs(Date.now() - payload.createdAt)
+        if (timestampSkew > limits.MAX_TIMESTAMP_SKEW) {
+          console.warn(
+            `[MuSig2P2P] Stale signing request rejected: ${timestampSkew}ms skew (max: ${limits.MAX_TIMESTAMP_SKEW})`,
+          )
+          return // Drop stale message
+        }
+
+        // SECURITY 3: Expiry validation (prevent expired requests)
+        if (payload.expiresAt < Date.now()) {
+          console.warn(
+            `[MuSig2P2P] Expired signing request rejected: expired ${Date.now() - payload.expiresAt}ms ago`,
+          )
+          return // Drop expired message
+        }
+
+        // SECURITY 4: Signature verification (prevent request forgery)
+        const requestData = Buffer.concat([
+          Buffer.from(payload.requestId),
+          Buffer.from(payload.message, 'hex'),
+          ...payload.requiredPublicKeys.map(pk => Buffer.from(pk, 'hex')),
+          Buffer.from(payload.requiredPublicKeys.length.toString()),
+        ])
+        const hashbuf = Hash.sha256(requestData)
+        const creatorPubKey = PublicKey.fromString(payload.creatorPublicKey)
+        const creatorSig = Signature.fromBuffer(Buffer.from(payload.creatorSignature, 'hex'))
+
+        if (!Schnorr.verify(hashbuf, creatorSig, creatorPubKey, 'big')) {
+          console.warn(
+            `[MuSig2P2P] Invalid signing request signature rejected: ${payload.requestId}`,
+          )
+          return // Drop message with invalid signature
+        }
+
+        // SECURITY 5: TODO: Add rate limiting for signing requests (prevent spam)
+        // Note: Rate limiting infrastructure for signing requests needs to be implemented
+        // For now, we rely on GossipSub's built-in rate limiting and signature validation
+
+        // Convert payload to SigningRequest format
+        const signingRequest: SigningRequest = {
+          requestId: payload.requestId,
+          requiredPublicKeys: payload.requiredPublicKeys.map(pk => 
+            PublicKey.fromString(pk)
+          ),
+          message: Buffer.from(payload.message, 'hex'),
+          creatorPeerId: payload.creatorPeerId,
+          creatorPublicKey: creatorPubKey,
+          createdAt: payload.createdAt,
+          expiresAt: payload.expiresAt,
+          metadata: payload.metadata,
+          creatorSignature: Buffer.from(payload.creatorSignature, 'hex'),
+          joinedParticipants: new Map(),
+        }
+
+        // Process the signing request through the protocol handler
+        this.protocolHandler.handleMessage({
+          type: MuSig2MessageType.SIGNING_REQUEST,
+          from: payload.creatorPeerId,
+          payload: signingRequest,
+          timestamp: Date.now(),
+          messageId: '',
+          protocol: 'musig2'
+        }, { peerId: payload.creatorPeerId } as PeerInfo)
+
+        // Call user callback if provided
+        if (callback) {
+          callback(signingRequest)
+        }
+
+      } catch (error) {
+        console.debug('[MuSig2P2P] Malformed GossipSub signing request dropped:', error)
+      }
+    })
+  }
+
+  /**
    * Unsubscribe from signer discovery topics
    */
   async unsubscribeFromSignerDiscovery(): Promise<void> {
@@ -1194,23 +1299,36 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       )
     }
 
-    // Broadcast to connected peers
+    // REAL-TIME DISCOVERY: Publish signing request to GossipSub for NAT traversal
+    // This ensures peers behind NAT can receive signing requests via relay
+    const signingRequestPayload = {
+      requestId,
+      requiredPublicKeys: requiredPublicKeys.map(pk =>
+        serializePublicKey(pk),
+      ),
+      message: message.toString('hex'),
+      creatorPeerId: this.peerId,
+      creatorPublicKey: serializePublicKey(myPubKey),
+      createdAt,
+      expiresAt,
+      metadata: options?.metadata,
+      creatorSignature: creatorSignature.toString('hex'),
+    } as SigningRequestPayload
+
+    try {
+      await this.publishToTopic(MuSig2MessageType.SIGNING_REQUEST, signingRequestPayload)
+      console.log(`[MuSig2P2P] 📡 Published signing request to GossipSub: ${requestId}`)
+    } catch (error) {
+      console.log(`[MuSig2P2P] ❌ GossipSub publish failed for signing request ${requestId}:`)
+      console.log(`    Error: ${error}`)
+      console.log(`    Falling back to direct P2P broadcast + DHT...`)
+    }
+
+    // Broadcast to connected peers (fallback for direct connections)
     await this.broadcast({
       type: MuSig2MessageType.SIGNING_REQUEST,
       from: this.peerId,
-      payload: {
-        requestId,
-        requiredPublicKeys: requiredPublicKeys.map(pk =>
-          serializePublicKey(pk),
-        ),
-        message: message.toString('hex'),
-        creatorPeerId: this.peerId,
-        creatorPublicKey: serializePublicKey(myPubKey),
-        createdAt,
-        expiresAt,
-        metadata: options?.metadata,
-        creatorSignature: creatorSignature.toString('hex'),
-      } as SigningRequestPayload,
+      payload: signingRequestPayload,
       timestamp: Date.now(),
       messageId: this.messageProtocol.createMessage('', {}, this.peerId)
         .messageId,
