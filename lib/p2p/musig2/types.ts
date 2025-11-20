@@ -43,7 +43,6 @@ export enum MuSig2Event {
   SESSION_CREATED = 'session:created',
   SESSION_JOINED = 'session:joined',
   SESSION_READY = 'session:ready',
-  SESSION_ANNOUNCED = 'session:announced',
   SESSION_CLOSED = 'session:closed',
   SESSION_ABORTED = 'session:aborted',
   SESSION_ERROR = 'session:error',
@@ -100,10 +99,6 @@ export type MuSig2EventMap = {
   [MuSig2Event.SESSION_CREATED]: (sessionId: string) => void
   [MuSig2Event.SESSION_JOINED]: (sessionId: string) => void
   [MuSig2Event.SESSION_READY]: (sessionId: string) => void
-  [MuSig2Event.SESSION_ANNOUNCED]: (data: {
-    sessionId: string
-    announcement: SessionAnnouncementData
-  }) => void
   [MuSig2Event.SESSION_CLOSED]: (sessionId: string) => void
   [MuSig2Event.SESSION_ABORTED]: (sessionId: string, reason: string) => void
   [MuSig2Event.SESSION_ERROR]: (
@@ -178,9 +173,6 @@ export enum MuSig2MessageType {
   PARTICIPANT_JOINED = 'musig2:participant-joined',
   SESSION_READY = 'musig2:session-ready',
   SESSION_ABORT = 'musig2:session-abort',
-
-  // Legacy: Session lifecycle (deprecated, kept for compatibility)
-  SESSION_ANNOUNCE = 'musig2:session-announce',
   SESSION_JOIN = 'musig2:session-join',
 
   // Round 1: Nonce exchange

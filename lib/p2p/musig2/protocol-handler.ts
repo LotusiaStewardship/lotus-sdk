@@ -216,14 +216,6 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
           )
           break
 
-        // Legacy: Session lifecycle
-        case MuSig2MessageType.SESSION_ANNOUNCE:
-          await this._handleSessionAnnounce(
-            message.payload as SessionAnnouncementPayload,
-            from,
-          )
-          break
-
         case MuSig2MessageType.SESSION_JOIN:
           await this._handleSessionJoin(
             message.payload as SessionJoinPayload,
@@ -338,57 +330,6 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
   }): Promise<void> {
     if (this.coordinator) {
       this.coordinator._onRelayAddressesChanged(data)
-    }
-  }
-
-  /**
-   * Handle session announcement
-   */
-  private async _handleSessionAnnounce(
-    payload: SessionAnnouncementPayload,
-    from: PeerInfo,
-  ): Promise<void> {
-    if (!this.coordinator) return
-
-    try {
-      // SECURITY: Validate payload structure first
-      validateSessionAnnouncementPayload(payload)
-
-      // Deserialize signers - safely handle malformed data
-      const signers = payload.signers.map(hex => deserializePublicKey(hex))
-      const message = deserializeMessage(payload.message)
-
-      await this.coordinator._handleSessionAnnouncement(
-        payload.sessionId,
-        signers,
-        payload.creatorIndex,
-        message,
-        from.peerId,
-        payload.metadata,
-      )
-    } catch (error) {
-      if (
-        error instanceof DeserializationError ||
-        error instanceof ValidationError
-      ) {
-        console.warn(
-          `[MuSig2P2P] ⚠️  Malformed session announcement from ${from.peerId}: ${error.message}`,
-        )
-        // Track malicious peer
-        if (this.securityManager) {
-          this.securityManager.recordInvalidSignature(from.peerId)
-        }
-        return
-      }
-      // SECURITY: Never re-throw - log and drop to prevent DoS
-      console.error(
-        `[MuSig2P2P] ❌ Unexpected error handling session announcement from ${from.peerId}:`,
-        error,
-      )
-      if (this.securityManager) {
-        this.securityManager.peerReputation.recordSpam(from.peerId)
-      }
-      return
     }
   }
 
@@ -909,22 +850,8 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
   ): Promise<void> {
     if (!this.coordinator) return
 
-    // CRITICAL: Ensure session is created before emitting SESSION_READY
-    // The session might not exist yet if we receive SESSION_READY before
-    // processing all PARTICIPANT_JOINED messages
-    const session = this.coordinator.getSession(payload.sessionId)
-    if (!session) {
-      // Session doesn't exist yet - create it from the request
-      // This can happen if the creator broadcasts SESSION_READY before
-      // we've processed all PARTICIPANT_JOINED events
-      // Pass skipBroadcast=true to prevent duplicate SESSION_READY broadcasts
-      await this.coordinator._createMuSigSessionFromRequest(
-        payload.requestId,
-        true,
-      )
-    }
-
-    // Emit event with sessionId (hash-based ID) - all protocol operations use this after session creation
+    // Emit event with sessionId - the session should already exist
+    // due to PARTICIPANT_JOINED processing with mutex protection
     this.coordinator.emitEventWithDuplicatePrevention(
       MuSig2Event.SESSION_READY,
       payload.sessionId,
