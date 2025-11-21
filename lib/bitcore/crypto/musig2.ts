@@ -680,7 +680,8 @@ export function musigPartialSigVerify(
  * @param aggregatedNonce - Aggregated nonces
  * @param message - Message that was signed
  * @param aggregatedPubKey - Aggregated public key (for verification)
- * @returns Final 64-byte Schnorr signature
+ * @param sighashType - Optional sighash type to embed in signature (e.g., SIGHASH_ALL | SIGHASH_LOTUS)
+ * @returns Final 64-byte Schnorr signature with nhashtype set
  *
  * @example
  * ```typescript
@@ -705,6 +706,7 @@ export function musigSigAgg(
   aggregatedNonce: MuSigAggregatedNonce,
   message: Buffer,
   aggregatedPubKey: PublicKey,
+  sighashType?: number,
 ): Signature {
   if (partialSigs.length === 0) {
     throw new Error('Cannot aggregate zero partial signatures')
@@ -750,10 +752,12 @@ export function musigSigAgg(
     s: s,
     compressed: true,
     isSchnorr: true,
+    nhashtype: sighashType, // BUG FIX: Set sighash type for proper transaction serialization
   })
 
   // Note: The caller should verify this signature with:
   // Schnorr.verify(message, signature, aggregatedPubKey, 'big')
+  // When serializing to transaction format, toTxFormat() will append the sighash byte
 
   return signature
 }

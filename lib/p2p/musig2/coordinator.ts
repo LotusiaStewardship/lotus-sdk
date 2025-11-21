@@ -20,6 +20,7 @@ import {
   P2PSessionMetadata,
   SessionAnnouncementData,
   SessionJoinPayload,
+  NonceCommitmentPayload,
   NonceSharePayload,
   PartialSigSharePayload,
   SessionAnnouncementPayload,
@@ -70,6 +71,7 @@ import {
 import { SecurityManager, PEER_KEY_LIMITS } from './security.js'
 import { IProtocolValidator } from '../types.js'
 import { MuSig2IdentityManager } from './identity-manager.js'
+import { Mutex } from 'async-mutex'
 
 /**
  * MuSig2 P2P Coordinator
@@ -81,23 +83,39 @@ import { MuSig2IdentityManager } from './identity-manager.js'
  */
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging -- Safe: We're using declaration merging to add type-safe method signatures (not properties) to the EventEmitter methods inherited from the parent class. This is a standard TypeScript pattern for typed event emitters and doesn't introduce runtime safety issues since we're not adding uninitialized properties.
 export class MuSig2P2PCoordinator extends P2PCoordinator {
-  private sessionManager: MuSigSessionManager
-  private protocolHandler: MuSig2ProtocolHandler
-  private messageProtocol: P2PProtocol // Renamed to avoid conflict with parent's private 'protocol'
+  private readonly securityManager: SecurityManager
+  private readonly messageProtocol: P2PProtocol
+  private readonly protocolHandler: MuSig2ProtocolHandler
+  private readonly sessionManager: MuSigSessionManager
+  private readonly debugLoggingEnabled: boolean
+  // REMOVED participantJoinCache - now using metadata.participants as single source of truth
   private activeSessions: Map<string, MuSigSession> = new Map() // MuSigSession directly
   private p2pMetadata: Map<string, P2PSessionMetadata> = new Map() // P2P-specific metadata
+  // ARCHITECTURE CHANGE (2025-11-21): Request ID → Session ID mapping
+  // Signing requests use requestId (SHA256 hash), sessions use sessionId (deterministic from signers+message)
+  // This mapping allows looking up sessions by requestId and prevents ID confusion
+  private requestIdToSessionId: Map<string, string> = new Map() // requestId -> sessionId
   private signerAdvertisements: Map<string, SignerAdvertisement> = new Map() // publicKey -> advertisement
   private signingRequests: Map<string, SigningRequest> = new Map() // requestId -> request
   private peerIdToSignerIndex: Map<string, Map<string, number>> = new Map() // sessionId -> peerId -> signerIndex
   private myAdvertisement?: SignerAdvertisement // My current advertisement
+  private advertisementSigningKey?: PrivateKey // Stored for re-signing on address changes
   // SECURITY (DOS PREVENTION): Automatic cleanup interval to prevent resource exhaustion
   private sessionCleanupIntervalId?: NodeJS.Timeout
   // Track emitted events per session to prevent duplicates
   private emittedEvents: Map<string, Set<MuSig2Event>> = new Map() // sessionId -> Set of emitted events
-  // SECURITY: Security manager for rate limiting, key tracking, and reputation
-  private securityManager: SecurityManager
   // SECURITY: Identity manager for burn-based blockchain-anchored identities
   private identityManager?: MuSig2IdentityManager
+  // CONCURRENCY: Mutexes for thread-safe state management
+  private stateMutex = new Mutex() // Protects session state and metadata
+  private advertisementMutex = new Mutex() // Protects signer advertisements
+  private signingRequestMutex = new Mutex() // Protects signing requests
+  // EVENT DEFERRAL: Queue for events that must be emitted after state mutations
+  private deferredEvents: Array<{
+    event: MuSig2Event
+    args: Parameters<MuSig2EventMap[MuSig2Event]>
+  }> = []
+  private isProcessingStateChange = false
   private musig2Config: {
     sessionTimeout: number
     enableSessionDiscovery: boolean
@@ -120,6 +138,29 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     burnMaturationPeriod: number
     enableAutoConnect: boolean
     minReputationForAutoConnect: number
+    enableNonceCommitment: boolean
+    enableDebugLogging: boolean
+  }
+
+  /**
+   * Logs a debug message with context and timestamp if debug logging is enabled.
+   *
+   * @param {string} context - The context of the debug message.
+   * @param {string} message - The debug message to log.
+   * @param {Record<string, unknown>} [extra] - Extra information to include in the log.
+   */
+  debugLog(
+    context: string,
+    message: string,
+    extra?: Record<string, unknown>,
+  ): void {
+    if (!this.debugLoggingEnabled) {
+      return
+    }
+
+    const timestamp = new Date().toISOString()
+    const meta = extra ? ` ${JSON.stringify(extra)}` : ''
+    console.debug(`[MuSig2P2P][${timestamp}][${context}] ${message}${meta}`)
   }
 
   constructor(p2pConfig: P2PConfig, musig2Config?: Partial<MuSig2P2PConfig>) {
@@ -147,7 +188,7 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       sessionResourceType:
         musig2Config?.sessionResourceType || 'musig2-session',
       enableCoordinatorElection:
-        musig2Config?.enableCoordinatorElection ?? false,
+        musig2Config?.enableCoordinatorElection ?? true,
       electionMethod: musig2Config?.electionMethod || 'lexicographic',
       enableCoordinatorFailover:
         musig2Config?.enableCoordinatorFailover ??
@@ -171,7 +212,10 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       enableAutoConnect: musig2Config?.enableAutoConnect ?? true,
       minReputationForAutoConnect:
         musig2Config?.minReputationForAutoConnect ?? 0,
+      enableNonceCommitment: musig2Config?.enableNonceCommitment ?? true,
+      enableDebugLogging: musig2Config?.enableDebugLogging ?? false,
     }
+    this.debugLoggingEnabled = this.musig2Config.enableDebugLogging
 
     // Initialize identity manager if burn-based identity is enabled
     if (this.musig2Config.enableBurnBasedIdentity) {
@@ -199,6 +243,161 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     // Protocol handlers can implement onRelayAddressesChanged to receive notifications
   }
 
+  // ========================================================================
+  // Concurrency Control Helpers
+  // ========================================================================
+
+  /**
+   * Execute a function with state lock held
+   * Ensures atomic operations on session state and metadata
+   *
+   * After the state mutation completes, deferred events are emitted
+   * to ensure state consistency: applications see the new state before
+   * processing events that depend on it.
+   */
+  private async withStateLock<T>(fn: () => Promise<T>): Promise<T> {
+    const release = await this.stateMutex.acquire()
+    const wasProcessing = this.isProcessingStateChange
+    this.isProcessingStateChange = true
+
+    try {
+      return await fn()
+    } finally {
+      const pendingEvents = this._collectDeferredEvents()
+
+      // Only reset if we were the outermost lock holder
+      if (!wasProcessing) {
+        this.isProcessingStateChange = false
+      }
+
+      release()
+
+      // Emit deferred events AFTER releasing the lock to avoid deadlocks
+      await this._processDeferredEvents(pendingEvents)
+    }
+  }
+
+  /**
+   * Defer an event to be emitted after current state mutations complete
+   *
+   * This ensures that event handlers see a consistent state:
+   * - All state mutations are complete
+   * - All related state is committed
+   * - No race conditions with incoming messages
+   */
+  private deferEvent(
+    event: MuSig2Event,
+    ...args: Parameters<MuSig2EventMap[MuSig2Event]>
+  ): void {
+    this.deferredEvents.push({ event, args })
+  }
+
+  /**
+   * Process all deferred events
+   *
+   * Called after state mutations complete but before releasing the state lock.
+   * This ensures event handlers see a consistent state.
+   */
+  private _collectDeferredEvents(): Array<{
+    event: MuSig2Event
+    args: Parameters<MuSig2EventMap[MuSig2Event]>
+  }> {
+    if (this.deferredEvents.length === 0) {
+      return []
+    }
+
+    return this.deferredEvents.splice(0)
+  }
+
+  private async _processDeferredEvents(
+    initialEvents: Array<{
+      event: MuSig2Event
+      args: Parameters<MuSig2EventMap[MuSig2Event]>
+    }> = [],
+  ): Promise<void> {
+    const localQueue = [...initialEvents]
+
+    while (localQueue.length > 0 || this.deferredEvents.length > 0) {
+      const nextEvent =
+        localQueue.length > 0
+          ? localQueue.shift()!
+          : this.deferredEvents.shift()!
+
+      this.emit(nextEvent.event, ...nextEvent.args)
+
+      // Yield to event loop to allow handlers to complete
+      await new Promise(resolve => setImmediate(resolve))
+    }
+  }
+
+  /**
+   * Execute a function with advertisement lock held
+   * Ensures atomic operations on signer advertisements
+   */
+  private async withAdvertisementLock<T>(fn: () => Promise<T>): Promise<T> {
+    const release = await this.advertisementMutex.acquire()
+    const wasProcessing = this.isProcessingStateChange
+    this.isProcessingStateChange = true
+
+    try {
+      const result = await fn()
+      return result
+    } finally {
+      const pendingEvents = this._collectDeferredEvents()
+
+      // Only reset if we were the outermost lock holder
+      if (!wasProcessing) {
+        this.isProcessingStateChange = false
+      }
+
+      release()
+
+      await this._processDeferredEvents(pendingEvents)
+    }
+  }
+
+  /**
+   * Execute a function with signing request lock held
+   * Ensures atomic operations on signing requests
+   */
+  private async withSigningRequestLock<T>(fn: () => Promise<T>): Promise<T> {
+    const release = await this.signingRequestMutex.acquire()
+    const wasProcessing = this.isProcessingStateChange
+    this.isProcessingStateChange = true
+
+    try {
+      const result = await fn()
+      return result
+    } finally {
+      const pendingEvents = this._collectDeferredEvents()
+
+      // Only reset if we were the outermost lock holder
+      if (!wasProcessing) {
+        this.isProcessingStateChange = false
+      }
+      release()
+
+      await this._processDeferredEvents(pendingEvents)
+    }
+  }
+
+  /**
+   * Helper: Update peer-to-signer index mapping
+   * Creates the mapping if it doesn't exist
+   */
+  private _updatePeerMapping(
+    sessionId: string,
+    peerId: string,
+    signerIndex: number,
+  ): void {
+    let peerMap = this.peerIdToSignerIndex.get(sessionId)
+    if (!peerMap) {
+      peerMap = new Map()
+      this.peerIdToSignerIndex.set(sessionId, peerMap)
+    }
+    peerMap.set(peerId, signerIndex)
+  }
+
   /**
    * Setup event handlers for three-phase architecture
    */
@@ -207,11 +406,13 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     this.on(
       MuSig2Event.SIGNER_DISCOVERED,
       (advertisement: SignerAdvertisement) => {
-        // Store in local cache
-        this.signerAdvertisements.set(
-          advertisement.publicKey.toString(),
-          advertisement,
-        )
+        // Store in local cache with lock to prevent race conditions
+        void this.withAdvertisementLock(async () => {
+          this.signerAdvertisements.set(
+            advertisement.publicKey.toString(),
+            advertisement,
+          )
+        })
       },
     )
 
@@ -221,10 +422,12 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       (advertisement: SignerAdvertisement) => {
         // Store in local cache (same as SIGNER_DISCOVERED)
         // This prevents duplicate emission if we receive via both GossipSub and P2P
-        this.signerAdvertisements.set(
-          advertisement.publicKey.toString(),
-          advertisement,
-        )
+        void this.withAdvertisementLock(async () => {
+          this.signerAdvertisements.set(
+            advertisement.publicKey.toString(),
+            advertisement,
+          )
+        })
       },
     )
 
@@ -232,23 +435,42 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     this.on(
       MuSig2Event.SIGNER_UNAVAILABLE,
       (data: { peerId: string; publicKey: PublicKey }) => {
-        // Remove from cache
-        this.signerAdvertisements.delete(data.publicKey.toString())
+        // Remove from cache with lock to prevent race conditions
+        void this.withAdvertisementLock(async () => {
+          this.signerAdvertisements.delete(data.publicKey.toString())
+        })
       },
     )
 
-    // Handle received signing requests (from others)
-    this.on(MuSig2Event.SIGNING_REQUEST_RECEIVED, (request: SigningRequest) => {
+    // ARCHITECTURE CHANGE (2025-11-21): Consolidated signing request handling
+    // With local-first pattern and self-message filtering:
+    // - SIGNING_REQUEST_CREATED: Fires locally when we create a request (synchronous)
+    // - SIGNING_REQUEST_RECEIVED: Fires when remote peer broadcasts (async, filtered)
+    // Both handlers do the same thing, so we can consolidate
+
+    // Handle signing requests from ANY source (self-created or received from others)
+    const handleSigningRequest = (request: SigningRequest) => {
+      // Check if already stored (idempotent)
+      if (this.signingRequests.has(request.requestId)) {
+        return // Already processed
+      }
+
       // Store in local cache
       this.signingRequests.set(request.requestId, request)
-    })
 
-    // Handle our own signing request confirmation (from self)
-    this.on(MuSig2Event.SIGNING_REQUEST_CREATED, (request: SigningRequest) => {
-      // Store in local cache (same as SIGNING_REQUEST_RECEIVED)
-      // This prevents duplicate emission if we receive via both GossipSub and P2P
-      this.signingRequests.set(request.requestId, request)
-    })
+      // Ingest creator's participation (if included in request)
+      this._ingestCreatorParticipation(request)
+
+      this.debugLog('signing-request', 'Signing request stored', {
+        requestId: request.requestId,
+        creatorPeerId: request.creatorPeerId,
+        requiredKeys: request.requiredPublicKeys.length,
+      })
+    }
+
+    // Register handler for both events
+    this.on(MuSig2Event.SIGNING_REQUEST_CREATED, handleSigningRequest)
+    this.on(MuSig2Event.SIGNING_REQUEST_RECEIVED, handleSigningRequest)
 
     // Handle participant joined events
     this.on(
@@ -261,53 +483,77 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
         timestamp: number
         signature: Buffer
       }) => {
-        // Get metadata - for signing request architecture, this exists before session creation
-        const metadata = this.p2pMetadata.get(data.requestId)
+        let shouldCreateSession = false
 
-        // Skip if we don't have metadata for this request (not relevant to us)
-        if (!metadata) {
-          return
-        }
+        // Wrap state mutations in lock
+        await this.withStateLock(async () => {
+          // Get metadata - for signing request architecture, this exists before session creation
+          const metadata = this.p2pMetadata.get(data.requestId)
 
-        // Verify participation signature
-        const participationData = Buffer.concat([
-          Buffer.from(data.requestId),
-          Buffer.from(data.participantIndex.toString()),
-          data.participantPublicKey.toBuffer(),
-          Buffer.from(data.participantPeerId),
-        ])
+          // Skip if we don't have metadata for this request (not relevant to us)
+          if (!metadata) {
+            return
+          }
 
-        const hashbuf = Hash.sha256(participationData)
-        const sig = new Signature({
-          r: new BN(data.signature.subarray(0, 32), 'be'),
-          s: new BN(data.signature.subarray(32, 64), 'be'),
-          isSchnorr: true,
-        })
+          // ARCHITECTURE CHANGE (2025-11-21): Single source of truth for duplicate prevention
+          // Use metadata.participants as the ONLY duplicate check (protected by state lock)
+          // Removed redundant _markParticipantJoinSeen() cache check
 
-        if (!Schnorr.verify(hashbuf, sig, data.participantPublicKey, 'big')) {
-          console.warn(
-            '[MuSig2P2P] Invalid participation signature from',
+          // Check for duplicate FIRST (before expensive signature verification)
+          if (metadata.participants.has(data.participantIndex)) {
+            this.debugLog(
+              'participant:join',
+              'Duplicate participant join ignored (already in participants map)',
+              {
+                requestId: data.requestId,
+                participantIndex: data.participantIndex,
+                participantPeerId: data.participantPeerId,
+              },
+            )
+            return
+          }
+
+          // Verify participation signature
+          const participationData = Buffer.concat([
+            Buffer.from(data.requestId),
+            Buffer.from(data.participantIndex.toString()),
+            data.participantPublicKey.toBuffer(),
+            Buffer.from(data.participantPeerId),
+          ])
+
+          const hashbuf = Hash.sha256(participationData)
+          const sig = new Signature({
+            r: new BN(data.signature.subarray(0, 32), 'be'),
+            s: new BN(data.signature.subarray(32, 64), 'be'),
+            isSchnorr: true,
+          })
+
+          if (!Schnorr.verify(hashbuf, sig, data.participantPublicKey, 'big')) {
+            console.warn(
+              '[MuSig2P2P] Invalid participation signature from',
+              data.participantPeerId,
+            )
+            return
+          }
+
+          // Add participant
+          metadata.participants.set(
+            data.participantIndex,
             data.participantPeerId,
           )
-          return
-        }
 
-        // Prevent duplicate participant processing
-        if (metadata.participants.has(data.participantIndex)) {
-          // Participant already joined, skip duplicate processing
-          return
-        }
+          // Check if ALL participants have joined (MuSig2 = n-of-n)
+          if (
+            metadata.request &&
+            metadata.participants.size ===
+              metadata.request.requiredPublicKeys.length
+          ) {
+            // All participants joined - create MuSig session outside the lock
+            shouldCreateSession = true
+          }
+        })
 
-        // Add participant
-        metadata.participants.set(data.participantIndex, data.participantPeerId)
-
-        // Check if ALL participants have joined (MuSig2 = n-of-n)
-        if (
-          metadata.request &&
-          metadata.participants.size ===
-            metadata.request.requiredPublicKeys.length
-        ) {
-          // All participants joined - create MuSig session
+        if (shouldCreateSession) {
           await this._createMuSigSessionFromRequest(data.requestId)
         }
       },
@@ -319,6 +565,9 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
    *
    */
   async stop(): Promise<void> {
+    // First cleanup MuSig2-specific resources while the libp2p node is still running
+    await this.cleanup()
+
     // Call parent stop() which will shutdown the libp2p node
     // Event listeners are automatically cleaned up when the node stops
     await super.stop()
@@ -339,53 +588,65 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     message: Buffer,
     sessionMetadata?: Record<string, unknown>,
   ): Promise<string> {
-    // Create session locally
-    const session = this.sessionManager.createSession(
-      signers,
-      myPrivateKey,
-      message,
-      sessionMetadata,
-    )
+    return this.withStateLock(async () => {
+      this.debugLog('session:create', 'Creating session', {
+        signers: signers.length,
+      })
+      // Create session locally
+      const session = this.sessionManager.createSession(
+        signers,
+        myPrivateKey,
+        message,
+        sessionMetadata,
+      )
 
-    // Perform coordinator election if enabled
-    let election: ElectionResult | undefined
-    if (this.musig2Config.enableCoordinatorElection) {
-      const electionMethod = this._getElectionMethod()
-      election = electCoordinator(signers, electionMethod)
-    }
-
-    // Store MuSigSession directly
-    this.activeSessions.set(session.sessionId, session)
-
-    // Create P2P metadata
-    const p2pMetadata: P2PSessionMetadata = {
-      participants: new Map([[session.myIndex, this.peerId]]),
-      lastSequenceNumbers: new Map(),
-    }
-
-    // Add election data if enabled
-    if (election) {
-      p2pMetadata.election = {
-        coordinatorIndex: election.coordinatorIndex,
-        coordinatorPeerId:
-          election.coordinatorIndex === session.myIndex
-            ? this.peerId
-            : undefined,
-        electionProof: election.electionProof,
+      // Perform coordinator election if enabled
+      let election: ElectionResult | undefined
+      if (this.musig2Config.enableCoordinatorElection) {
+        const electionMethod = this._getElectionMethod()
+        election = electCoordinator(signers, electionMethod)
       }
-    }
 
-    this.p2pMetadata.set(session.sessionId, p2pMetadata)
+      // Store MuSigSession directly
+      this.activeSessions.set(session.sessionId, session)
 
-    // Announce session to DHT if enabled
-    if (this.musig2Config.enableSessionDiscovery) {
-      await this._announceSessionToDHT(session, this.peerId, myPrivateKey)
-    }
+      // Create P2P metadata
+      const p2pMetadata: P2PSessionMetadata = {
+        participants: new Map([[session.myIndex, this.peerId]]),
+        lastSequenceNumbers: new Map(),
+        nonceCommitments: new Map(),
+        revealedNonces: new Set(),
+        nonceCommitmentsComplete: !this.musig2Config.enableNonceCommitment,
+      }
 
-    // Emit event
-    this.emit(MuSig2Event.SESSION_CREATED, session.sessionId)
+      // Add election data if enabled
+      if (election) {
+        p2pMetadata.election = {
+          coordinatorIndex: election.coordinatorIndex,
+          coordinatorPeerId:
+            election.coordinatorIndex === session.myIndex
+              ? this.peerId
+              : undefined,
+          electionProof: election.electionProof,
+        }
+      }
 
-    return session.sessionId
+      this.p2pMetadata.set(session.sessionId, p2pMetadata)
+
+      // Announce session to DHT if enabled
+      if (this.musig2Config.enableSessionDiscovery) {
+        await this._announceSessionToDHT(session, this.peerId, myPrivateKey)
+      }
+
+      // Defer event emission to ensure state consistency
+      this.deferEvent(MuSig2Event.SESSION_CREATED, session.sessionId)
+      this.debugLog('session:create', 'Session created', {
+        sessionId: session.sessionId,
+        myIndex: session.myIndex,
+      })
+
+      return session.sessionId
+    })
   }
 
   /**
@@ -398,83 +659,88 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     sessionId: string,
     myPrivateKey: PrivateKey,
   ): Promise<void> {
-    // First, try to discover session from DHT
-    let announcement: SessionAnnouncementData | null = null
+    return this.withStateLock(async () => {
+      // First, try to discover session from DHT
+      let announcement: SessionAnnouncementData | null = null
 
-    if (this.musig2Config.enableSessionDiscovery) {
-      announcement = await this._discoverSessionFromDHT(sessionId)
-    }
-
-    if (!announcement) {
-      throw new Error(`Session ${sessionId} not found. Cannot join.`)
-    }
-
-    // Find my index in signers
-    const myPubKey = myPrivateKey.publicKey
-    const myIndex = announcement.signers.findIndex(
-      signer => signer.toString() === myPubKey.toString(),
-    )
-
-    if (myIndex === -1) {
-      throw new Error(
-        'Your public key is not in the session signers list. Cannot join.',
-      )
-    }
-
-    // Create local session
-    const session = this.sessionManager.createSession(
-      announcement.signers,
-      myPrivateKey,
-      announcement.message,
-      announcement.metadata,
-    )
-
-    // Store MuSigSession directly
-    this.activeSessions.set(sessionId, session)
-
-    // Create P2P metadata
-    const metadata: P2PSessionMetadata = {
-      participants: new Map(),
-      lastSequenceNumbers: new Map(),
-    }
-
-    // Perform coordinator election if enabled (from announcement data)
-    if (this.musig2Config.enableCoordinatorElection && announcement.election) {
-      metadata.election = {
-        coordinatorIndex: announcement.election.coordinatorIndex,
-        coordinatorPeerId: undefined,
-        electionProof: announcement.election.electionProof,
+      if (this.musig2Config.enableSessionDiscovery) {
+        announcement = await this._discoverSessionFromDHT(sessionId)
       }
-    }
 
-    // Add myself
-    metadata.participants.set(session.myIndex, this.peerId)
+      if (!announcement) {
+        throw new Error(`Session ${sessionId} not found. Cannot join.`)
+      }
 
-    // Add the session creator to participants
-    // Find the creator's signer index by matching their peer ID from announcement
-    const creatorPeerId = announcement.creatorPeerId
-    if (creatorPeerId !== this.peerId) {
-      // The creator should be at a different signer index than mine
-      // For now, add the creator - their exact signer index will be determined when they send messages
-      // We'll add them to all indices except mine, and the protocol handler will update correctly
-      for (let i = 0; i < session.signers.length; i++) {
-        if (i !== session.myIndex) {
-          // Assume other signers might be the creator or will be added via SESSION_JOIN handling
-          metadata.participants.set(i, creatorPeerId)
+      // Find my index in signers
+      const myPubKey = myPrivateKey.publicKey
+      const myIndex = announcement.signers.findIndex(
+        signer => signer.toString() === myPubKey.toString(),
+      )
+
+      if (myIndex === -1) {
+        throw new Error(
+          'Your public key is not in the session signers list. Cannot join.',
+        )
+      }
+
+      // Create local session
+      const session = this.sessionManager.createSession(
+        announcement.signers,
+        myPrivateKey,
+        announcement.message,
+        announcement.metadata,
+      )
+
+      // Store MuSigSession directly
+      this.activeSessions.set(sessionId, session)
+
+      // Create P2P metadata
+      const metadata: P2PSessionMetadata = {
+        participants: new Map(),
+        lastSequenceNumbers: new Map(),
+      }
+
+      // Perform coordinator election if enabled (from announcement data)
+      if (
+        this.musig2Config.enableCoordinatorElection &&
+        announcement.election
+      ) {
+        metadata.election = {
+          coordinatorIndex: announcement.election.coordinatorIndex,
+          coordinatorPeerId: undefined,
+          electionProof: announcement.election.electionProof,
         }
       }
-    }
 
-    this.p2pMetadata.set(sessionId, metadata)
+      // Add myself
+      metadata.participants.set(session.myIndex, this.peerId)
 
-    // Send join message to creator
-    await this._sendSessionJoin(sessionId, myIndex, myPubKey, creatorPeerId)
+      // Add the session creator to participants
+      // Find the creator's signer index by matching their peer ID from announcement
+      const creatorPeerId = announcement.creatorPeerId
+      if (creatorPeerId !== this.peerId) {
+        // The creator should be at a different signer index than mine
+        // For now, add the creator - their exact signer index will be determined when they send messages
+        // We'll add them to all indices except mine, and the protocol handler will update correctly
+        for (let i = 0; i < session.signers.length; i++) {
+          if (i !== session.myIndex) {
+            // Assume other signers might be the creator or will be added via SESSION_JOIN handling
+            metadata.participants.set(i, creatorPeerId)
+          }
+        }
+      }
 
-    // Emit event
-    this.emit(MuSig2Event.SESSION_JOINED, sessionId)
+      this.p2pMetadata.set(sessionId, metadata)
 
-    // Wait a bit for the creator to send us session state, then start Round 1
-    // For now, we'll let the creator initiate Round 1
+      // Send join message to creator
+      await this._sendSessionJoin(sessionId, myIndex, myPubKey, creatorPeerId)
+
+      // Defer event emission to ensure state consistency
+      this.deferEvent(MuSig2Event.SESSION_JOINED, sessionId)
+
+      // Wait a bit for the creator to send us session state, then start Round 1
+      // For now, we'll let the creator initiate Round 1
+    })
   }
 
   // ========================================================================
@@ -672,6 +938,19 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
           // Note: Rate limiting infrastructure for signing requests needs to be implemented
           // For now, we rely on GossipSub's built-in rate limiting and signature validation
 
+          // Process the signing request through the protocol handler
+          this.protocolHandler.handleMessage(
+            {
+              type: MuSig2MessageType.SIGNING_REQUEST,
+              from: payload.creatorPeerId,
+              payload,
+              timestamp: Date.now(),
+              messageId: '',
+              protocol: 'musig2',
+            },
+            { peerId: payload.creatorPeerId } as PeerInfo,
+          )
+
           // Convert payload to SigningRequest format
           const signingRequest: SigningRequest = {
             requestId: payload.requestId,
@@ -687,19 +966,6 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
             creatorSignature: Buffer.from(payload.creatorSignature, 'hex'),
             joinedParticipants: new Map(),
           }
-
-          // Process the signing request through the protocol handler
-          this.protocolHandler.handleMessage(
-            {
-              type: MuSig2MessageType.SIGNING_REQUEST,
-              from: payload.creatorPeerId,
-              payload: signingRequest,
-              timestamp: Date.now(),
-              messageId: '',
-              protocol: 'musig2',
-            },
-            { peerId: payload.creatorPeerId } as PeerInfo,
-          )
 
           // Call user callback if provided
           if (callback) {
@@ -797,6 +1063,7 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
 
     // Store locally
     this.myAdvertisement = advertisement
+    this.advertisementSigningKey = myPrivateKey
     this.signerAdvertisements.set(myPubKey.toString(), advertisement)
 
     // NOTE: Address tracking is now handled by core P2P layer
@@ -859,9 +1126,6 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
         // Fall back to DHT + P2P broadcast
         console.log(`[MuSig2P2P] ❌ GossipSub publish failed for ${topic}:`)
         console.log(`    Error: ${error}`)
-        console.log(
-          `    This is expected when allowPublishToZeroTopicPeers=false`,
-        )
         console.log(`    Falling back to DHT + P2P broadcast...`)
       }
     }
@@ -957,6 +1221,7 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     // Remove from local storage
     this.signerAdvertisements.delete(pubKeyStr)
     this.myAdvertisement = undefined
+    this.advertisementSigningKey = undefined
 
     // Broadcast unavailability
     await this.broadcast({
@@ -1265,8 +1530,6 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     }
     this.p2pMetadata.set(requestId, metadata)
 
-    // Broadcast PARTICIPANT_JOINED for the creator
-    // This ensures all peers have complete participant maps (no workarounds needed)
     const participationData = Buffer.concat([
       Buffer.from(requestId),
       Buffer.from(creatorIndex.toString()),
@@ -1279,23 +1542,15 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       myPrivateKey,
       'big',
     ).toBuffer('schnorr')
-
-    await this.broadcast({
-      type: MuSig2MessageType.PARTICIPANT_JOINED,
-      from: this.peerId,
-      payload: {
-        requestId,
-        participantIndex: creatorIndex,
-        participantPeerId: this.peerId,
-        participantPublicKey: serializePublicKey(myPubKey),
-        timestamp: Date.now(),
-        signature: participationSig.toString('hex'),
-      } as ParticipantJoinedPayload,
+    const creatorParticipation: ParticipantJoinedPayload = {
+      requestId,
+      participantIndex: creatorIndex,
+      participantPeerId: this.peerId,
+      participantPublicKey: serializePublicKey(myPubKey),
       timestamp: Date.now(),
-      messageId: this.messageProtocol.createMessage('', {}, this.peerId)
-        .messageId,
-      protocol: 'musig2',
-    })
+      signature: participationSig.toString('hex'),
+    }
+    request.creatorParticipation = creatorParticipation
 
     // Announce to DHT - indexed by each required public key
     for (const pubKey of requiredPublicKeys) {
@@ -1314,6 +1569,7 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
           expiresAt,
           metadata: options?.metadata,
           creatorSignature: creatorSignature.toString('hex'),
+          creatorParticipation,
         } as SigningRequestPayload,
       )
     }
@@ -1330,6 +1586,7 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       expiresAt,
       metadata: options?.metadata,
       creatorSignature: creatorSignature.toString('hex'),
+      creatorParticipation,
     } as SigningRequestPayload
 
     try {
@@ -1348,8 +1605,28 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       console.log(`    Falling back to direct P2P broadcast + DHT...`)
     }
 
-    // Broadcast to connected peers (fallback for direct connections)
-    await this.broadcast({
+    // ARCHITECTURE CHANGE (2025-11-21): Local-first pattern
+    // 1. Emit local events IMMEDIATELY (synchronous, predictable ordering)
+    // 2. Broadcast to network (asynchronous, fire-and-forget)
+    // 3. Protocol handler filters out self-messages (no duplicate processing)
+
+    // Emit SIGNING_REQUEST_CREATED event locally
+    this.emit(MuSig2Event.SIGNING_REQUEST_CREATED, request)
+
+    // Auto-join as creator (emit PARTICIPANT_JOINED event locally)
+    // This eliminates the need for self-broadcast reception
+    this.emit(MuSig2Event.PARTICIPANT_JOINED, {
+      requestId,
+      participantIndex: creatorIndex,
+      participantPeerId: this.peerId,
+      participantPublicKey: myPubKey,
+      timestamp: creatorParticipation.timestamp,
+      signature: Buffer.from(creatorParticipation.signature, 'hex'),
+    })
+
+    // Broadcast to connected peers (asynchronous, fire-and-forget)
+    // Protocol handler will filter out our own broadcast to prevent duplicates
+    this.broadcast({
       type: MuSig2MessageType.SIGNING_REQUEST,
       from: this.peerId,
       payload: signingRequestPayload,
@@ -1357,11 +1634,12 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       messageId: this.messageProtocol.createMessage('', {}, this.peerId)
         .messageId,
       protocol: 'musig2',
+    }).catch(error => {
+      console.error(
+        `[MuSig2P2P] Failed to broadcast signing request ${requestId}:`,
+        error,
+      )
     })
-
-    // NOTE: Do NOT emit SIGNING_REQUEST_CREATED locally!
-    // We receive our own broadcast and the protocol handler emits the event.
-    // This ensures all peers (including us) emit events in the same order.
 
     return requestId
   }
@@ -1581,30 +1859,56 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
    * @param requestId - Request ID
    * @param skipBroadcast - If true, skip broadcasting SESSION_READY (used when called from SESSION_READY handler)
    */
-  async _createMuSigSessionFromRequest(
+  async _createMuSigSessionFromRequest(requestId: string): Promise<void> {
+    return this.withStateLock(async () => {
+      const metadata = this.p2pMetadata.get(requestId)
+
+      if (!metadata) {
+        return
+      }
+
+      const session = this._ensureLocalSession(metadata, requestId)
+      if (!session) {
+        return
+      }
+
+      const { isCoordinator, coordinatorIndex } =
+        this._getCoordinatorState(metadata)
+
+      if (!isCoordinator) {
+        // Non-coordinators wait for SESSION_READY broadcast from coordinator
+        return
+      }
+
+      await this._broadcastSessionReady(
+        requestId,
+        session.sessionId,
+        coordinatorIndex,
+      )
+      // ARCHITECTURE CHANGE (2025-11-21): Emit both requestId and sessionId
+      // This allows application code to track the transition from request to session
+      this.deferEvent(MuSig2Event.SESSION_READY, {
+        requestId,
+        sessionId: session.sessionId,
+      })
+    })
+  }
+
+  private _ensureLocalSession(
+    metadata: P2PSessionMetadata,
     requestId: string,
-    skipBroadcast: boolean = false,
-  ): Promise<void> {
-    const metadata = this.p2pMetadata.get(requestId)
-    if (!metadata) {
-      throw new Error(`Metadata not found for request ${requestId}`)
+  ): MuSigSession | null {
+    if (!metadata.request || !metadata.myPrivateKey) {
+      return null
     }
 
-    // Check if session already exists using the sessionId mapping
-    if (metadata.sessionId && this.activeSessions.has(metadata.sessionId)) {
-      return // Already created
+    if (metadata.sessionId) {
+      const existing = this.activeSessions.get(metadata.sessionId)
+      if (existing) {
+        return existing
+      }
     }
 
-    // Validate required fields
-    if (!metadata.myPrivateKey) {
-      throw new Error('Private key not available in metadata')
-    }
-
-    if (!metadata.request) {
-      throw new Error('Signing request not available in metadata')
-    }
-
-    // Create MuSig session
     const session = this.sessionManager.createSession(
       metadata.request.requiredPublicKeys,
       metadata.myPrivateKey,
@@ -1612,43 +1916,219 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       metadata.request.metadata,
     )
 
-    // Store the session using session.sessionId (hash-based ID) as the key
-    this.activeSessions.set(session.sessionId, session)
-
-    // Store mapping from requestId to sessionId for lookup
     metadata.sessionId = session.sessionId
-
-    // CRITICAL: Also store metadata by sessionId for protocol operations
-    // After session creation, all protocol messages use sessionId (not requestId)
+    this.activeSessions.set(session.sessionId, session)
     this.p2pMetadata.set(session.sessionId, metadata)
+    this.p2pMetadata.set(requestId, metadata)
 
-    // NOTE: Do NOT delete metadata.myPrivateKey or metadata.request here!
-    // Applications need this data after session completion to finalize transactions.
-    // These fields will be cleaned up when the session is explicitly closed via closeSession().
+    // ARCHITECTURE CHANGE (2025-11-21): Store bidirectional mapping
+    // This allows looking up sessions by requestId and prevents ID confusion
+    this.requestIdToSessionId.set(requestId, session.sessionId)
 
-    // CRITICAL: Only broadcast SESSION_READY if this is the first time creating the session
-    // Skip broadcast if called from SESSION_READY handler (to prevent duplicate broadcasts)
-    if (!skipBroadcast) {
-      // The creator will receive its own broadcast via GossipSub handler,
-      // ensuring all peers (including creator) emit SESSION_READY in the same order
-      await this.broadcast({
-        type: MuSig2MessageType.SESSION_READY,
-        from: this.peerId,
-        payload: {
-          requestId: requestId,
-          sessionId: session.sessionId,
-          participantIndex: session.myIndex,
-        },
-        timestamp: Date.now(),
-        messageId: this.messageProtocol.createMessage('', {}, this.peerId)
-          .messageId,
-        protocol: 'musig2',
+    this.debugLog('session:create', 'Session created from request', {
+      requestId,
+      sessionId: session.sessionId,
+      participants: metadata.participants.size,
+    })
+
+    return session
+  }
+
+  private _getCoordinatorState(metadata: P2PSessionMetadata): {
+    isCoordinator: boolean
+    coordinatorIndex: number
+  } {
+    const request = metadata.request
+    if (!request || !metadata.myPrivateKey) {
+      return { isCoordinator: false, coordinatorIndex: -1 }
+    }
+
+    const myKeyStr = metadata.myPrivateKey.publicKey.toString()
+    const myIndex = request.requiredPublicKeys.findIndex(
+      pk => pk.toString() === myKeyStr,
+    )
+
+    if (myIndex === -1) {
+      return { isCoordinator: false, coordinatorIndex: -1 }
+    }
+
+    if (this.musig2Config.enableCoordinatorElection) {
+      const election = electCoordinator(
+        request.requiredPublicKeys,
+        this._getElectionMethod(),
+      )
+
+      if (myIndex === election.coordinatorIndex) {
+        metadata.election = {
+          coordinatorIndex: election.coordinatorIndex,
+          coordinatorPeerId: this.peerId,
+          electionProof: election.electionProof,
+        }
+        return { isCoordinator: true, coordinatorIndex: myIndex }
+      }
+
+      return {
+        isCoordinator: false,
+        coordinatorIndex: election.coordinatorIndex,
+      }
+    }
+
+    const creatorIndex = request.requiredPublicKeys.findIndex(
+      pk => pk.toString() === request.creatorPublicKey.toString(),
+    )
+    const isCoordinator = request.creatorPeerId === this.peerId
+    return {
+      isCoordinator,
+      coordinatorIndex: creatorIndex === -1 ? myIndex : creatorIndex,
+    }
+  }
+
+  private async _broadcastSessionReady(
+    requestId: string,
+    sessionId: string,
+    coordinatorIndex: number,
+  ): Promise<void> {
+    await this.broadcast({
+      type: MuSig2MessageType.SESSION_READY,
+      from: this.peerId,
+      payload: {
+        requestId,
+        sessionId,
+        participantIndex: coordinatorIndex,
+        participantPeerId: this.peerId,
+      },
+      timestamp: Date.now(),
+      messageId: this.messageProtocol.createMessage('', {}, this.peerId)
+        .messageId,
+      protocol: 'musig2',
+    })
+  }
+
+  async _handleRemoteSessionReady(payload: {
+    requestId: string
+    sessionId: string
+    participantIndex?: number
+    participantPeerId?: string
+  }): Promise<void> {
+    return this.withStateLock(async () => {
+      const metadata =
+        this.p2pMetadata.get(payload.sessionId) ||
+        this.p2pMetadata.get(payload.requestId)
+
+      if (!metadata) {
+        this.debugLog('session:ready', 'Metadata not found', {
+          requestId: payload.requestId,
+          sessionId: payload.sessionId,
+        })
+        return
+      }
+
+      const session = this._ensureLocalSession(metadata, payload.requestId)
+      if (!session) {
+        this.debugLog('session:ready', 'Session not found', {
+          requestId: payload.requestId,
+          sessionId: payload.sessionId,
+        })
+        return
+      }
+
+      if (typeof payload.participantIndex === 'number') {
+        metadata.participants.set(
+          payload.participantIndex,
+          payload.participantPeerId || '',
+        )
+      }
+
+      // ARCHITECTURE CHANGE (2025-11-21): Emit both requestId and sessionId
+      this.deferEvent(MuSig2Event.SESSION_READY, {
+        requestId: payload.requestId,
+        sessionId: session.sessionId,
+      })
+    })
+  }
+
+  /**
+   * Round 0: Publish nonce commitments prior to nonce reveal
+   */
+  async startNonceCommitment(
+    sessionId: string,
+    privateKey: PrivateKey,
+  ): Promise<void> {
+    if (!this.musig2Config.enableNonceCommitment) {
+      await this.startRound1(sessionId, privateKey)
+      return
+    }
+
+    const session = this.activeSessions.get(sessionId)
+    const metadata = this.p2pMetadata.get(sessionId)
+
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`)
+    }
+
+    if (!metadata) {
+      throw new Error(`P2P metadata not found for session ${sessionId}`)
+    }
+
+    if (!metadata.nonceCommitments) {
+      metadata.nonceCommitments = new Map()
+    }
+
+    if (metadata.nonceCommitments.has(session.myIndex)) {
+      // Already published our commitment
+      this.debugLog('nonce:commit', 'Commitment already published', {
+        sessionId,
+        signerIndex: session.myIndex,
+      })
+      return
+    }
+
+    let publicNonces = session.myPublicNonce
+    if (!publicNonces) {
+      publicNonces = this.sessionManager.generateNonces(session, privateKey)
+      this.debugLog('nonce:commit', 'Generated new nonces for commitment', {
+        sessionId,
       })
     }
 
-    // NOTE: Do NOT emit SESSION_READY locally here!
-    // The creator receives its own broadcast and the handler emits the event.
-    // This ensures proper ordering: broadcast → all peers receive → all peers emit
+    const commitment = this._computeNonceCommitment(publicNonces)
+    metadata.nonceCommitments.set(session.myIndex, commitment)
+    this.debugLog('nonce:commit', 'Broadcasting nonce commitment', {
+      sessionId,
+      signerIndex: session.myIndex,
+    })
+
+    await this._broadcastNonceCommit(
+      sessionId,
+      session.myIndex,
+      commitment,
+      metadata.participants,
+    )
+
+    if (this._hasAllNonceCommitments(session, metadata)) {
+      this.debugLog(
+        'nonce:commit',
+        'All commitments collected (self trigger)',
+        {
+          sessionId,
+        },
+      )
+      // ARCHITECTURE FIX (2025-11-21): Transition phase to NONCE_EXCHANGE
+      // Now that all commitments are received, peers can safely share nonces
+      // This fixes the race condition where NONCE_COMMIT messages were rejected
+      session.phase = MuSigSessionPhase.NONCE_EXCHANGE
+      session.updatedAt = Date.now()
+
+      this.debugLog('phase', 'Phase transition after all commitments', {
+        sessionId,
+        phase: session.phase,
+        participants: metadata.participants.size,
+      })
+
+      // ARCHITECTURE FIX (2025-11-21): Don't emit event here
+      // Let _handleAllNonceCommitmentsReceived() emit it to avoid duplicates
+      await this._handleAllNonceCommitmentsReceived(sessionId)
+    }
   }
 
   /**
@@ -1669,13 +2149,43 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       throw new Error(`P2P metadata not found for session ${sessionId}`)
     }
 
-    // Generate nonces locally
-    // The session phase should be INIT at this point. If we've already generated nonces,
-    // generateNonces will throw an error (which is correct - nonce reuse is a security violation).
-    const publicNonces = this.sessionManager.generateNonces(session, privateKey)
+    if (
+      this.musig2Config.enableNonceCommitment &&
+      !metadata.nonceCommitmentsComplete
+    ) {
+      this.debugLog('round1:start', 'Blocked - commitments incomplete', {
+        sessionId,
+      })
+      throw new Error(
+        `Cannot start Round 1 for session ${sessionId} before nonce commitments complete`,
+      )
+    }
 
-    // Session phase is updated by generateNonces, update timestamp
+    // Generate nonces locally if we didn't already do so during commitment phase
+    let publicNonces = session.myPublicNonce
+    if (!publicNonces) {
+      publicNonces = this.sessionManager.generateNonces(session, privateKey)
+    }
+
+    // ARCHITECTURE FIX (2025-11-21): Phase should already be NONCE_EXCHANGE at this point
+    // (transitioned after all nonce commitments received in Round 0)
+    // Verify phase is correct and log warning if not
+    if (session.phase !== MuSigSessionPhase.NONCE_EXCHANGE) {
+      this.debugLog(
+        'round1:start',
+        'WARNING: Session not in NONCE_EXCHANGE phase',
+        {
+          sessionId,
+          currentPhase: session.phase,
+          expected: MuSigSessionPhase.NONCE_EXCHANGE,
+        },
+      )
+    }
     session.updatedAt = Date.now()
+    this.debugLog('round1:start', 'Broadcasting public nonces', {
+      sessionId,
+      signerIndex: session.myIndex,
+    })
 
     // Broadcast nonces to all participants
     await this._broadcastNonceShare(
@@ -1687,6 +2197,9 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
 
     // Check if we already have all nonces (if others sent first)
     if (this.sessionManager.hasAllNonces(session)) {
+      this.debugLog('round1:start', 'Already have all nonces (self)', {
+        sessionId,
+      })
       await this._handleAllNoncesReceived(sessionId)
     }
   }
@@ -1775,8 +2288,16 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
 
     // Session phase is updated by createPartialSignature, update timestamp
     session.updatedAt = Date.now()
+    this.debugLog('round2:start', 'Created partial signature', {
+      sessionId,
+      signerIndex: session.myIndex,
+    })
 
     // Broadcast partial signature to all participants
+    this.debugLog('round2:start', 'Broadcasting partial signature', {
+      sessionId,
+      signerIndex: session.myIndex,
+    })
     await this._broadcastPartialSigShare(
       sessionId,
       session.myIndex,
@@ -1865,26 +2386,30 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
    * @param sessionId - Session ID
    * @returns Session status
    */
-  getSessionStatus(sessionId: string) {
-    const session = this.activeSessions.get(sessionId)
+  async getSessionStatus(sessionId: string) {
+    return this.withStateLock(async () => {
+      const session = this.activeSessions.get(sessionId)
 
-    if (session) {
-      return this.sessionManager.getSessionStatus(session)
-    }
+      if (session) {
+        return this.sessionManager.getSessionStatus(session)
+      }
 
-    return null
+      return null
+    })
   }
 
   /**
    * Get all active session IDs
    */
-  getActiveSessions(): string[] {
-    // Return both sessions and metadata (signing requests may have metadata but no session yet)
-    const sessionIds = new Set([
-      ...this.activeSessions.keys(),
-      ...this.p2pMetadata.keys(),
-    ])
-    return Array.from(sessionIds)
+  async getActiveSessions(): Promise<string[]> {
+    return this.withStateLock(async () => {
+      // Return both sessions and metadata (signing requests may have metadata but no session yet)
+      const sessionIds = new Set([
+        ...this.activeSessions.keys(),
+        ...this.p2pMetadata.keys(),
+      ])
+      return Array.from(sessionIds)
+    })
   }
 
   /**
@@ -1904,8 +2429,10 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
    * @param sessionId - Session ID
    * @returns Session data or null if not found
    */
-  getSession(sessionId: string): MuSigSession | null {
-    return this.activeSessions.get(sessionId) ?? null
+  async getSession(sessionId: string): Promise<MuSigSession | null> {
+    return this.withStateLock(
+      async () => this.activeSessions.get(sessionId) ?? null,
+    )
   }
 
   /**
@@ -1914,8 +2441,8 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
    * @param sessionId - Session ID
    * @returns MuSigSession or undefined
    */
-  getActiveSession(sessionId: string): MuSigSession | undefined {
-    return this.activeSessions.get(sessionId)
+  async getActiveSession(sessionId: string): Promise<MuSigSession | undefined> {
+    return this.withStateLock(async () => this.activeSessions.get(sessionId))
   }
 
   /**
@@ -1960,84 +2487,59 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
    * @param sessionId - Session ID
    */
   async closeSession(sessionId: string): Promise<void> {
-    const session = this.activeSessions.get(sessionId)
-    const metadata = this.p2pMetadata.get(sessionId)
-    if (!session) {
-      return
-    }
-
-    // Send abort to all participants (only if node is still running)
-    if (this.libp2pNode && metadata) {
-      try {
-        await this._broadcastSessionAbort(
-          sessionId,
-          'Session closed',
-          metadata.participants,
-        )
-      } catch (error) {
-        // Ignore errors if node has been stopped
-        console.warn(
-          `[MuSig2P2P] Failed to broadcast session abort for ${sessionId}:`,
-          error instanceof Error ? error.message : String(error),
-        )
+    return this.withStateLock(async () => {
+      const session = this.activeSessions.get(sessionId)
+      const metadata = this.p2pMetadata.get(sessionId)
+      if (!session) {
+        return
       }
-    }
 
-    // Remove session
-    this.activeSessions.delete(sessionId)
+      // Make a copy of participants before async operation
+      const participants = metadata?.participants
+        ? new Map(metadata.participants)
+        : new Map<number, string>()
 
-    // Clean up metadata (including request and private key)
-    if (metadata) {
-      // Also remove from requestId mapping if it exists
-      if (metadata.request) {
-        this.p2pMetadata.delete(metadata.request.requestId)
+      // Remove session and metadata before notifying others
+      // to prevent race conditions
+      this.activeSessions.delete(sessionId)
+
+      // Clean up metadata (including request and private key)
+      if (metadata) {
+        this._removeMetadataEntries(sessionId, metadata)
       }
-      this.p2pMetadata.delete(sessionId)
-    }
 
-    // Clean up emitted events tracking for this session
-    this.emittedEvents.delete(sessionId)
+      // Clean up emitted events tracking for this session
+      this.emittedEvents.delete(sessionId)
 
-    // Clean up peer mapping
-    const peerMap = this.peerIdToSignerIndex.get(sessionId)
-    if (peerMap) {
-      this.peerIdToSignerIndex.delete(sessionId)
-    }
+      // Clean up peer mapping
+      const peerMap = this.peerIdToSignerIndex.get(sessionId)
+      if (peerMap) {
+        this.peerIdToSignerIndex.delete(sessionId)
+      }
 
-    this.emit(MuSig2Event.SESSION_CLOSED, sessionId)
+      // Send abort to all participants (only if node is still running)
+      // Do this after cleaning up local state to prevent race conditions
+      if (this.libp2pNode && participants.size > 0) {
+        try {
+          await this._broadcastSessionAbort(
+            sessionId,
+            'Session closed',
+            participants,
+          )
+        } catch (error) {
+          // Ignore errors if node has been stopped
+          console.warn(
+            `[MuSig2P2P] Failed to broadcast session abort for ${sessionId}:`,
+            error instanceof Error ? error.message : String(error),
+          )
+        }
+      }
+
+      this.deferEvent(MuSig2Event.SESSION_CLOSED, sessionId)
+    })
   }
 
   // Internal methods for handling incoming messages
-
-  /**
-   * Handle session announcement from peer
-   */
-  async _handleSessionAnnouncement(
-    sessionId: string,
-    signers: PublicKey[],
-    creatorIndex: number,
-    message: Buffer,
-    creatorPeerId: string,
-    metadata?: Record<string, unknown>,
-  ): Promise<void> {
-    // Store announcement for potential joining
-    // In a full implementation, we'd verify the announcement signature
-    const announcement: SessionAnnouncementData = {
-      sessionId,
-      signers,
-      creatorPeerId,
-      creatorIndex,
-      message,
-      requiredSigners: signers.length,
-      createdAt: Date.now(),
-      metadata,
-    }
-
-    this.emit(MuSig2Event.SESSION_ANNOUNCED, {
-      sessionId,
-      announcement,
-    })
-  }
 
   /**
    * Handle session join from peer
@@ -2049,68 +2551,171 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     publicKey: PublicKey,
     peerId: string,
   ): Promise<void> {
-    const session = this.activeSessions.get(sessionId)
-    const metadata = this.p2pMetadata.get(sessionId)
+    return this.withStateLock(async () => {
+      const session = this.activeSessions.get(sessionId)
+      const metadata = this.p2pMetadata.get(sessionId)
 
-    if (!session) {
-      throw new Error(`Session ${sessionId} not found`)
-    }
-
-    if (!metadata) {
-      throw new Error(`P2P metadata not found for session ${sessionId}`)
-    }
-
-    // Validate protocol phase (must be in INIT to accept JOIN)
-    if (!this._validateProtocolPhase(session, MuSig2MessageType.SESSION_JOIN)) {
-      throw new Error(
-        `Protocol violation: SESSION_JOIN not allowed in phase ${session.phase}`,
-      )
-    }
-
-    // Validate sequence number for replay protection
-    if (
-      !this._validateMessageSequence(
-        session,
-        signerIndex,
-        sequenceNumber,
-        metadata,
-      )
-    ) {
-      throw new Error(
-        `Invalid sequence number for signer ${signerIndex} in session ${sessionId}`,
-      )
-    }
-
-    // Verify public key matches expected signer
-    const expectedKey = session.signers[signerIndex]
-    if (expectedKey.toString() !== publicKey.toString()) {
-      throw new Error(
-        `Public key mismatch for signer ${signerIndex} in session ${sessionId}`,
-      )
-    }
-
-    // Add participant
-    metadata.participants.set(signerIndex, peerId)
-
-    // Track peer mapping
-    let peerMap = this.peerIdToSignerIndex.get(sessionId)
-    if (!peerMap) {
-      peerMap = new Map()
-      this.peerIdToSignerIndex.set(sessionId, peerMap)
-    }
-    peerMap.set(peerId, signerIndex)
-
-    // If we're the creator and all participants have joined, start Round 1
-    if (
-      session.myIndex === 0 && // Assuming creator is index 0
-      metadata.participants.size === session.signers.length
-    ) {
-      // All participants joined - could auto-start Round 1 here
-      // Prevent duplicate emissions
-      if (this._shouldEmitEvent(sessionId, MuSig2Event.SESSION_READY)) {
-        this.emit(MuSig2Event.SESSION_READY, sessionId)
+      if (!session) {
+        throw new Error(`Session ${sessionId} not found`)
       }
-    }
+
+      if (!metadata) {
+        throw new Error(`P2P metadata not found for session ${sessionId}`)
+      }
+
+      // Validate protocol phase (must be in INIT to accept JOIN)
+      if (
+        !this._validateProtocolPhase(session, MuSig2MessageType.SESSION_JOIN)
+      ) {
+        throw new Error(
+          `Protocol violation: SESSION_JOIN not allowed in phase ${session.phase}`,
+        )
+      }
+
+      // Validate sequence number for replay protection
+      if (
+        !this._validateMessageSequence(
+          session,
+          signerIndex,
+          sequenceNumber,
+          metadata,
+        )
+      ) {
+        throw new Error(
+          `Invalid sequence number for signer ${signerIndex} in session ${sessionId}`,
+        )
+      }
+
+      // Verify public key matches expected signer
+      const expectedKey = session.signers[signerIndex]
+      if (expectedKey.toString() !== publicKey.toString()) {
+        throw new Error(
+          `Public key mismatch for signer ${signerIndex} in session ${sessionId}`,
+        )
+      }
+
+      // Add participant
+      metadata.participants.set(signerIndex, peerId)
+      this.debugLog('participant:join', 'Participant joined session', {
+        sessionId,
+        signerIndex,
+        peerId,
+        participants: metadata.participants.size,
+      })
+
+      // Track peer mapping
+      this._updatePeerMapping(sessionId, peerId, signerIndex)
+
+      // If we're the creator and all participants have joined, start Round 1
+      if (
+        session.myIndex === 0 && // Assuming creator is index 0
+        metadata.participants.size === session.signers.length
+      ) {
+        // All participants joined - could auto-start Round 1 here
+        // Prevent duplicate emissions
+        if (this._shouldEmitEvent(sessionId, MuSig2Event.SESSION_READY)) {
+          this.debugLog('session:ready', 'All participants joined (creator)', {
+            sessionId,
+          })
+
+          // ARCHITECTURE CHANGE (2025-11-21): Find requestId if this session came from a signing request
+          // For direct session creation (not via signing request), requestId will be sessionId
+          const requestId = metadata.request?.requestId || sessionId
+
+          this.deferEvent(MuSig2Event.SESSION_READY, {
+            requestId,
+            sessionId,
+          })
+        }
+      }
+    })
+  }
+
+  /**
+   * Handle nonce commitment from peer (Round 0)
+   */
+  async _handleNonceCommit(
+    sessionId: string,
+    signerIndex: number,
+    sequenceNumber: number,
+    commitment: string,
+    peerId: string,
+  ): Promise<void> {
+    return this.withStateLock(async () => {
+      const session = this.activeSessions.get(sessionId)
+      const metadata = this.p2pMetadata.get(sessionId)
+
+      if (!session) {
+        throw new Error(`Session ${sessionId} not found`)
+      }
+
+      if (!metadata) {
+        throw new Error(`P2P metadata not found for session ${sessionId}`)
+      }
+
+      if (
+        !this._validateProtocolPhase(session, MuSig2MessageType.NONCE_COMMIT)
+      ) {
+        throw new Error(
+          `Protocol violation: NONCE_COMMIT not allowed in phase ${session.phase}`,
+        )
+      }
+
+      if (
+        !this._validateMessageSequence(
+          session,
+          signerIndex,
+          sequenceNumber,
+          metadata,
+        )
+      ) {
+        throw new Error(
+          `Invalid sequence number for signer ${signerIndex} in session ${sessionId}`,
+        )
+      }
+
+      if (!metadata.nonceCommitments) {
+        metadata.nonceCommitments = new Map()
+      }
+
+      const existingCommitment = metadata.nonceCommitments.get(signerIndex)
+      if (existingCommitment) {
+        if (existingCommitment !== commitment) {
+          throw new Error(
+            `Conflicting nonce commitment for signer ${signerIndex} in session ${sessionId}`,
+          )
+        }
+        return
+      }
+
+      metadata.nonceCommitments.set(signerIndex, commitment)
+      this._updatePeerMapping(sessionId, peerId, signerIndex)
+      this.debugLog('nonce:commit', 'Received nonce commitment', {
+        sessionId,
+        signerIndex,
+        from: peerId,
+        collected: metadata.nonceCommitments.size,
+        total: session.signers.length,
+      })
+
+      if (this._hasAllNonceCommitments(session, metadata)) {
+        this.debugLog('nonce:commit', 'All commitments collected', {
+          sessionId,
+        })
+
+        // ARCHITECTURE FIX (2025-11-21): Transition phase to NONCE_EXCHANGE
+        // Now that all commitments are received, peers can safely share nonces
+        session.phase = MuSigSessionPhase.NONCE_EXCHANGE
+        session.updatedAt = Date.now()
+
+        this.debugLog('phase', 'Phase transition after all commitments', {
+          sessionId,
+          phase: session.phase,
+        })
+
+        await this._handleAllNonceCommitmentsReceived(sessionId)
+      }
+    })
   }
 
   /**
@@ -2123,60 +2728,88 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     publicNonce: [Point, Point],
     peerId: string,
   ): Promise<void> {
-    const session = this.activeSessions.get(sessionId)
-    const metadata = this.p2pMetadata.get(sessionId)
+    return this.withStateLock(async () => {
+      const session = this.activeSessions.get(sessionId)
+      const metadata = this.p2pMetadata.get(sessionId)
 
-    // Session MUST exist - nonces can only be shared after SESSION_READY
-    if (!session) {
-      throw new Error(
-        `Session ${sessionId} not found. Nonces can only be shared after SESSION_READY.`,
-      )
-    }
+      // Session MUST exist - nonces can only be shared after SESSION_READY
+      if (!session) {
+        throw new Error(
+          `Session ${sessionId} not found. Nonces can only be shared after SESSION_READY.`,
+        )
+      }
 
-    if (!metadata) {
-      throw new Error(`P2P metadata not found for session ${sessionId}`)
-    }
+      if (!metadata) {
+        throw new Error(`P2P metadata not found for session ${sessionId}`)
+      }
 
-    // Validate protocol phase (must be in NONCE_EXCHANGE to accept NONCE_SHARE)
-    if (!this._validateProtocolPhase(session, MuSig2MessageType.NONCE_SHARE)) {
-      const currentPhase = session.phase
-      throw new Error(
-        `Protocol violation: NONCE_SHARE not allowed in phase ${currentPhase}`,
-      )
-    }
+      // Validate protocol phase (must be in NONCE_EXCHANGE to accept NONCE_SHARE)
+      if (
+        !this._validateProtocolPhase(session, MuSig2MessageType.NONCE_SHARE)
+      ) {
+        const currentPhase = session.phase
+        throw new Error(
+          `Protocol violation: NONCE_SHARE not allowed in phase ${currentPhase}`,
+        )
+      }
 
-    // Validate sequence number for replay protection
-    if (
-      !this._validateMessageSequence(
-        session,
+      // Validate sequence number for replay protection
+      if (
+        !this._validateMessageSequence(
+          session,
+          signerIndex,
+          sequenceNumber,
+          metadata,
+        )
+      ) {
+        throw new Error(
+          `Invalid sequence number for signer ${signerIndex} in session ${sessionId}`,
+        )
+      }
+
+      if (this.musig2Config.enableNonceCommitment) {
+        const commitment = metadata.nonceCommitments?.get(signerIndex)
+        if (!commitment) {
+          throw new Error(
+            `Nonce commitment missing for signer ${signerIndex} in session ${sessionId}`,
+          )
+        }
+
+        if (!this._verifyNonceReveal(commitment, publicNonce)) {
+          throw new Error(
+            `Nonce reveal does not match commitment for signer ${signerIndex} in session ${sessionId}`,
+          )
+        }
+
+        if (!metadata.revealedNonces) {
+          metadata.revealedNonces = new Set()
+        }
+        metadata.revealedNonces.add(signerIndex)
+      }
+
+      // Receive and validate nonce
+      this.sessionManager.receiveNonce(session, signerIndex, publicNonce)
+
+      // Update participant mapping if needed
+      this._updatePeerMapping(sessionId, peerId, signerIndex)
+      this.debugLog('round1:receive', 'Received nonce share', {
+        sessionId,
         signerIndex,
-        sequenceNumber,
-        metadata,
-      )
-    ) {
-      throw new Error(
-        `Invalid sequence number for signer ${signerIndex} in session ${sessionId}`,
-      )
-    }
+        from: peerId,
+        revealed: metadata.revealedNonces?.size ?? 0,
+      })
 
-    // Receive and validate nonce
-    this.sessionManager.receiveNonce(session, signerIndex, publicNonce)
+      // Session phase is updated by receiveNonce, update timestamp
+      session.updatedAt = Date.now()
 
-    // Update participant mapping if needed
-    let peerMap = this.peerIdToSignerIndex.get(sessionId)
-    if (!peerMap) {
-      peerMap = new Map()
-      this.peerIdToSignerIndex.set(sessionId, peerMap)
-    }
-    peerMap.set(peerId, signerIndex)
-
-    // Session phase is updated by receiveNonce, update timestamp
-    session.updatedAt = Date.now()
-
-    // Check if all nonces received
-    if (this.sessionManager.hasAllNonces(session)) {
-      await this._handleAllNoncesReceived(sessionId)
-    }
+      // Check if all nonces received
+      if (this.sessionManager.hasAllNonces(session)) {
+        this.debugLog('round1:receive', 'All nonce shares collected', {
+          sessionId,
+        })
+        await this._handleAllNoncesReceived(sessionId)
+      }
+    })
   }
 
   /**
@@ -2216,10 +2849,13 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       session.updatedAt = Date.now()
     }
 
-    // Emit event AFTER phase transition to ensure protocol consistency
+    // Defer event emission AFTER phase transition to ensure protocol consistency
     // Prevent duplicate emissions
     if (this._shouldEmitEvent(sessionId, MuSig2Event.SESSION_NONCES_COMPLETE)) {
-      this.emit(MuSig2Event.SESSION_NONCES_COMPLETE, sessionId)
+      this.deferEvent(MuSig2Event.SESSION_NONCES_COMPLETE, sessionId)
+      this.debugLog('round1:complete', 'SESSION_NONCES_COMPLETE emitted', {
+        sessionId,
+      })
     }
   }
 
@@ -2233,56 +2869,61 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     partialSig: BN,
     peerId: string,
   ): Promise<void> {
-    const session = this.activeSessions.get(sessionId)
-    const metadata = this.p2pMetadata.get(sessionId)
+    return this.withStateLock(async () => {
+      const session = this.activeSessions.get(sessionId)
+      const metadata = this.p2pMetadata.get(sessionId)
 
-    if (!session) {
-      throw new Error(`Session ${sessionId} not found`)
-    }
+      if (!session) {
+        throw new Error(`Session ${sessionId} not found`)
+      }
 
-    if (!metadata) {
-      throw new Error(`P2P metadata not found for session ${sessionId}`)
-    }
+      if (!metadata) {
+        throw new Error(`P2P metadata not found for session ${sessionId}`)
+      }
 
-    // Validate protocol phase (must be in PARTIAL_SIG_EXCHANGE to accept PARTIAL_SIG_SHARE)
-    if (
-      !this._validateProtocolPhase(session, MuSig2MessageType.PARTIAL_SIG_SHARE)
-    ) {
-      const currentPhase = session.phase
-      throw new Error(
-        `Protocol violation: PARTIAL_SIG_SHARE not allowed in phase ${currentPhase}`,
-      )
-    }
+      // Validate protocol phase (must be in PARTIAL_SIG_EXCHANGE to accept PARTIAL_SIG_SHARE)
+      if (
+        !this._validateProtocolPhase(
+          session,
+          MuSig2MessageType.PARTIAL_SIG_SHARE,
+        )
+      ) {
+        const currentPhase = session.phase
+        throw new Error(
+          `Protocol violation: PARTIAL_SIG_SHARE not allowed in phase ${currentPhase}`,
+        )
+      }
 
-    // Validate sequence number for replay protection
-    if (
-      !this._validateMessageSequence(
+      // Validate sequence number for replay protection
+      if (
+        !this._validateMessageSequence(
+          session,
+          signerIndex,
+          sequenceNumber,
+          metadata,
+        )
+      ) {
+        throw new Error(
+          `Invalid sequence number for signer ${signerIndex} in session ${sessionId}`,
+        )
+      }
+
+      // Receive and verify partial signature
+      // The phase should already be PARTIAL_SIG_EXCHANGE (transitioned in _handleAllNoncesReceived)
+      this.sessionManager.receivePartialSignature(
         session,
         signerIndex,
-        sequenceNumber,
-        metadata,
+        partialSig,
       )
-    ) {
-      throw new Error(
-        `Invalid sequence number for signer ${signerIndex} in session ${sessionId}`,
-      )
-    }
 
-    // Receive and verify partial signature
-    // The phase should already be PARTIAL_SIG_EXCHANGE (transitioned in _handleAllNoncesReceived)
-    this.sessionManager.receivePartialSignature(
-      session,
-      signerIndex,
-      partialSig,
-    )
+      // Session phase is updated by receivePartialSignature, update timestamp
+      session.updatedAt = Date.now()
 
-    // Session phase is updated by receivePartialSignature, update timestamp
-    session.updatedAt = Date.now()
-
-    // Check if all partial signatures received
-    if (this.sessionManager.hasAllPartialSignatures(session)) {
-      await this._handleAllPartialSigsReceived(sessionId)
-    }
+      // Check if all partial signatures received
+      if (this.sessionManager.hasAllPartialSignatures(session)) {
+        await this._handleAllPartialSigsReceived(sessionId)
+      }
+    })
   }
 
   /**
@@ -2305,7 +2946,7 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     // Signature is automatically finalized by session manager
     // Prevent duplicate emissions
     if (this._shouldEmitEvent(sessionId, MuSig2Event.SESSION_COMPLETE)) {
-      this.emit(MuSig2Event.SESSION_COMPLETE, sessionId)
+      this.deferEvent(MuSig2Event.SESSION_COMPLETE, sessionId)
     }
 
     // Initialize coordinator failover if enabled and election is active
@@ -2322,22 +2963,28 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     reason: string,
     peerId: string,
   ): Promise<void> {
-    const session = this.activeSessions.get(sessionId)
-    if (!session) {
-      return
-    }
+    return this.withStateLock(async () => {
+      const session = this.activeSessions.get(sessionId)
+      if (!session) {
+        return
+      }
 
-    // Abort session
-    this.sessionManager.abortSession(session, reason)
+      const metadata = this.p2pMetadata.get(sessionId)
 
-    this.emit(MuSig2Event.SESSION_ABORTED, sessionId, reason)
+      // Abort session
+      this.sessionManager.abortSession(session, reason)
 
-    // Clean up
-    this.activeSessions.delete(sessionId)
-    this.p2pMetadata.delete(sessionId)
-    // Clean up emitted events tracking for this session
-    this.emittedEvents.delete(sessionId)
-    this.peerIdToSignerIndex.delete(sessionId)
+      // Note: SESSION_ABORTED includes reason as additional arg, but deferEvent only handles sessionId
+      // For abort, we emit immediately since it's a cleanup operation
+      this.emit(MuSig2Event.SESSION_ABORTED, sessionId, reason)
+
+      // Clean up
+      this.activeSessions.delete(sessionId)
+      this._removeMetadataEntries(sessionId, metadata)
+      // Clean up emitted events tracking for this session
+      this.emittedEvents.delete(sessionId)
+      this.peerIdToSignerIndex.delete(sessionId)
+    })
   }
 
   /**
@@ -2359,6 +3006,8 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       return
     }
 
+    // Note: SESSION_ERROR includes error and code as additional args, but deferEvent only handles sessionId
+    // For errors, we emit immediately since they're exceptional conditions
     this.emit(MuSig2Event.SESSION_ERROR, sessionId, error, code)
   }
 
@@ -2462,32 +3111,39 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
    */
   _onPeerConnected(peerId: string): void {
     // Could notify active sessions
-    this.emit(MuSig2Event.PEER_CONNECTED, peerId)
+    this.deferEvent(MuSig2Event.PEER_CONNECTED, peerId)
   }
 
   /**
    * Handle peer disconnection
    */
-  _onPeerDisconnected(peerId: string): void {
-    // Check if any active sessions depend on this peer
-    for (const [sessionId, session] of this.activeSessions.entries()) {
-      const metadata = this.p2pMetadata.get(sessionId)
-      if (!metadata) continue
+  async _onPeerDisconnected(peerId: string): Promise<void> {
+    // Make a copy of session IDs to avoid modifying the map during iteration
+    const sessionIds = Array.from(this.activeSessions.keys())
 
-      for (const [
-        signerIndex,
-        participantPeerId,
-      ] of metadata.participants.entries()) {
-        if (participantPeerId === peerId) {
-          // Participant disconnected - abort session?
-          // For now, just emit event
-          this.emit(
-            MuSig2Event.SESSION_PARTICIPANT_DISCONNECTED,
-            sessionId,
-            peerId,
-          )
+    for (const sessionId of sessionIds) {
+      await this.withStateLock(async () => {
+        const session = this.activeSessions.get(sessionId)
+        if (!session) return
+
+        const metadata = this.p2pMetadata.get(sessionId)
+        if (!metadata) return
+
+        for (const [
+          signerIndex,
+          participantPeerId,
+        ] of metadata.participants.entries()) {
+          if (participantPeerId === peerId) {
+            // Participant disconnected - abort session?
+            // For now, just emit event
+            this.deferEvent(
+              MuSig2Event.SESSION_PARTICIPANT_DISCONNECTED,
+              sessionId,
+              peerId,
+            )
+          }
         }
-      }
+      })
     }
 
     this.emit(MuSig2Event.PEER_DISCONNECTED, peerId)
@@ -2497,30 +3153,32 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
    * Handle peer information update
    * Called when libp2p fires peer:update event (e.g., when multiaddrs change)
    */
-  _onPeerUpdated(peerInfo: PeerInfo): void {
-    console.log(
-      `[MuSig2P2P] Peer updated: ${peerInfo.peerId.substring(0, 12)}... (${peerInfo.multiaddrs?.length || 0} addresses)`,
-    )
+  async _onPeerUpdated(peerInfo: PeerInfo): Promise<void> {
+    return this.withAdvertisementLock(async () => {
+      console.log(
+        `[MuSig2P2P] Peer updated: ${peerInfo.peerId.substring(0, 12)}... (${peerInfo.multiaddrs?.length || 0} addresses)`,
+      )
 
-    // Update signer advertisements if this peer has advertised
-    for (const [publicKeyHex, advertisement] of this.signerAdvertisements) {
-      if (advertisement.peerId === peerInfo.peerId) {
-        // Update multiaddrs in the cached advertisement (only if provided)
-        if (peerInfo.multiaddrs) {
-          const updatedAdvertisement = {
-            ...advertisement,
-            multiaddrs: peerInfo.multiaddrs,
+      // Update signer advertisements if this peer has advertised
+      for (const [publicKeyHex, advertisement] of this.signerAdvertisements) {
+        if (advertisement.peerId === peerInfo.peerId) {
+          // Update multiaddrs in the cached advertisement (only if provided)
+          if (peerInfo.multiaddrs) {
+            const updatedAdvertisement = {
+              ...advertisement,
+              multiaddrs: peerInfo.multiaddrs,
+            }
+            this.signerAdvertisements.set(publicKeyHex, updatedAdvertisement)
+            console.log(
+              `[MuSig2P2P]   Updated multiaddrs for signer advertisement: ${publicKeyHex.substring(0, 12)}...`,
+            )
           }
-          this.signerAdvertisements.set(publicKeyHex, updatedAdvertisement)
-          console.log(
-            `[MuSig2P2P]   Updated multiaddrs for signer advertisement: ${publicKeyHex.substring(0, 12)}...`,
-          )
         }
       }
-    }
 
-    // Emit event for external consumers
-    this.emit('peer:updated' as MuSig2Event, peerInfo)
+      // Emit event for external consumers
+      this.deferEvent(MuSig2Event.PEER_UPDATED, peerInfo)
+    })
   }
 
   /**
@@ -2561,14 +3219,46 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       return
     }
 
+    if (!this.advertisementSigningKey) {
+      console.warn(
+        '[MuSig2P2P] Cannot re-advertise: signing key unavailable (call advertiseSigner first)',
+      )
+      return
+    }
+
     try {
       console.log('[MuSig2P2P] Re-advertising signer with updated addresses')
+
+      const existingTtl = this.myAdvertisement.expiresAt
+        ? this.myAdvertisement.expiresAt - this.myAdvertisement.timestamp
+        : 24 * 60 * 60 * 1000 // default 24h if no expiry present
+      const ttl = Math.max(1000, existingTtl)
+      const timestamp = Date.now()
+      const expiresAt = timestamp + ttl
+
+      const adData = Buffer.concat([
+        Buffer.from(this.peerId),
+        Buffer.from(JSON.stringify(newAddresses)),
+        this.myAdvertisement.publicKey.toBuffer(),
+        Buffer.from(JSON.stringify(this.myAdvertisement.criteria)),
+        Buffer.from(timestamp.toString()),
+        Buffer.from(expiresAt.toString()),
+      ])
+
+      const hashbuf = Hash.sha256(adData)
+      const signature = Schnorr.sign(
+        hashbuf,
+        this.advertisementSigningKey,
+        'big',
+      ).toBuffer('schnorr')
 
       // Update our advertisement with new addresses
       const updatedAdvertisement = {
         ...this.myAdvertisement,
         multiaddrs: newAddresses,
-        timestamp: Date.now(),
+        timestamp,
+        expiresAt,
+        signature,
       }
 
       // Re-announce to DHT using existing announceResource method
@@ -2579,12 +3269,12 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
         {
           peerId: this.peerId,
           multiaddrs: newAddresses,
-          publicKey: this.myAdvertisement.publicKey,
+          publicKey: serializePublicKey(this.myAdvertisement.publicKey),
           criteria: this.myAdvertisement.criteria,
           metadata: this.myAdvertisement.metadata,
           timestamp: updatedAdvertisement.timestamp,
-          expiresAt: this.myAdvertisement.expiresAt,
-          signature: this.myAdvertisement.signature,
+          expiresAt: updatedAdvertisement.expiresAt,
+          signature: signature.toString('hex'),
         },
       )
 
@@ -2595,12 +3285,12 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
         payload: {
           peerId: this.peerId,
           multiaddrs: newAddresses,
-          publicKey: this.myAdvertisement.publicKey,
+          publicKey: serializePublicKey(this.myAdvertisement.publicKey),
           criteria: this.myAdvertisement.criteria,
           metadata: this.myAdvertisement.metadata,
           timestamp: updatedAdvertisement.timestamp,
-          expiresAt: this.myAdvertisement.expiresAt,
-          signature: this.myAdvertisement.signature,
+          expiresAt: updatedAdvertisement.expiresAt,
+          signature: signature.toString('hex'),
         },
         timestamp: Date.now(),
         messageId: this.messageProtocol.createMessage('', {}, this.peerId)
@@ -2610,6 +3300,10 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
 
       // Update our stored advertisement
       this.myAdvertisement = updatedAdvertisement
+      this.signerAdvertisements.set(
+        updatedAdvertisement.publicKey.toString(),
+        updatedAdvertisement,
+      )
 
       // Emit MuSig2-specific event for backward compatibility
       this.emit(MuSig2Event.RELAY_ADDRESSES_AVAILABLE, {
@@ -2874,6 +3568,17 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
           console.error(
             `[MuSig2P2P] ⚠️ PROTOCOL VIOLATION in session ${session.sessionId}: ` +
               `SESSION_JOIN not allowed in phase ${currentPhase} (must be INIT)`,
+          )
+          return false
+        }
+        return true
+
+      case MuSig2MessageType.NONCE_COMMIT:
+        // NONCE_COMMIT allowed only while session is in INIT
+        if (currentPhase !== MuSigSessionPhase.INIT) {
+          console.error(
+            `[MuSig2P2P] ⚠️ PROTOCOL VIOLATION in session ${session.sessionId}: ` +
+              `NONCE_COMMIT not allowed in phase ${currentPhase} (must be INIT)`,
           )
           return false
         }
@@ -3563,13 +4268,26 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     }
 
     // Send to all participants except self
-    const promises = Array.from(participants.entries())
-      .filter(([idx, peerId]) => idx !== signerIndex && peerId !== this.peerId)
-      .map(([, peerId]) =>
-        this._sendMessageToPeer(peerId, MuSig2MessageType.NONCE_SHARE, payload),
-      )
+    const directTargets = Array.from(participants.entries()).filter(
+      ([idx, peerId]) => idx !== signerIndex && peerId !== this.peerId,
+    )
 
-    await Promise.all(promises)
+    this.debugLog('round1:broadcast', 'Sending nonce share', {
+      sessionId,
+      signerIndex,
+      directTargets: directTargets.length,
+    })
+
+    const sendPromises = directTargets.map(([, peerId]) =>
+      this._sendMessageToPeer(peerId, MuSig2MessageType.NONCE_SHARE, payload),
+    )
+
+    const results = await Promise.allSettled(sendPromises)
+    const failed = results.some(r => r.status === 'rejected')
+
+    if (failed || directTargets.length === 0) {
+      await this.publishToTopic(MuSig2MessageType.NONCE_SHARE, payload)
+    }
   }
 
   /**
@@ -3596,17 +4314,135 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     }
 
     // Send to all participants except self
-    const promises = Array.from(participants.entries())
-      .filter(([idx, peerId]) => idx !== signerIndex && peerId !== this.peerId)
-      .map(([, peerId]) =>
-        this._sendMessageToPeer(
-          peerId,
-          MuSig2MessageType.PARTIAL_SIG_SHARE,
-          payload,
-        ),
-      )
+    const directTargets = Array.from(participants.entries()).filter(
+      ([idx, peerId]) => idx !== signerIndex && peerId !== this.peerId,
+    )
 
-    await Promise.all(promises)
+    this.debugLog('round2:broadcast', 'Sending partial signature share', {
+      sessionId,
+      signerIndex,
+      directTargets: directTargets.length,
+    })
+
+    const sendPromises = directTargets.map(([, peerId]) =>
+      this._sendMessageToPeer(
+        peerId,
+        MuSig2MessageType.PARTIAL_SIG_SHARE,
+        payload,
+      ),
+    )
+
+    const results = await Promise.allSettled(sendPromises)
+    const failed = results.some(r => r.status === 'rejected')
+
+    if (failed || directTargets.length === 0) {
+      await this.publishToTopic(MuSig2MessageType.PARTIAL_SIG_SHARE, payload)
+    }
+  }
+
+  /**
+   * Broadcast nonce commitment to all participants
+   */
+  private async _broadcastNonceCommit(
+    sessionId: string,
+    signerIndex: number,
+    commitment: string,
+    participants: Map<number, string>,
+  ): Promise<void> {
+    const activeSession = this.activeSessions.get(sessionId)
+
+    if (!activeSession) {
+      throw new Error(`Session ${sessionId} not found`)
+    }
+
+    const payload: NonceCommitmentPayload = {
+      sessionId,
+      signerIndex,
+      sequenceNumber: this._getNextSequenceNumber(sessionId, signerIndex),
+      timestamp: Date.now(),
+      commitment,
+    }
+
+    const directTargets = Array.from(participants.entries()).filter(
+      ([idx, peerId]) => idx !== signerIndex && peerId !== this.peerId,
+    )
+
+    this.debugLog('nonce:commit', 'Sending nonce commitment payload', {
+      sessionId,
+      signerIndex,
+      directTargets: directTargets.length,
+    })
+
+    const sendPromises = directTargets.map(([, peerId]) =>
+      this._sendMessageToPeer(peerId, MuSig2MessageType.NONCE_COMMIT, payload),
+    )
+
+    const results = await Promise.allSettled(sendPromises)
+    const failed = results.some(r => r.status === 'rejected')
+
+    if (failed || directTargets.length === 0) {
+      await this.publishToTopic(MuSig2MessageType.NONCE_COMMIT, payload)
+    }
+  }
+
+  /**
+   * Compute nonce commitment hash
+   */
+  private _computeNonceCommitment(publicNonces: [Point, Point]): string {
+    const serialized = serializePublicNonce(publicNonces)
+    const buffer = Buffer.concat([
+      Buffer.from(serialized.R1, 'hex'),
+      Buffer.from(serialized.R2, 'hex'),
+    ])
+    return Hash.sha256(buffer).toString('hex')
+  }
+
+  private _hasAllNonceCommitments(
+    session: MuSigSession,
+    metadata: P2PSessionMetadata,
+  ): boolean {
+    if (!metadata.nonceCommitments) {
+      return false
+    }
+    return metadata.nonceCommitments.size === session.signers.length
+  }
+
+  private async _handleAllNonceCommitmentsReceived(
+    sessionId: string,
+  ): Promise<void> {
+    const session = this.activeSessions.get(sessionId)
+    const metadata = this.p2pMetadata.get(sessionId)
+
+    if (!session || !metadata) {
+      return
+    }
+
+    metadata.nonceCommitmentsComplete = true
+    if (!metadata.revealedNonces) {
+      metadata.revealedNonces = new Set()
+    }
+
+    this.debugLog('nonce:commit', 'All nonce commitments complete', {
+      sessionId,
+    })
+    // ARCHITECTURE FIX (2025-11-21): Add duplicate prevention
+    // Prevents multiple emissions when called from both self and remote triggers
+    if (
+      this._shouldEmitEvent(
+        sessionId,
+        MuSig2Event.SESSION_NONCE_COMMITMENTS_COMPLETE,
+      )
+    ) {
+      this.deferEvent(MuSig2Event.SESSION_NONCE_COMMITMENTS_COMPLETE, sessionId)
+    }
+  }
+
+  private _verifyNonceReveal(
+    commitment: string,
+    publicNonce: [Point, Point],
+  ): boolean {
+    const computed = this._computeNonceCommitment(publicNonce)
+    return computed === commitment
   }
 
   /**
@@ -3762,6 +4598,161 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
   }
 
   /**
+   * Removes metadata entries associated with a given key and optionally a signing request.
+   *
+   * @param {string} key - The key associated with the metadata entries to be removed.
+   * @param {P2PSessionMetadata} [metadata] - Optional metadata object containing the request ID of a signing request.
+   */
+  private _removeMetadataEntries(
+    key: string,
+    metadata?: P2PSessionMetadata,
+  ): void {
+    this.p2pMetadata.delete(key)
+    // REMOVED participantJoinCache cleanup - no longer needed
+
+    const requestId = metadata?.request?.requestId
+    if (requestId) {
+      this.p2pMetadata.delete(requestId)
+      this.signingRequests.delete(requestId)
+      // REMOVED participantJoinCache cleanup - no longer needed
+    }
+  }
+
+  /**
+   * Marks a participant as having joined a signing request.
+   *
+   * @param {string} requestId - The ID of the signing request.
+   * @param {number} participantIndex - The index of the participant who joined.
+   * @returns {boolean} - True if the participant has not yet joined the signing request, false otherwise.
+   */
+  // REMOVED _markParticipantJoinSeen() - duplicate prevention now done via metadata.participants
+  // This eliminates the need for a separate cache and ensures single source of truth
+
+  /**
+   * Ingests the creator's participation in a signing request.
+   *
+   * @param {SigningRequest} request - The signing request.
+   * @returns {void}
+   */
+  private _ingestCreatorParticipation(request: SigningRequest): void {
+    const participation = request.creatorParticipation
+    if (!participation) {
+      return
+    }
+
+    try {
+      const participantPublicKey = PublicKey.fromString(
+        participation.participantPublicKey,
+      )
+      const signature = Buffer.from(participation.signature, 'hex')
+
+      this.emit(MuSig2Event.PARTICIPANT_JOINED, {
+        requestId: participation.requestId,
+        participantIndex: participation.participantIndex,
+        participantPeerId: participation.participantPeerId,
+        participantPublicKey,
+        timestamp: participation.timestamp,
+        signature,
+      })
+    } catch (error) {
+      this.debugLog(
+        'participant:join',
+        'Failed to ingest creator participation',
+        {
+          requestId: participation.requestId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      )
+    }
+  }
+
+  /**
+   * Get detailed session state for debugging
+   *
+   * ARCHITECTURE CHANGE (2025-11-21): Added debugging method to inspect session state
+   * Helps troubleshoot requestId/sessionId confusion and metadata lookup issues
+   *
+   * @param id - Either a requestId or sessionId
+   * @returns Detailed debug information about the session
+   */
+  getSessionDebugInfo(id: string): {
+    found: boolean
+    foundAs?: 'requestId' | 'sessionId'
+    requestId?: string
+    sessionId?: string
+    phase?: MuSigSessionPhase
+    participants?: Array<{ index: number; peerId: string }>
+    hasMetadata: boolean
+    hasSession: boolean
+    allMetadataKeys: string[]
+    allSessionKeys: string[]
+    requestToSessionMapping: Array<[string, string]>
+  } {
+    // Try as sessionId first
+    let session = this.activeSessions.get(id)
+    let metadata = this.p2pMetadata.get(id)
+    let foundAs: 'sessionId' | 'requestId' | undefined = undefined
+    let requestId: string | undefined = undefined
+    let sessionId: string | undefined = undefined
+
+    if (session || metadata) {
+      foundAs = 'sessionId'
+      sessionId = id
+      // Try to find requestId via reverse mapping
+      for (const [req, sess] of this.requestIdToSessionId.entries()) {
+        if (sess === id) {
+          requestId = req
+          break
+        }
+      }
+    } else {
+      // Try as requestId
+      const mappedSessionId = this.requestIdToSessionId.get(id)
+      if (mappedSessionId) {
+        session = this.activeSessions.get(mappedSessionId)
+        metadata = this.p2pMetadata.get(mappedSessionId)
+        foundAs = 'requestId'
+        requestId = id
+        sessionId = mappedSessionId
+      }
+    }
+
+    if (!session && !metadata) {
+      return {
+        found: false,
+        hasMetadata: false,
+        hasSession: false,
+        allMetadataKeys: Array.from(this.p2pMetadata.keys()),
+        allSessionKeys: Array.from(this.activeSessions.keys()),
+        requestToSessionMapping: Array.from(
+          this.requestIdToSessionId.entries(),
+        ),
+      }
+    }
+
+    return {
+      found: true,
+      foundAs,
+      requestId,
+      sessionId,
+      phase: session?.phase,
+      participants: metadata
+        ? Array.from(metadata.participants.entries()).map(
+            ([index, peerId]) => ({
+              index,
+              peerId,
+            }),
+          )
+        : [],
+      hasMetadata: !!metadata,
+      hasSession: !!session,
+      allMetadataKeys: Array.from(this.p2pMetadata.keys()),
+      allSessionKeys: Array.from(this.activeSessions.keys()),
+      requestToSessionMapping: Array.from(this.requestIdToSessionId.entries()),
+    }
+  }
+
+  /**
    * Cleanup coordinator resources
    *
    * Stops automatic cleanup and closes all active sessions
@@ -3811,18 +4802,21 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
    *
    * Can also be called manually if needed (e.g., before critical operations).
    */
-  public cleanupExpiredSessions(): void {
+  public async cleanupExpiredSessions(): Promise<void> {
     const now = Date.now()
     const expirationTime = this.musig2Config.sessionTimeout
 
-    for (const [sessionId, activeSession] of this.activeSessions.entries()) {
+    // Make a copy of sessions to avoid modifying the map during iteration
+    const sessions = Array.from(this.activeSessions.entries())
+
+    for (const [sessionId, activeSession] of sessions) {
       // Check if session has expired
       const age = now - activeSession.createdAt
       if (age > expirationTime) {
         console.log(
           `[MuSig2P2P] Cleaning up expired session: ${sessionId} (age: ${Math.round(age / 1000)}s)`,
         )
-        this.closeSession(sessionId).catch(error => {
+        await this.closeSession(sessionId).catch(error => {
           console.error(
             `[MuSig2P2P] Failed to close expired session ${sessionId}:`,
             error,
@@ -3836,7 +4830,7 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
         console.warn(
           `[MuSig2P2P] Cleaning up stuck session: ${sessionId} (phase: ${activeSession.phase})`,
         )
-        this.closeSession(sessionId).catch(error => {
+        await this.closeSession(sessionId).catch(error => {
           console.error(
             `[MuSig2P2P] Failed to close stuck session ${sessionId}:`,
             error,
@@ -4102,6 +5096,41 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       electionProof: metadata.election.electionProof,
       isCoordinator: this.isCoordinator(sessionId),
     }
+  }
+
+  /**
+   * Find existing session with the same signers and message
+   * Used for idempotency checks to prevent duplicate session creation
+   */
+  private _findExistingSession(
+    signers: PublicKey[],
+    message: Buffer,
+  ): string | null {
+    for (const [sessionId, session] of this.activeSessions.entries()) {
+      // Check if signers match (same length and same keys in same order)
+      if (session.signers.length !== signers.length) {
+        continue
+      }
+
+      const signersMatch = session.signers.every(
+        (sessionKey, index) =>
+          sessionKey.toString() === signers[index].toString(),
+      )
+
+      if (!signersMatch) {
+        continue
+      }
+
+      // Check if message matches
+      if (!session.message.equals(message)) {
+        continue
+      }
+
+      // Found matching session
+      return sessionId
+    }
+
+    return null
   }
 
   /**

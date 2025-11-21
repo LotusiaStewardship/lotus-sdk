@@ -1534,6 +1534,14 @@ export class TaprootInput extends Input {
 
     // For key path spending, input script is just the signature
     const script = new Script()
+
+    // BUG FIX: Ensure inner signature has nhashtype set from TransactionSignature.sigtype
+    // This is a defensive measure to prevent malformed signatures if the inner signature
+    // doesn't have nhashtype set (e.g., from MuSig2 aggregation)
+    if (!signature.signature.nhashtype && signature.sigtype) {
+      signature.signature.nhashtype = signature.sigtype
+    }
+
     script.add(signature.signature.toTxFormat('schnorr'))
 
     this.setScript(script)

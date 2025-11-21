@@ -540,12 +540,12 @@ export class SwapSigCoordinator extends MuSig2P2PCoordinator {
     )
 
     // Listen for session ready (when ALL participants join - n-of-n)
-    super.on(MuSig2Event.SESSION_READY, sessionId => {
+    super.on(MuSig2Event.SESSION_READY, ({ sessionId, requestId }) => {
       console.log(
         `[SwapSig] Session ${sessionId.substring(0, 8)}... ready for signing (all participants joined)`,
       )
       // Note: MuSig2 SESSION_READY doesn't provide requestId, emit with empty string
-      this.emit(SwapSigEvent.SWAPSIG_SESSION_READY, sessionId, '')
+      this.emit(SwapSigEvent.SWAPSIG_SESSION_READY, sessionId, requestId)
     })
 
     // Listen for session completion

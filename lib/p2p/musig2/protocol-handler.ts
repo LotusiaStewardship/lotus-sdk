@@ -24,6 +24,7 @@ import {
   SessionAnnouncementPayload,
   SessionJoinPayload,
   NonceSharePayload,
+  NonceCommitmentPayload,
   PartialSigSharePayload,
   ValidationErrorPayload,
   SignerAdvertisementPayload,
@@ -43,6 +44,7 @@ import {
   validateSessionAnnouncementPayload,
   validateSessionJoinPayload,
   validateNonceSharePayload,
+  validateNonceCommitmentPayload,
   validatePartialSigSharePayload,
   validateSignerAdvertisementPayload,
   validateSigningRequestPayload,
@@ -60,12 +62,72 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
 
   private coordinator?: MuSig2P2PCoordinator
   private securityManager?: SecurityManager
+  // REMOVED participantJoinCache - duplicate prevention now handled by coordinator only
+
+  private debugLog(
+    context: string,
+    message: string,
+    extra?: Record<string, unknown>,
+  ): void {
+    if (!this.coordinator) {
+      return
+    }
+
+    this.coordinator.debugLog(`protocol:${context}`, message, extra)
+  }
 
   /**
    * Set the coordinator instance
    */
   setCoordinator(coordinator: MuSig2P2PCoordinator): void {
     this.coordinator = coordinator
+  }
+
+  /**
+   * Handle nonce commitment
+   */
+  private async _handleNonceCommit(
+    payload: NonceCommitmentPayload,
+    from: PeerInfo,
+  ): Promise<void> {
+    if (!this.coordinator) return
+
+    try {
+      validateNonceCommitmentPayload(payload)
+
+      await this.coordinator._handleNonceCommit(
+        payload.sessionId,
+        payload.signerIndex,
+        payload.sequenceNumber,
+        payload.commitment,
+        from.peerId,
+      )
+      this.debugLog('nonce:commit', 'Processed NONCE_COMMIT payload', {
+        sessionId: payload.sessionId,
+        signerIndex: payload.signerIndex,
+        from: from.peerId,
+      })
+    } catch (error) {
+      if (
+        error instanceof DeserializationError ||
+        error instanceof ValidationError
+      ) {
+        console.warn(
+          `[MuSig2P2P] ⚠️  Malformed nonce commitment from ${from.peerId}: ${error.message}`,
+        )
+        if (this.securityManager) {
+          this.securityManager.recordInvalidSignature(from.peerId)
+        }
+        return
+      }
+      console.error(
+        `[MuSig2P2P] ❌ Unexpected error handling nonce commitment from ${from.peerId}:`,
+        error,
+      )
+      if (this.securityManager) {
+        this.securityManager.peerReputation.recordSpam(from.peerId)
+      }
+    }
   }
 
   /**
@@ -79,6 +141,8 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
    * Handle incoming stream (required for protocol advertisement registration)
    */
   async handleStream(stream: Stream, connection: Connection): Promise<void> {
+    const peerId = connection.remotePeer.toString()
+    this.debugLog('stream', 'Handling incoming stream', { peerId })
     try {
       const data: Uint8Array[] = []
       let totalSize = 0
@@ -95,6 +159,10 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
               `[MuSig2P2P] Oversized message from ${connection.remotePeer.toString()}: ${totalSize} bytes (max: ${MAX_MESSAGE_SIZE})`,
             )
             stream.abort(new Error('Message too large'))
+            this.debugLog('stream', 'Aborted oversized message', {
+              peerId,
+              totalSize,
+            })
             return
           }
 
@@ -132,6 +200,10 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
 
       // Deserialize message
       const message: P2PMessage = JSON.parse(combined.toString('utf8'))
+      this.debugLog('stream', 'Decoded message from stream', {
+        peerId,
+        type: message.type,
+      })
 
       // Get peer info
       const from: PeerInfo = {
@@ -156,27 +228,58 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
     }
 
     if (message.protocol !== this.protocolName) {
+      this.debugLog('message', 'Ignored message for different protocol', {
+        from: from.peerId,
+        messageProtocol: message.protocol,
+      })
       return // Not for us
     }
 
-    // ARCHITECTURE: Protocol handler is the SINGLE SOURCE OF TRUTH for event emission
-    // ALL peers (including the sender) receive their own broadcasts via GossipSub
-    // and the handler emits appropriate events for everyone.
+    // ARCHITECTURE CHANGE (2025-11-21): Filter self-messages to prevent duplicate processing
+    //
+    // PREVIOUS ARCHITECTURE: Sender received own broadcasts via GossipSub
+    // - Caused duplicate event processing
+    // - Required duplicate caches at multiple layers
+    // - Created race conditions between local and broadcast events
+    // - Made event ordering unpredictable
+    //
+    // NEW ARCHITECTURE: Local-first pattern
+    // - Broadcaster updates local state immediately (synchronous)
+    // - Broadcaster emits local events immediately (synchronous)
+    // - Broadcast is sent to network (asynchronous, fire-and-forget)
+    // - Self-messages are filtered out (this check)
     //
     // Benefits:
-    // 1. Consistent event ordering across all peers
-    // 2. No race conditions (sender waits for broadcast propagation)
-    // 3. Simpler logic (no duplicate prevention needed in broadcasters)
-    // 4. Single place for all event emission logic
+    // 1. No duplicate processing (self-messages ignored)
+    // 2. Predictable event ordering (local events fire immediately)
+    // 3. Single duplicate prevention point (in coordinator)
+    // 4. Easier debugging (no race between local and broadcast events)
     //
-    // NOTE: We do NOT filter out self-messages. The sender receives their own
-    // broadcast and the handler emits semantically appropriate events based on
-    // whether the message is from self or others.
+    // CRITICAL: Ignore messages from self to prevent duplicate processing
+    if (from.peerId === this.coordinator.peerId) {
+      this.debugLog(
+        'message',
+        '⚠️  Ignoring self-message (local state already updated)',
+        {
+          type: message.type,
+          from: from.peerId,
+        },
+      )
+      return
+    }
+
+    this.debugLog('message', 'Routing message from remote peer', {
+      type: message.type,
+      from: from.peerId,
+    })
 
     try {
       switch (message.type) {
         // Phase 0: Signer advertisement
         case MuSig2MessageType.SIGNER_ADVERTISEMENT:
+          this.debugLog('message', 'Handling SIGNER_ADVERTISEMENT', {
+            from: from.peerId,
+          })
           await this._handleSignerAdvertisement(
             message.payload as SignerAdvertisementPayload,
             from,
@@ -184,6 +287,9 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
           break
 
         case MuSig2MessageType.SIGNER_UNAVAILABLE:
+          this.debugLog('message', 'Handling SIGNER_UNAVAILABLE', {
+            from: from.peerId,
+          })
           await this._handleSignerUnavailable(
             message.payload as { peerId: string; publicKey: string },
             from,
@@ -192,6 +298,9 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
 
         // Phase 1-2: Signing request
         case MuSig2MessageType.SIGNING_REQUEST:
+          this.debugLog('message', 'Handling SIGNING_REQUEST', {
+            from: from.peerId,
+          })
           await this._handleSigningRequest(
             message.payload as SigningRequestPayload,
             from,
@@ -199,6 +308,9 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
           break
 
         case MuSig2MessageType.PARTICIPANT_JOINED:
+          this.debugLog('message', 'Handling PARTICIPANT_JOINED', {
+            from: from.peerId,
+          })
           await this._handleParticipantJoined(
             message.payload as ParticipantJoinedPayload,
             from,
@@ -206,32 +318,44 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
           break
 
         case MuSig2MessageType.SESSION_READY:
+          this.debugLog('message', 'Handling SESSION_READY', {
+            from: from.peerId,
+          })
           await this._handleSessionReady(
             message.payload as {
               requestId: string
               sessionId: string
-              participantIndex: number
+              participantIndex?: number
+              participantPeerId?: string
             },
             from,
           )
           break
 
-        // Legacy: Session lifecycle
-        case MuSig2MessageType.SESSION_ANNOUNCE:
-          await this._handleSessionAnnounce(
-            message.payload as SessionAnnouncementPayload,
-            from,
-          )
-          break
-
         case MuSig2MessageType.SESSION_JOIN:
+          this.debugLog('message', 'Handling SESSION_JOIN', {
+            from: from.peerId,
+          })
           await this._handleSessionJoin(
             message.payload as SessionJoinPayload,
             from,
           )
           break
 
+        case MuSig2MessageType.NONCE_COMMIT:
+          this.debugLog('message', 'Handling NONCE_COMMIT', {
+            from: from.peerId,
+          })
+          await this._handleNonceCommit(
+            message.payload as NonceCommitmentPayload,
+            from,
+          )
+          break
+
         case MuSig2MessageType.NONCE_SHARE:
+          this.debugLog('message', 'Handling NONCE_SHARE', {
+            from: from.peerId,
+          })
           await this._handleNonceShare(
             message.payload as NonceSharePayload,
             from,
@@ -239,6 +363,9 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
           break
 
         case MuSig2MessageType.PARTIAL_SIG_SHARE:
+          this.debugLog('message', 'Handling PARTIAL_SIG_SHARE', {
+            from: from.peerId,
+          })
           await this._handlePartialSigShare(
             message.payload as PartialSigSharePayload,
             from,
@@ -246,6 +373,9 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
           break
 
         case MuSig2MessageType.SESSION_ABORT:
+          this.debugLog('message', 'Handling SESSION_ABORT', {
+            from: from.peerId,
+          })
           await this._handleSessionAbort(
             message.payload as { sessionId: string; reason?: string },
             from,
@@ -253,6 +383,9 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
           break
 
         case MuSig2MessageType.VALIDATION_ERROR:
+          this.debugLog('message', 'Handling VALIDATION_ERROR', {
+            from: from.peerId,
+          })
           await this._handleValidationError(
             message.payload as ValidationErrorPayload,
             from,
@@ -267,6 +400,11 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
         `[MuSig2P2P] Error handling message ${message.type}:`,
         error,
       )
+      this.debugLog('message', 'Error handling message', {
+        type: message.type,
+        from: from.peerId,
+        error: error instanceof Error ? error.message : String(error),
+      })
       // Send error back to sender if we can identify the session
       if (
         message.payload &&
@@ -297,6 +435,9 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
   async onPeerDiscovered(peerInfo: PeerInfo): Promise<void> {
     if (this.coordinator) {
       this.coordinator._onPeerDiscovered(peerInfo)
+      this.debugLog('peer', 'Peer discovered', {
+        peerId: peerInfo.peerId,
+      })
     }
   }
 
@@ -306,6 +447,7 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
   async onPeerConnected(peerId: string): Promise<void> {
     if (this.coordinator) {
       this.coordinator._onPeerConnected(peerId)
+      this.debugLog('peer', 'Peer connected', { peerId })
     }
   }
 
@@ -315,6 +457,7 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
   async onPeerDisconnected(peerId: string): Promise<void> {
     if (this.coordinator) {
       this.coordinator._onPeerDisconnected(peerId)
+      this.debugLog('peer', 'Peer disconnected', { peerId })
     }
   }
 
@@ -324,6 +467,7 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
   async onPeerUpdated(peerInfo: PeerInfo): Promise<void> {
     if (this.coordinator) {
       this.coordinator._onPeerUpdated(peerInfo)
+      this.debugLog('peer', 'Peer updated', { peerId: peerInfo.peerId })
     }
   }
 
@@ -338,57 +482,11 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
   }): Promise<void> {
     if (this.coordinator) {
       this.coordinator._onRelayAddressesChanged(data)
-    }
-  }
-
-  /**
-   * Handle session announcement
-   */
-  private async _handleSessionAnnounce(
-    payload: SessionAnnouncementPayload,
-    from: PeerInfo,
-  ): Promise<void> {
-    if (!this.coordinator) return
-
-    try {
-      // SECURITY: Validate payload structure first
-      validateSessionAnnouncementPayload(payload)
-
-      // Deserialize signers - safely handle malformed data
-      const signers = payload.signers.map(hex => deserializePublicKey(hex))
-      const message = deserializeMessage(payload.message)
-
-      await this.coordinator._handleSessionAnnouncement(
-        payload.sessionId,
-        signers,
-        payload.creatorIndex,
-        message,
-        from.peerId,
-        payload.metadata,
-      )
-    } catch (error) {
-      if (
-        error instanceof DeserializationError ||
-        error instanceof ValidationError
-      ) {
-        console.warn(
-          `[MuSig2P2P] ⚠️  Malformed session announcement from ${from.peerId}: ${error.message}`,
-        )
-        // Track malicious peer
-        if (this.securityManager) {
-          this.securityManager.recordInvalidSignature(from.peerId)
-        }
-        return
-      }
-      // SECURITY: Never re-throw - log and drop to prevent DoS
-      console.error(
-        `[MuSig2P2P] ❌ Unexpected error handling session announcement from ${from.peerId}:`,
-        error,
-      )
-      if (this.securityManager) {
-        this.securityManager.peerReputation.recordSpam(from.peerId)
-      }
-      return
+      this.debugLog('peer', 'Relay addresses changed', {
+        peerId: data.peerId,
+        relays: data.relayAddresses.length,
+        reachable: data.reachableAddresses.length,
+      })
     }
   }
 
@@ -414,6 +512,11 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
         publicKey,
         from.peerId,
       )
+      this.debugLog('session', 'Processed SESSION_JOIN payload', {
+        sessionId: payload.sessionId,
+        signerIndex: payload.signerIndex,
+        from: from.peerId,
+      })
     } catch (error) {
       if (
         error instanceof DeserializationError ||
@@ -461,6 +564,11 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
         publicNonce,
         from.peerId,
       )
+      this.debugLog('nonce:share', 'Processed NONCE_SHARE payload', {
+        sessionId: payload.sessionId,
+        signerIndex: payload.signerIndex,
+        from: from.peerId,
+      })
     } catch (error) {
       if (
         error instanceof DeserializationError ||
@@ -508,6 +616,11 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
         partialSig,
         from.peerId,
       )
+      this.debugLog('partial-sig', 'Processed PARTIAL_SIG_SHARE payload', {
+        sessionId: payload.sessionId,
+        signerIndex: payload.signerIndex,
+        from: from.peerId,
+      })
     } catch (error) {
       if (
         error instanceof DeserializationError ||
@@ -790,6 +903,7 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
         expiresAt: payload.expiresAt,
         metadata: payload.metadata,
         creatorSignature,
+        creatorParticipation: payload.creatorParticipation,
       }
 
       const isSelfRequest = from.peerId === this.coordinator.peerId
@@ -845,14 +959,19 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
       )
       const signature = Buffer.from(payload.signature, 'hex')
 
-      // Check if participant already joined (prevent duplicate processing)
-      // The coordinator's PARTICIPANT_JOINED handler will check for duplicates,
-      // but we can also check here to avoid unnecessary event emission
-      // Note: We rely on the coordinator's internal duplicate prevention
-      // since activeSigningSessions is private
+      // ARCHITECTURE CHANGE (2025-11-21): Removed duplicate prevention from protocol handler
+      // With local-first pattern and self-message filtering:
+      // - Self-messages are already filtered (handleMessage checks from.peerId)
+      // - Coordinator uses metadata.participants as SINGLE source of truth (protected by state lock)
+      // - No need for duplicate cache at protocol handler level
+      //
+      // Benefits:
+      // - Single point of duplicate prevention (in coordinator)
+      // - No cache synchronization needed
+      // - Simpler logic
+      // - State lock protects against races
 
-      // ARCHITECTURE: Emit PARTICIPANT_JOINED for all peers (same event for everyone)
-      // This event is processed by the coordinator's internal event handler
+      // Always emit - coordinator will handle duplicates
       this.coordinator.emit(MuSig2Event.PARTICIPANT_JOINED, {
         requestId: payload.requestId,
         participantIndex: payload.participantIndex,
@@ -903,31 +1022,32 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
     payload: {
       requestId: string
       sessionId: string
-      participantIndex: number
+      participantIndex?: number
+      participantPeerId?: string
     },
     from: PeerInfo,
   ): Promise<void> {
-    if (!this.coordinator) return
-
-    // CRITICAL: Ensure session is created before emitting SESSION_READY
-    // The session might not exist yet if we receive SESSION_READY before
-    // processing all PARTICIPANT_JOINED messages
-    const session = this.coordinator.getSession(payload.sessionId)
-    if (!session) {
-      // Session doesn't exist yet - create it from the request
-      // This can happen if the creator broadcasts SESSION_READY before
-      // we've processed all PARTICIPANT_JOINED events
-      // Pass skipBroadcast=true to prevent duplicate SESSION_READY broadcasts
-      await this.coordinator._createMuSigSessionFromRequest(
-        payload.requestId,
-        true,
+    if (!this.coordinator) {
+      this.debugLog(
+        'session:ready',
+        'Coordinator not initialized - skipping session ready',
+        {
+          requestId: payload.requestId,
+          sessionId: payload.sessionId,
+          participantIndex: payload.participantIndex,
+          participantPeerId: payload.participantPeerId,
+        },
       )
+      return
     }
 
-    // Emit event with sessionId (hash-based ID) - all protocol operations use this after session creation
-    this.coordinator.emitEventWithDuplicatePrevention(
-      MuSig2Event.SESSION_READY,
-      payload.sessionId,
-    )
+    await this.coordinator._handleRemoteSessionReady({
+      requestId: payload.requestId,
+      sessionId: payload.sessionId,
+      participantIndex: payload.participantIndex,
+      participantPeerId: payload.participantPeerId ?? from.peerId,
+    })
   }
+
+  // REMOVED _markParticipantJoinSeen() - duplicate prevention now in coordinator only
 }

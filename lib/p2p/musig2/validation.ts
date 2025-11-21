@@ -19,6 +19,7 @@ import type {
   SignerAdvertisementPayload,
   SigningRequestPayload,
   ParticipantJoinedPayload,
+  NonceCommitmentPayload,
 } from './types.js'
 
 /**
@@ -35,6 +36,7 @@ function validateString(
       `invalid-type-${fieldName}`,
     )
   }
+
   if (!allowEmpty && value.length === 0) {
     throw new ValidationError(
       `${fieldName} cannot be empty`,
@@ -131,6 +133,23 @@ export function validateNonceSharePayload(
 }
 
 /**
+ * Validate nonce commitment payload
+ */
+export function validateNonceCommitmentPayload(
+  payload: unknown,
+): asserts payload is NonceCommitmentPayload {
+  if (!payload || typeof payload !== 'object') {
+    throw new ValidationError('Payload must be an object', 'invalid-payload')
+  }
+
+  const p = payload as Record<string, unknown>
+  validateString(p.sessionId, 'sessionId')
+  validateNumber(p.signerIndex, 'signerIndex')
+  validateNumber(p.sequenceNumber, 'sequenceNumber')
+  validateString(p.commitment, 'commitment')
+}
+
+/**
  * Validate partial signature share payload
  */
 export function validatePartialSigSharePayload(
@@ -186,6 +205,7 @@ export function validateSigningRequestPayload(
   validateString(p.creatorPublicKey, 'creatorPublicKey')
   validateString(p.creatorSignature, 'creatorSignature')
   validateNumber(p.createdAt, 'createdAt')
+  validateParticipantJoinedPayload(p.creatorParticipation)
 }
 
 /**

@@ -255,7 +255,10 @@ export class MuSigSessionManager {
     // Store in session
     session.mySecretNonce = nonce
     session.myPublicNonce = nonce.publicNonces
-    session.phase = MuSigSessionPhase.NONCE_EXCHANGE
+    // ARCHITECTURE FIX (2025-11-21): Do NOT transition phase here
+    // Phase will be transitioned by P2P coordinator after ALL nonce commitments received
+    // This prevents race condition where peers reject each other's NONCE_COMMIT messages
+    // session.phase = MuSigSessionPhase.NONCE_EXCHANGE // REMOVED
     session.updatedAt = Date.now()
 
     // RACE CONDITION FIX: If we already have all other nonces (received before we generated ours),
@@ -667,11 +670,20 @@ export class MuSigSessionManager {
       )
     }
 
+    // Get sighash type from metadata (defaults to SIGHASH_ALL | SIGHASH_LOTUS for Taproot)
+    // BUG FIX: This nhashtype will be embedded in the signature for proper transaction serialization
+    const sighashType = session.metadata?.sighashType
+      ? (session.metadata.sighashType as number)
+      : session.metadata?.inputScriptType === 'taproot'
+        ? Signature.SIGHASH_ALL | Signature.SIGHASH_LOTUS
+        : undefined
+
     session.finalSignature = musigSigAgg(
       allPartialSigs,
       session.aggregatedNonce,
       session.message,
       pubKeyForAggregation,
+      sighashType,
     )
 
     session.phase = MuSigSessionPhase.COMPLETE
