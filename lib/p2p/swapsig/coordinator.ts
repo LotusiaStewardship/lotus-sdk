@@ -952,7 +952,7 @@ export class SwapSigCoordinator extends MuSig2P2PCoordinator {
 
     // Set fee
     const feeRate = this.swapConfig.feeRate || 1
-    tx.feePerByte = feeRate
+    tx.feePerByte(feeRate)
 
     // Add change output if needed (automatically handled by Transaction class)
     tx.change(participant.input.address)
@@ -1216,7 +1216,7 @@ export class SwapSigCoordinator extends MuSig2P2PCoordinator {
     tx.to(destination, outputAmount)
 
     // Set fee
-    tx.feePerByte = feeRate
+    tx.feePerByte(feeRate)
 
     return tx
   }

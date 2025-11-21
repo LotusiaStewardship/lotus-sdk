@@ -23,7 +23,6 @@ import { Address } from './address.js'
 import { Network } from './networks.js'
 import { BitcoreError } from './errors.js'
 import { BufferUtil } from './util/buffer.js'
-import { JSUtil } from './util/js.js'
 import { Signature } from './crypto/signature.js'
 import { Chunk } from './chunk.js'
 import {
@@ -49,6 +48,11 @@ export class Script {
   chunks!: Chunk[]
   _network?: Network
 
+  /**
+   * Create a Script from various input types
+   * @param from - The input to create script from (Buffer, string, Script, Address, or ScriptData)
+   * @returns A new Script instance
+   */
   constructor(from?: ScriptInput) {
     if (Buffer.isBuffer(from)) {
       return Script.fromBuffer(from)
@@ -69,6 +73,11 @@ export class Script {
     }
   }
 
+  /**
+   * Set script data from a ScriptData object
+   * @param obj - The script data object containing chunks
+   * @returns This Script instance for chaining
+   */
   set(obj: ScriptData): Script {
     Preconditions.checkArgument(
       typeof obj === 'object',
@@ -85,29 +94,11 @@ export class Script {
     return this
   }
 
-  static buildMultisigOut(
-    publicKeys: PublicKey[],
-    threshold: number,
-    opts: { noSorting?: boolean } = {},
-  ): Script {
-    Preconditions.checkArgument(
-      threshold <= publicKeys.length,
-      'threshold',
-      'Number of required signatures must be less than or equal to the number of public keys',
-    )
-    const script = new Script()
-    script.add(Opcode.OP_1 + threshold - 1)
-    const sorted = opts.noSorting
-      ? publicKeys
-      : publicKeys.sort((a, b) => a.toString().localeCompare(b.toString()))
-    for (const pubkey of sorted) {
-      script.add(pubkey.toBuffer())
-    }
-    script.add(Opcode.OP_1 + publicKeys.length - 1)
-    script.add(Opcode.OP_CHECKMULTISIG)
-    return script
-  }
-
+  /**
+   * Create a Script from a Buffer
+   * @param buffer - The buffer containing script bytes
+   * @returns A new Script instance
+   */
   static fromBuffer(buffer: Buffer): Script {
     const script = new Script()
     script.chunks = []
@@ -175,6 +166,11 @@ export class Script {
     return script
   }
 
+  /**
+   * Create a Script from a hex string
+   * @param str - The hex string to parse
+   * @returns A new Script instance
+   */
   static fromString(str: string): Script {
     Preconditions.checkArgument(
       typeof str === 'string',
@@ -195,6 +191,11 @@ export class Script {
     return Script.fromBuffer(buffer)
   }
 
+  /**
+   * Create a Script from an Assembly string
+   * @param str - The assembly string to parse
+   * @returns A new Script instance
+   */
   static fromASM(str: string): Script {
     const script = new Script()
     script.chunks = []
@@ -241,10 +242,20 @@ export class Script {
     return script
   }
 
+  /**
+   * Create a Script from a hex string (alias for fromString)
+   * @param str - The hex string to parse
+   * @returns A new Script instance
+   */
   static fromHex(str: string): Script {
     return new Script(Buffer.from(str, 'hex'))
   }
 
+  /**
+   * Create a Script from an address
+   * @param address - The address object or string
+   * @returns A new Script instance
+   */
   static fromAddress(address: Address | string): Script {
     if (typeof address === 'string') {
       address = Address.fromString(address)
@@ -259,6 +270,37 @@ export class Script {
     throw new BitcoreError.Script.UnrecognizedAddress(address)
   }
 
+  /**
+   * Build multisig output script
+   */
+  static buildMultisigOut(
+    publicKeys: PublicKey[],
+    threshold: number,
+    opts: { noSorting?: boolean } = {},
+  ): Script {
+    Preconditions.checkArgument(
+      threshold <= publicKeys.length,
+      'threshold',
+      'Number of required signatures must be less than or equal to the number of public keys',
+    )
+    const script = new Script()
+    script.add(Opcode.OP_1 + threshold - 1)
+    const sorted = opts.noSorting
+      ? publicKeys
+      : publicKeys.sort((a, b) => a.toString().localeCompare(b.toString()))
+    for (const pubkey of sorted) {
+      script.add(pubkey.toBuffer())
+    }
+    script.add(Opcode.OP_1 + publicKeys.length - 1)
+    script.add(Opcode.OP_CHECKMULTISIG)
+    return script
+  }
+
+  /**
+   * Build a public key hash output script (P2PKH)
+   * @param to - The public key, address, or string to pay to
+   * @returns A P2PKH Script
+   */
   static buildPublicKeyHashOut(to: PublicKey | Address | string): Script {
     Preconditions.checkArgument(to !== undefined, 'to', 'Must be defined')
     Preconditions.checkArgument(
@@ -290,6 +332,11 @@ export class Script {
     return script
   }
 
+  /**
+   * Build a script hash output script (P2SH)
+   * @param script - The script or address to hash
+   * @returns A P2SH Script
+   */
   static buildScriptHashOut(script: Script | Address): Script {
     Preconditions.checkArgument(
       script instanceof Script ||
@@ -310,6 +357,305 @@ export class Script {
       (script as Script & { _network?: Network })._network ||
       (script as Address & { network?: Network }).network
     return s
+  }
+
+  /**
+   * Build a multisig input script (P2MS)
+   *
+   * @param {PublicKey[]} pubkeys - The public keys
+   * @param {number} threshold - The threshold number of signatures required
+   * @param {Buffer[]} signatures - The signatures
+   * @param {{ noSorting?: boolean; cachedMultisig?: Script; checkBits?: Uint8Array; signingMethod?: 'ecdsa' | 'schnorr'; }} [opts] - Options
+   * @param {boolean} [opts.noSorting] - Disable sorting of pubkeys
+   * @param {Script} [opts.cachedMultisig] - Cached multisig script
+   * @param {Uint8Array} [opts.checkBits] - Schnorr checkbits
+   * @param {'ecdsa' | 'schnorr'} [opts.signingMethod='ecdsa'] - Signing method
+   * @returns {Script} A P2MS Script
+   */
+  static buildMultisigIn(
+    pubkeys: PublicKey[],
+    threshold: number,
+    signatures: Buffer[],
+    opts: {
+      noSorting?: boolean
+      cachedMultisig?: Script
+      checkBits?: Uint8Array
+      signingMethod?: 'ecdsa' | 'schnorr'
+    } = {},
+  ): Script {
+    const script = new Script()
+
+    // Handle Schnorr multisig with checkBits
+    if (opts.signingMethod === 'schnorr' && opts.checkBits) {
+      // Spec according to https://lotusia.org/docs/specs/bitcoin-cash/2019-11-15-schnorrmultisig
+      // checkbits are little-endian bitfield indicating which pubkeys should be checked
+      const N = pubkeys.length
+
+      // Convert Uint8Array to number (little-endian)
+      let checkBitsValue = 0
+      for (let i = 0; i < opts.checkBits.length; i++) {
+        checkBitsValue |= opts.checkBits[i] << (8 * i)
+      }
+
+      // N should only be 1-20
+      if (N >= 1 && N <= 4) {
+        // For N <= 4, checkbits will always be pushed using OP_1 through OP_15
+        script.add(Opcode.OP_1 + checkBitsValue - 1)
+      } else if (N >= 5 && N <= 8) {
+        // For 5 <= N <= 8, length-1 byte array
+        // Special case: 0x81 must be pushed using OP_1NEGATE (only for 2-of-8)
+        if (checkBitsValue === 0x81 && N === 8 && threshold === 2) {
+          script.add(Opcode.OP_1NEGATE)
+        } else if (checkBitsValue >= 0x01 && checkBitsValue <= 0x10) {
+          // The byte arrays {0x01} through {0x10} must be pushed using OP_1 through OP_16
+          script.add(Opcode.OP_1 + checkBitsValue - 1)
+        } else {
+          // Other cases pushed using 0x01 <checkbits>
+          script.add(0x01)
+          script.add(checkBitsValue)
+        }
+      } else if (N >= 9 && N <= 16) {
+        // For 9 <= N <= 16, length-2 byte array: 0x02 LL HH
+        script.add(0x02)
+        script.add(checkBitsValue & 0xff) // LL (least significant byte)
+        script.add((checkBitsValue >> 8) & 0xff) // HH (high bits)
+      } else if (N >= 17 && N <= 20) {
+        // For 17 <= N <= 20, length-3 byte array: 0x03 LL II HH
+        script.add(0x03)
+        script.add(checkBitsValue & 0xff) // LL (least significant byte)
+        script.add((checkBitsValue >> 8) & 0xff) // II (middle byte)
+        script.add((checkBitsValue >> 16) & 0xff) // HH (high bits)
+      }
+    } else {
+      // ECDSA mode: multisig dummy parameter of 0
+      script.add(Opcode.OP_0)
+    }
+
+    // Add signatures
+    for (const sig of signatures) {
+      script.add(sig)
+    }
+
+    // Add redeem script
+    script.add(
+      (
+        opts.cachedMultisig || Script.buildMultisigOut(pubkeys, threshold, opts)
+      ).toBuffer(),
+    )
+
+    return script
+  }
+
+  /**
+   * Build P2SH multisig input script
+   */
+  static buildP2SHMultisigIn(
+    pubkeys: PublicKey[],
+    threshold: number,
+    signatures: Buffer[],
+    opts: {
+      noSorting?: boolean
+      cachedMultisig?: Script
+      checkBits?: Uint8Array
+      signingMethod?: 'ecdsa' | 'schnorr'
+    } = {},
+  ): Script {
+    const script = new Script()
+
+    // Handle Schnorr multisig with checkBits
+    if (opts.signingMethod === 'schnorr' && opts.checkBits) {
+      // Spec according to https://lotusia.org/docs/specs/bitcoin-cash/2019-11-15-schnorrmultisig
+      // checkbits are little-endian bitfield indicating which pubkeys should be checked
+      const N = pubkeys.length
+
+      // Convert Uint8Array to number (little-endian)
+      let checkBitsValue = 0
+      for (let i = 0; i < opts.checkBits.length; i++) {
+        checkBitsValue |= opts.checkBits[i] << (8 * i)
+      }
+
+      // N should only be 1-20
+      if (N >= 1 && N <= 4) {
+        // For N <= 4, checkbits will always be pushed using OP_1 through OP_15
+        script.add(Opcode.OP_1 + checkBitsValue - 1)
+      } else if (N >= 5 && N <= 8) {
+        // For 5 <= N <= 8, length-1 byte array
+        // Special case: 0x81 must be pushed using OP_1NEGATE (only for 2-of-8)
+        if (checkBitsValue === 0x81 && N === 8 && threshold === 2) {
+          script.add(Opcode.OP_1NEGATE)
+        } else if (checkBitsValue >= 0x01 && checkBitsValue <= 0x10) {
+          // The byte arrays {0x01} through {0x10} must be pushed using OP_1 through OP_16
+          script.add(Opcode.OP_1 + checkBitsValue - 1)
+        } else {
+          // Other cases pushed using 0x01 <checkbits>
+          script.add(0x01)
+          script.add(checkBitsValue)
+        }
+      } else if (N >= 9 && N <= 16) {
+        // For 9 <= N <= 16, length-2 byte array: 0x02 LL HH
+        script.add(0x02)
+        script.add(checkBitsValue & 0xff) // LL (least significant byte)
+        script.add((checkBitsValue >> 8) & 0xff) // HH (high bits)
+      } else if (N >= 17 && N <= 20) {
+        // For 17 <= N <= 20, length-3 byte array: 0x03 LL II HH
+        script.add(0x03)
+        script.add(checkBitsValue & 0xff) // LL (least significant byte)
+        script.add((checkBitsValue >> 8) & 0xff) // II (middle byte)
+        script.add((checkBitsValue >> 16) & 0xff) // HH (high bits)
+      }
+    } else {
+      // ECDSA mode: multisig dummy parameter of 0
+      script.add(Opcode.OP_0)
+    }
+
+    // Add signatures
+    for (const sig of signatures) {
+      script.add(sig)
+    }
+
+    // Add redeem script
+    script.add(
+      (
+        opts.cachedMultisig || Script.buildMultisigOut(pubkeys, threshold, opts)
+      ).toBuffer(),
+    )
+
+    return script
+  }
+
+  /**
+   * Build witness multisig output from script
+   */
+  static buildWitnessMultisigOutFromScript(script: Script): Script {
+    const scriptHash = Hash.sha256(script.toBuffer())
+    const witnessScript = new Script()
+    witnessScript.add(Opcode.OP_0)
+    witnessScript.add(scriptHash)
+    return witnessScript
+  }
+
+  /**
+   * Build public key output script
+   */
+  static buildPublicKeyOut(pubkey: PublicKey): Script {
+    const script = new Script()
+    script.add(pubkey.toBuffer())
+    script.add(Opcode.OP_CHECKSIG)
+    return script
+  }
+
+  /**
+   * Build data output script
+   * @param data - The data to push to the stack
+   * @param encoding - The encoding of the data (defaults to 'utf8')
+   * @returns The data output script
+   */
+  static buildDataOut(
+    data: string | Buffer,
+    encoding: string = 'utf8',
+  ): Script {
+    let buffer: Buffer
+    if (typeof data === 'string') {
+      if (encoding === 'hex') {
+        buffer = Buffer.from(data, 'hex')
+      } else {
+        buffer = Buffer.from(data, 'utf8')
+      }
+    } else {
+      buffer = data
+    }
+
+    const script = new Script()
+    script.add(Opcode.OP_RETURN)
+    script.add(buffer)
+    return script
+  }
+
+  /**
+   * Build public key input script
+   * @param signature - The signature (Signature object or Buffer)
+   * @param sigtype - The signature hash type (defaults to Signature.SIGHASH_ALL)
+   * @returns The P2PK input script
+   */
+  static buildPublicKeyIn(
+    signature: Signature | Buffer,
+    sigtype: number,
+  ): Script {
+    const script = new Script()
+    if (signature instanceof Signature) {
+      // For Schnorr signatures, toTxFormat('schnorr') already includes sighash byte
+      // Don't concatenate again to avoid double-encoding
+      if (signature.isSchnorr) {
+        script.add(signature.toTxFormat('schnorr'))
+      } else {
+        // For ECDSA signatures, concatenate signature with sigtype as single buffer (per Lotus spec)
+        signature = signature.toTxFormat()
+        script.add(
+          BufferUtil.concat([
+            signature,
+            BufferUtil.integerAsSingleByteBuffer(
+              sigtype || Signature.SIGHASH_ALL,
+            ),
+          ]),
+        )
+      }
+    } else {
+      // For Buffer signatures, concatenate with sigtype
+      script.add(
+        BufferUtil.concat([
+          signature,
+          BufferUtil.integerAsSingleByteBuffer(
+            sigtype || Signature.SIGHASH_ALL,
+          ),
+        ]),
+      )
+    }
+    return script
+  }
+
+  /**
+   * Build public key hash input script
+   * @param publicKey - The public key
+   * @param signature - The signature (Signature object or Buffer)
+   * @param sigtype - The signature hash type (defaults to Signature.SIGHASH_ALL)
+   * @returns The P2PKH input script
+   */
+  static buildPublicKeyHashIn(
+    publicKey: PublicKey,
+    signature: Signature | Buffer,
+    sigtype: number,
+  ): Script {
+    const script = new Script()
+    if (signature instanceof Signature) {
+      // For Schnorr signatures, toTxFormat('schnorr') already includes sighash byte
+      // Don't concatenate again to avoid double-encoding
+      if (signature.isSchnorr) {
+        script.add(signature.toTxFormat('schnorr'))
+      } else {
+        // For ECDSA signatures, concatenate signature with sigtype as single buffer (per Lotus spec)
+        signature = signature.toTxFormat()
+        script.add(
+          BufferUtil.concat([
+            signature,
+            BufferUtil.integerAsSingleByteBuffer(
+              sigtype || Signature.SIGHASH_ALL,
+            ),
+          ]),
+        )
+      }
+    } else {
+      // For Buffer signatures, concatenate with sigtype
+      script.add(
+        BufferUtil.concat([
+          signature,
+          BufferUtil.integerAsSingleByteBuffer(
+            sigtype || Signature.SIGHASH_ALL,
+          ),
+        ]),
+      )
+    }
+    script.add(publicKey.toBuffer())
+    return script
   }
 
   /**
@@ -359,6 +705,11 @@ export class Script {
     return script
   }
 
+  /**
+   * Add a chunk to the script
+   * @param chunk - The opcode, buffer, or number to add
+   * @returns This Script instance for chaining
+   */
   add(chunk: Opcode | Buffer | number): Script {
     if (chunk instanceof Opcode) {
       this.chunks.push(
@@ -394,6 +745,10 @@ export class Script {
     return this
   }
 
+  /**
+   * Convert script to Buffer
+   * @returns The script as a Buffer
+   */
   toBuffer(): Buffer {
     const bw = new BufferWriter()
     for (const chunk of this.chunks) {
@@ -412,10 +767,18 @@ export class Script {
     return bw.toBuffer()
   }
 
+  /**
+   * Convert script to hex string (alias for toHex)
+   * @returns The script as a hex string
+   */
   toString(): string {
     return this.toBuffer().toString('hex')
   }
 
+  /**
+   * Get P2PKH address string for this script
+   * @returns The P2PKH address as a string
+   */
   toP2PKH(): string {
     if (!this.isPayToPublicKeyHash()) {
       throw new Error('Script is not a P2PKH address')
@@ -423,6 +786,10 @@ export class Script {
     return this.chunks[2].buf!.toString('hex')
   }
 
+  /**
+   * Get P2SH address string for this script
+   * @returns The P2SH address as a string
+   */
   toP2SH(): string {
     if (!this.isPayToScriptHash()) {
       throw new Error('Script is not a P2SH address')
@@ -432,6 +799,7 @@ export class Script {
 
   /**
    * Convert script to ASM string format
+   * @returns The script as an ASM string
    */
   toASM(): string {
     let str = ''
@@ -444,13 +812,15 @@ export class Script {
 
   /**
    * Convert script to hex string
+   * @returns The script as a hex string
    */
   toHex(): string {
     return this.toBuffer().toString('hex')
   }
 
   /**
-   * Debug representation
+   * Debug representation of the script
+   * @returns A string representation for debugging
    */
   inspect(): string {
     return '<Script: ' + this.toString() + '>'
@@ -530,6 +900,10 @@ export class Script {
     return str
   }
 
+  /**
+   * Check if script is Pay-To-Public-Key-Hash (P2PKH) output
+   * @returns True if script is P2PKH output
+   */
   isPayToPublicKeyHash(): boolean {
     return (
       this.chunks.length === 5 &&
@@ -543,7 +917,8 @@ export class Script {
   }
 
   /**
-   * @returns {boolean} if this is a pay to pubkey hash output script
+   * Check if script is public key hash output (alias for isPayToPublicKeyHash)
+   * @returns True if script is P2PKH output
    */
   isPublicKeyHashOut(): boolean {
     return !!(
@@ -557,6 +932,10 @@ export class Script {
     )
   }
 
+  /**
+   * Check if script is Pay-To-Script-Hash (P2SH) output
+   * @returns True if script is P2SH output
+   */
   isPayToScriptHash(): boolean {
     return (
       this.chunks.length === 3 &&
@@ -568,7 +947,8 @@ export class Script {
   }
 
   /**
-   * @returns {boolean} if this is a p2sh output script
+   * Check if script is script hash output (alias for isPayToScriptHash)
+   * @returns True if script is P2SH output
    */
   isScriptHashOut(): boolean {
     const buf = this.toBuffer()
@@ -618,7 +998,8 @@ export class Script {
   }
 
   /**
-   * @returns {Buffer} the data from the script
+   * Get data from OP_RETURN script
+   * @returns The data buffer from OP_RETURN script
    */
   getData(): Buffer {
     if (this.isScriptHashOut()) {
@@ -634,6 +1015,10 @@ export class Script {
     throw new Error('Unrecognized script type to get data from')
   }
 
+  /**
+   * Get address information from script
+   * @returns The Address object or null if not applicable
+   */
   getAddressInfo(): Address | null {
     if ((this as Script & { _isInput?: boolean })._isInput) {
       return this._getInputAddressInfo()
@@ -691,6 +1076,11 @@ export class Script {
     return new Address(info)
   }
 
+  /**
+   * Get output address from script
+   * @param network - Optional network to use for address
+   * @returns The Address object or null if not applicable
+   */
   toAddress(network?: Network | string): Address | null {
     const info = this.getAddressInfo()
     if (!info) {
@@ -717,7 +1107,9 @@ export class Script {
   }
 
   /**
-   * Check if a push operation is minimal
+   * Check if a push operation at index is minimal
+   * @param index - The chunk index to check
+   * @returns True if the push is minimal
    */
   checkMinimalPush(index: number): boolean {
     if (index >= this.chunks.length) {
@@ -760,6 +1152,7 @@ export class Script {
 
   /**
    * Check if this script is valid
+   * @returns True if script is valid
    */
   isValid(): boolean {
     try {
@@ -772,6 +1165,7 @@ export class Script {
 
   /**
    * Clone this script
+   * @returns A new Script instance with the same chunks
    */
   clone(): Script {
     const cloned = new Script()
@@ -788,6 +1182,7 @@ export class Script {
 
   /**
    * Check if this is a pay to public key hash input script
+   * @returns True if script is P2PKH input
    */
   isPublicKeyHashIn(): boolean {
     if (this.chunks.length === 2) {
@@ -818,6 +1213,7 @@ export class Script {
 
   /**
    * Get public key from P2PK script
+   * @returns The public key buffer
    */
   getPublicKey(): Buffer {
     Preconditions.checkState(
@@ -829,6 +1225,7 @@ export class Script {
 
   /**
    * Get public key hash from P2PKH script
+   * @returns The public key hash buffer
    */
   getPublicKeyHash(): Buffer {
     Preconditions.checkState(
@@ -840,6 +1237,7 @@ export class Script {
 
   /**
    * Check if this is a public key output script
+   * @returns True if script is P2PK output
    */
   isPublicKeyOut(): boolean {
     if (
@@ -871,6 +1269,7 @@ export class Script {
 
   /**
    * Check if this is a pay to public key input script
+   * @returns True if script is P2PK input
    */
   isPublicKeyIn(): boolean {
     if (this.chunks.length === 1) {
@@ -884,6 +1283,7 @@ export class Script {
 
   /**
    * Check if this is a P2SH input script
+   * @returns True if script is P2SH input
    */
   isScriptHashIn(): boolean {
     if (this.chunks.length <= 1) {
@@ -910,6 +1310,7 @@ export class Script {
 
   /**
    * Check if this is a multisig output script
+   * @returns True if script is multisig output
    */
   isMultisigOut(): boolean {
     return (
@@ -932,6 +1333,7 @@ export class Script {
 
   /**
    * Check if this is a multisig input script
+   * @returns True if script is multisig input
    */
   isMultisigIn(): boolean {
     return (
@@ -945,6 +1347,7 @@ export class Script {
 
   /**
    * Check if this is a valid standard OP_RETURN output
+   * @returns True if script is standard OP_RETURN output
    */
   isDataOut(): boolean {
     const step1 =
@@ -958,7 +1361,8 @@ export class Script {
   }
 
   /**
-   * Check if script is push only
+   * Check if script is push only (contains only push operations)
+   * @returns True if script is push only
    */
   isPushOnly(): boolean {
     return this.chunks.every(function (chunk) {
@@ -972,7 +1376,8 @@ export class Script {
   }
 
   /**
-   * Classify script type
+   * Classify script type (input or output)
+   * @returns The script type as a string
    */
   classify(): string {
     if ((this as Script & { _isInput?: boolean })._isInput) {
@@ -989,6 +1394,7 @@ export class Script {
 
   /**
    * Classify output script type
+   * @returns The output script type
    */
   classifyOutput(): string {
     const outputIdentifiers: { [key: string]: () => boolean } = {
@@ -1009,6 +1415,7 @@ export class Script {
 
   /**
    * Classify input script type
+   * @returns The input script type
    */
   classifyInput(): string {
     const inputIdentifiers: { [key: string]: () => boolean } = {
@@ -1028,6 +1435,7 @@ export class Script {
 
   /**
    * Check if script is one of the known types
+   * @returns True if script is standard
    */
   isStandard(): boolean {
     return this.classify() !== ScriptTypes.UNKNOWN
@@ -1043,6 +1451,7 @@ export class Script {
    * - "p2tr-commitment": Pay-to-Taproot (without state)
    * - "p2tr-state": Pay-to-Taproot (with state)
    * - "other": Non-standard or unknown script type
+   * @returns The script type as a string
    */
   getType(): ScriptType {
     // Check output script types
@@ -1066,6 +1475,8 @@ export class Script {
 
   /**
    * Add element at start of script
+   * @param obj - The opcode, buffer, or number to prepend
+   * @returns This Script instance for chaining
    */
   prepend(obj: Opcode | Buffer | number): Script {
     this._addByType(obj, true)
@@ -1073,7 +1484,9 @@ export class Script {
   }
 
   /**
-   * Compare scripts
+   * Compare scripts for equality
+   * @param script - The script to compare against
+   * @returns True if scripts are equal
    */
   equals(script: Script): boolean {
     Preconditions.checkState(
@@ -1188,7 +1601,8 @@ export class Script {
   }
 
   /**
-   * Check for OP_CODESEPARATOR
+   * Check for OP_CODESEPARATOR opcodes
+   * @returns True if script contains OP_CODESEPARATOR
    */
   hasCodeseparators(): boolean {
     return this.chunks.some(
@@ -1198,6 +1612,7 @@ export class Script {
 
   /**
    * Remove OP_CODESEPARATOR opcodes
+   * @returns This Script instance for chaining
    */
   removeCodeseparators(): Script {
     const chunks: Chunk[] = []
@@ -1212,6 +1627,8 @@ export class Script {
 
   /**
    * Find and delete equivalent chunks
+   * @param script - The script to find and delete
+   * @returns This Script instance for chaining
    */
   findAndDelete(script: Script): Script {
     const buf = script.toBuffer()
@@ -1230,7 +1647,9 @@ export class Script {
   }
 
   /**
-   * Count signature operations
+   * Count signature operations in script
+   * @param accurate - Whether to count accurately (default: true)
+   * @returns The number of signature operations
    */
   getSignatureOperationsCount(accurate: boolean = true): number {
     let n = 0
@@ -1276,6 +1695,7 @@ export class Script {
 
   /**
    * Convert to P2SH output script
+   * @returns A P2SH Script wrapping this script
    */
   toScriptHashOut(): Script {
     return Script.buildScriptHashOut(this)
@@ -1287,158 +1707,51 @@ export class Script {
  * Migrated from bitcore-lib-xpi with ESM support
  */
 
+/**
+ * Enum for script types
+ */
 export const ScriptTypes = {
+  /**
+   * Unknown script type
+   */
   UNKNOWN: 'Unknown',
+  /**
+   * Pay to public key
+   */
   PUBKEY_OUT: 'Pay to public key',
+  /**
+   * Spend from public key
+   */
   PUBKEY_IN: 'Spend from public key',
+  /**
+   * Pay to public key hash
+   */
   PUBKEYHASH_OUT: 'Pay to public key hash',
+  /**
+   * Spend from public key hash
+   */
   PUBKEYHASH_IN: 'Spend from public key hash',
+  /**
+   * Pay to script hash
+   */
   SCRIPTHASH_OUT: 'Pay to script hash',
+  /**
+   * Spend from script hash
+   */
   SCRIPTHASH_IN: 'Spend from script hash',
+  /**
+   * Pay to multisig
+   */
   MULTISIG_OUT: 'Pay to multisig',
   MULTISIG_IN: 'Spend from multisig',
   DATA_OUT: 'Data push',
 }
 
 /**
- * Build multisig output script
- */
-export function buildMultisigOut(
-  publicKeys: PublicKey[],
-  threshold: number,
-  opts: object,
-): Script {
-  const script = new Script()
-  script.add(Opcode.OP_1 + threshold - 1)
-
-  for (const pubkey of publicKeys) {
-    script.add(pubkey.toBuffer())
-  }
-
-  script.add(Opcode.OP_1 + publicKeys.length - 1)
-  script.add(Opcode.OP_CHECKMULTISIG)
-
-  return script
-}
-
-/**
- * Build witness multisig output from script
- */
-export function buildWitnessMultisigOutFromScript(script: Script): Script {
-  const scriptHash = Hash.sha256(script.toBuffer())
-  const witnessScript = new Script()
-  witnessScript.add(Opcode.OP_0)
-  witnessScript.add(scriptHash)
-  return witnessScript
-}
-
-/**
- * Build multisig input script
- */
-export function buildMultisigIn(
-  pubkeys: PublicKey[],
-  threshold: number,
-  signatures: Buffer[],
-  opts: object,
-): Script {
-  const script = new Script()
-  script.add(Opcode.OP_0)
-
-  for (const sig of signatures) {
-    script.add(sig)
-  }
-
-  return script
-}
-
-/**
- * Build P2SH multisig input script
- */
-export function buildP2SHMultisigIn(
-  pubkeys: PublicKey[],
-  threshold: number,
-  signatures: Buffer[],
-  opts: object,
-): Script {
-  const redeemScript = buildMultisigOut(pubkeys, threshold, opts)
-  const script = new Script()
-  script.add(Opcode.OP_0)
-
-  for (const sig of signatures) {
-    script.add(sig)
-  }
-
-  script.add(redeemScript.toBuffer())
-  return script
-}
-
-/**
- * Build public key output script
- */
-export function buildPublicKeyOut(pubkey: PublicKey): Script {
-  const script = new Script()
-  script.add(pubkey.toBuffer())
-  script.add(Opcode.OP_CHECKSIG)
-  return script
-}
-
-/**
- * Build data output script
- */
-export function buildDataOut(data: string | Buffer, encoding?: string): Script {
-  let buffer: Buffer
-  if (typeof data === 'string') {
-    if (encoding === 'hex') {
-      buffer = Buffer.from(data, 'hex')
-    } else {
-      buffer = Buffer.from(data, 'utf8')
-    }
-  } else {
-    buffer = data
-  }
-
-  const script = new Script()
-  script.add(Opcode.OP_RETURN)
-  script.add(buffer)
-  return script
-}
-
-/**
- * Build public key input script
- */
-export function buildPublicKeyIn(
-  signature: Signature | Buffer,
-  sigtype: number,
-): Script {
-  const script = new Script()
-  if (signature instanceof Signature) {
-    script.add(signature.toTxFormat())
-  } else {
-    script.add(signature)
-  }
-  return script
-}
-
-/**
- * Build public key hash input script
- */
-export function buildPublicKeyHashIn(
-  publicKey: PublicKey,
-  signature: Signature | Buffer,
-  sigtype: number,
-): Script {
-  const script = new Script()
-  if (signature instanceof Signature) {
-    script.add(signature.toTxFormat())
-  } else {
-    script.add(signature)
-  }
-  script.add(publicKey.toBuffer())
-  return script
-}
-
-/**
  * Convert script to address
+ * @param script - The script to convert
+ * @param network - The network to use for address
+ * @returns The address object
  */
 export function toAddress(script: Script, network: string): Address {
   const addr = script.toAddress(network)
@@ -1450,6 +1763,7 @@ export function toAddress(script: Script, network: string): Address {
 
 /**
  * Create empty script
+ * @returns An empty Script instance
  */
 export function empty(): Script {
   return new Script()

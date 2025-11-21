@@ -33,7 +33,7 @@ import {
   MuSigTaprootInput,
 } from './input.js'
 import { Output, OutputObject } from './output.js'
-import { Script, buildDataOut } from '../script.js'
+import { Script } from '../script.js'
 import { PrivateKey } from '../privatekey.js'
 import { PublicKey } from '../publickey.js'
 import { BN } from '../crypto/bn.js'
@@ -257,7 +257,7 @@ export class Transaction {
   }
 
   /** Satoshi-per-byte ratio for transaction fee calculation */
-  set feePerByte(feePerByte: number) {
+  feePerByte(feePerByte: number) {
     this._feePerByte = feePerByte
     this._updateChangeOutput()
   }
@@ -265,7 +265,7 @@ export class Transaction {
   /**
    * Set fee
    */
-  set fee(amount: number) {
+  fee(amount: number) {
     this._fee = amount
     this._updateChangeOutput()
   }
@@ -273,7 +273,7 @@ export class Transaction {
   /**
    * Set fee per KB
    */
-  set feePerKb(amount: number) {
+  feePerKb(amount: number) {
     this._feePerKb = amount
     this._updateChangeOutput()
   }
@@ -1271,7 +1271,7 @@ export class Transaction {
   addData(value: Buffer | string): Transaction {
     this.addOutput(
       new Output({
-        script: buildDataOut(value),
+        script: Script.buildDataOut(value),
         satoshis: 0,
       }),
     )

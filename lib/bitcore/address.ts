@@ -10,12 +10,8 @@ import { Network, get as getNetwork, defaultNetwork } from './networks.js'
 import { Hash } from './crypto/hash.js'
 import { JSUtil } from './util/js.js'
 import { PublicKey } from './publickey.js'
-import { XAddress, XAddressData } from './xaddress.js'
-import { Opcode } from './opcode.js'
-
-import { Base32 } from './util/base32.js'
-import { convertBits } from './util/convertBits.js'
-import { Script, buildMultisigOut } from './script.js'
+import { XAddress } from './xaddress.js'
+import { Script } from './script.js'
 
 export interface AddressData {
   hashBuffer?: Buffer
@@ -500,7 +496,7 @@ export class Address {
   ): Address {
     const networkObj = network || publicKeys[0].network || defaultNetwork
     return Address.payingTo(
-      buildMultisigOut(publicKeys, threshold, {}),
+      Script.buildMultisigOut(publicKeys, threshold, {}),
       networkObj,
     )
   }

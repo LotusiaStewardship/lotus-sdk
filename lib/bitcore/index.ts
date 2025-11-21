@@ -102,20 +102,7 @@ export { Script } from './script.js'
 export { Opcode } from './opcode.js'
 export { Interpreter } from './script/interpreter.js'
 export { Chunk } from './chunk.js'
-export {
-  ScriptType,
-  ScriptTypes,
-  buildMultisigOut,
-  buildWitnessMultisigOutFromScript,
-  buildMultisigIn,
-  buildP2SHMultisigIn,
-  buildPublicKeyOut,
-  buildDataOut,
-  buildPublicKeyIn,
-  buildPublicKeyHashIn,
-  toAddress,
-  empty,
-} from './script.js'
+export { type ScriptType, ScriptTypes, toAddress, empty } from './script.js'
 
 // Unit module
 export { Unit } from './unit.js'
