@@ -62,6 +62,11 @@ This is a **generalized peer-to-peer (P2P) networking infrastructure** for lotus
 - Encrypted connections (Noise protocol)
 - Stream multiplexing (mplex)
 - NAT traversal support
+- GossipSub pub/sub messaging
+- Circuit relay v2 (NAT traversal)
+- AutoNAT (automatic NAT detection)
+- DCUTR (direct connection upgrade)
+- UPnP/NAT-PMP (automatic port forwarding)
 
 ✅ **Protocol Extension**
 
@@ -228,9 +233,83 @@ class MyProtocol implements IProtocolHandler {
     // Handle peer information update (e.g., multiaddrs changed)
     console.log('Peer updated:', peerInfo.peerId, peerInfo.multiaddrs)
   }
+
+  async onRelayAddressesChanged(data: {
+    peerId: string
+    reachableAddresses: string[]
+    relayAddresses: string[]
+    timestamp: number
+  }): Promise<void> {
+    // Handle relay address changes (optional)
+    console.log('Relay addresses changed for peer:', data.peerId)
+  }
 }
 
 coordinator.registerProtocol(new MyProtocol())
+```
+
+### 3. Security and Validation
+
+The P2P layer provides comprehensive security features:
+
+#### Core Security Manager
+
+```typescript
+// Access core security manager
+const security = coordinator.getCoreSecurityManager()
+
+// Register protocol validators
+security.registerValidator({
+  validateResourceAnnouncement: async (
+    resourceType,
+    resourceId,
+    data,
+    peerId,
+  ) => {
+    // Custom validation logic
+    return true // Accept or reject
+  },
+
+  validateMessage: async (message, from) => {
+    // Message validation
+    return message.payload !== null
+  },
+
+  canAnnounceResource: async (resourceType, peerId) => {
+    // Permission check
+    return true
+  },
+})
+
+// Get security metrics
+const metrics = security.getMetrics()
+console.log('Security metrics:', metrics)
+```
+
+#### Built-in Security Features
+
+- **Rate Limiting**: DHT announcements (30s minimum per peer)
+- **Resource Limits**: Max 100 resources per peer, 20 per type
+- **Message Size Limits**: 100KB max message size
+- **Peer Ban Management**: Automatic banning for malicious behavior
+- **Reputation Tracking**: Track peer behavior over time
+
+#### Security Configuration
+
+```typescript
+const coordinator = new P2PCoordinator({
+  listen: ['/ip4/0.0.0.0/tcp/0'],
+  securityConfig: {
+    // WARNING: Never disable in production!
+    disableRateLimiting: false,
+
+    // Override default limits
+    customLimits: {
+      MAX_P2P_MESSAGE_SIZE: 200_000, // 200KB
+      MIN_DHT_ANNOUNCEMENT_INTERVAL: 60_000, // 1 minute
+    },
+  },
+})
 ```
 
 ---
@@ -279,8 +358,101 @@ Supported out of the box:
 
 - ✅ TCP
 - ✅ WebSockets
+- ✅ Circuit Relay v2 (for NAT traversal)
 - 🔜 WebRTC (add transport in config)
 - 🔜 QUIC (add transport in config)
+
+### NAT Traversal
+
+Complete NAT traversal solution:
+
+- ✅ **Circuit Relay v2**: Connect via public relay nodes
+- ✅ **AutoNAT**: Automatic NAT detection and public address discovery
+- ✅ **DCUTR**: Direct Connection Upgrade through Relay (hole punching)
+- ✅ **UPnP/NAT-PMP**: Automatic port forwarding (disabled by default)
+
+### GossipSub Pub/Sub
+
+Real-time messaging for instant notifications:
+
+```typescript
+// Enable GossipSub (default: true)
+const coordinator = new P2PCoordinator({
+  listen: ['/ip4/0.0.0.0/tcp/0'],
+  enableGossipSub: true, // Default
+})
+
+// Subscribe to topics for real-time updates
+const gossipsub = coordinator.libp2pNode.services.pubsub as GossipSub
+await gossipsub.subscribe('lotus-musig2-sessions')
+await gossipsub.subscribe('lotus-swapsig-pools')
+
+// Listen for messages
+gossipsub.addEventListener('message', event => {
+  console.log('Received message:', event.detail)
+})
+```
+
+### 4. Blockchain Utilities
+
+The P2P layer includes blockchain verification utilities for burn-based mechanisms:
+
+#### Burn Verifier
+
+Generic burn transaction verification without enforcing policy:
+
+```typescript
+import { BurnVerifier, BurnVerificationResult } from 'lotus-lib/p2p'
+
+// Create verifier
+const verifier = new BurnVerifier('https://chronik.lotusia.org')
+
+// Verify burn transaction
+const result = await verifier.verifyBurn(
+  'txid...', // Transaction ID
+  0, // Output index (usually 0)
+  6, // Minimum confirmations
+  0, // Maturation period (0 = no maturation)
+)
+
+if (result) {
+  console.log('Burn verified:', {
+    txId: result.txId,
+    burnAmount: result.burnAmount,
+    confirmations: result.confirmations,
+    isMatured: result.isMatured,
+    lokadPrefix: result.lokadPrefix,
+    lokadPayload: result.lokadPayload,
+  })
+}
+```
+
+#### Transaction Monitor
+
+Monitor blockchain transactions in real-time:
+
+```typescript
+import { TransactionMonitor } from 'lotus-lib/p2p'
+
+const monitor = new TransactionMonitor('https://chronik.lotusia.org')
+
+// Monitor transaction confirmation
+monitor.waitForConfirmation(
+  'txid...',
+  6, // Required confirmations
+  tx => {
+    console.log('Transaction confirmed:', tx.txid)
+  },
+  error => {
+    console.error('Monitoring error:', error)
+  },
+)
+
+// Monitor address for transactions
+monitor.monitorAddress('ecash:q...', tx => {
+  console.log('New transaction:', tx.txid)
+})
+```
 
 ---
 
@@ -339,16 +511,72 @@ class P2PCoordinator extends EventEmitter {
 
 ```typescript
 interface P2PConfig {
-  listen?: string[] // Multiaddrs to listen on
-  announce?: string[] // Multiaddrs to announce
-  bootstrapPeers?: string[] // Bootstrap peer multiaddrs
-  enableDHT?: boolean // Enable Kad-DHT (default: true)
-  dhtProtocol?: string // DHT protocol ID
-  maxConnections?: number // Max connections
+  /** Fixed peer identity (optional) */
+  privateKey?: PrivateKey
+
+  /** Listen addresses (multiaddrs) */
+  listen?: string[]
+
+  /** Announce addresses (multiaddrs) */
+  announce?: string[]
+
+  /** Bootstrap peer addresses (multiaddrs with peer IDs) */
+  bootstrapPeers?: string[]
+
+  /** Enable Kad-DHT */
+  enableDHT?: boolean
+
+  /** DHT protocol prefix */
+  dhtProtocol?: string
+
+  /** Enable DHT server mode (participate in DHT network) */
+  enableDHTServer?: boolean
+
+  /** Enable GossipSub pub/sub for real-time messaging */
+  enableGossipSub?: boolean
+
+  /** Security configuration */
+  securityConfig?: {
+    disableRateLimiting?: boolean
+    customLimits?: Partial<typeof CORE_P2P_SECURITY_LIMITS>
+  }
+
+  /** DHT peer info mapper function */
+  dhtPeerInfoMapper?: PeerInfoMapper
+
+  /** Enable circuit relay v2 (NAT traversal) */
+  enableRelay?: boolean
+
+  /** Enable relay server mode */
+  enableRelayServer?: boolean
+
+  /** Enable AutoNAT (automatic NAT detection) */
+  enableAutoNAT?: boolean
+
+  /** Enable DCUTR (direct connection upgrade) */
+  enableDCUTR?: boolean
+
+  /** Enable UPnP/NAT-PMP (automatic port forwarding) */
+  enableUPnP?: boolean
+
+  /** Relay address monitoring configuration */
+  relayMonitoring?: {
+    enabled?: boolean
+    checkInterval?: number
+    bootstrapOnly?: boolean
+  }
+
+  /** Maximum connections */
+  maxConnections?: number
+
+  /** Connection manager options */
   connectionManager?: {
     minConnections?: number
     maxConnections?: number
   }
+
+  /** Custom metadata */
+  metadata?: Record<string, unknown>
 }
 ```
 
@@ -360,11 +588,160 @@ interface IProtocolHandler {
   readonly protocolId: string // libp2p protocol ID (e.g., '/lotus/musig2/1.0.0')
 
   handleMessage(message: P2PMessage, from: PeerInfo): Promise<void>
-  handleStream?(stream, connection): Promise<void> // Optional libp2p stream handler
+  handleStream?(stream: Stream, connection: Connection): Promise<void> // Optional libp2p stream handler
   onPeerDiscovered?(peerInfo: PeerInfo): Promise<void> // Peer discovered (before connection)
   onPeerConnected?(peerId: string): Promise<void> // Peer connected
   onPeerDisconnected?(peerId: string): Promise<void> // Peer disconnected
   onPeerUpdated?(peerInfo: PeerInfo): Promise<void> // Peer information updated (e.g., multiaddrs changed)
+  onRelayAddressesChanged?(data: {
+    peerId: string
+    reachableAddresses: string[]
+    relayAddresses: string[]
+    timestamp: number
+  }): Promise<void> // Optional relay address change handler
+}
+```
+
+### Core Security Manager
+
+```typescript
+class CoreSecurityManager extends EventEmitter {
+  // Register protocol validators
+  registerValidator(validator: IProtocolValidator): void
+
+  // Check if peer can announce resource
+  canAnnounceResource(peerId: string, resourceType: string): boolean
+
+  // Validate message
+  validateMessage(message: P2PMessage, from: PeerInfo): boolean
+
+  // Get security metrics
+  getMetrics(): CoreSecurityMetrics
+
+  // Ban/unban peers
+  banPeer(peerId: string, reason?: string): void
+  unbanPeer(peerId: string): void
+
+  // Cleanup expired data
+  cleanup(): void
+}
+```
+
+### Blockchain Utilities
+
+#### BurnVerifier
+
+```typescript
+class BurnVerifier {
+  constructor(chronikUrl: string | string[])
+
+  // Verify burn transaction
+  async verifyBurn(
+    txId: string,
+    outputIndex: number,
+    minConfirmations?: number,
+    maturationPeriod?: number,
+  ): Promise<BurnVerificationResult | null>
+}
+```
+
+#### TransactionMonitor
+
+```typescript
+class TransactionMonitor {
+  constructor(chronikUrl: string | string[])
+
+  // Wait for transaction confirmation
+  waitForConfirmation(
+    txId: string,
+    requiredConfirmations: number,
+    onConfirmed: (tx: ChronikTx) => void,
+    onError: (error: Error) => void,
+  ): void
+
+  // Monitor address for transactions
+  monitorAddress(address: string, onTransaction: (tx: ChronikTx) => void): void
+}
+```
+
+### P2P Protocol
+
+```typescript
+class P2PProtocol {
+  // Create messages
+  createMessage<T>(
+    type: string,
+    payload: T,
+    from: string,
+    options?,
+  ): P2PMessage<T>
+
+  // Serialization
+  serialize(message: P2PMessage): Buffer
+  deserialize(data: Buffer): P2PMessage
+
+  // Validation
+  validateMessage(message: P2PMessage): boolean
+  validateMessageSize(message: P2PMessage, maxSize?: number): boolean
+
+  // Utility messages
+  createHandshake(peerId: string, metadata?): P2PMessage
+  createHeartbeat(peerId: string): P2PMessage
+  createDisconnect(peerId: string, reason?: string): P2PMessage
+  createError(peerId: string, error: string, context?): P2PMessage
+}
+```
+
+### Protocol Implementations
+
+#### MuSig2P2PCoordinator
+
+```typescript
+class MuSig2P2PCoordinator extends P2PCoordinator {
+  // Session management
+  async createSession(signers: string[], message: Buffer): Promise<MuSigSession>
+  async joinSession(sessionId: string, signerKey: PrivateKey): Promise<void>
+  async leaveSession(sessionId: string): Promise<void>
+
+  // Nonce management
+  async shareNonces(sessionId: string, nonces: Buffer[]): Promise<void>
+  async collectNonces(sessionId: string): Promise<Buffer[]>
+
+  // Signing
+  async createPartialSignature(
+    sessionId: string,
+    messageHash: Buffer,
+  ): Promise<Buffer>
+  async collectPartialSignatures(sessionId: string): Promise<Buffer>
+
+  // Coordinator election
+  async electCoordinator(sessionId: string): Promise<string>
+
+  // Identity management
+  async registerIdentity(publicKey: PublicKey, burnTxId?: string): Promise<void>
+  async verifyIdentity(peerId: string): Promise<boolean>
+}
+```
+
+#### SwapSigCoordinator
+
+```typescript
+class SwapSigCoordinator extends MuSig2P2PCoordinator {
+  // Pool management
+  async createPool(params: CreatePoolParams): Promise<string>
+  async joinPool(poolId: string, input: ParticipantInput): Promise<void>
+  async leavePool(poolId: string): Promise<void>
+
+  // Pool discovery
+  async discoverPools(
+    filters?: PoolDiscoveryFilters,
+  ): Promise<SwapPoolAnnouncement[]>
+
+  // Swap execution
+  async executeSwap(poolId: string): Promise<void>
+
+  // Burn verification
+  async verifyBurn(burnTxId: string, poolId: string): Promise<boolean>
 }
 ```
 
@@ -655,8 +1032,29 @@ lib/p2p/
 ├── types.ts           # Type definitions (re-exports libp2p types)
 ├── coordinator.ts     # Main coordinator (wraps libp2p)
 ├── protocol.ts        # Message protocol
+├── security.ts        # Core security manager and rate limiting
+├── blockchain-utils.ts # Burn verification and transaction monitoring
 ├── utils.ts           # Utility functions
 └── README.md          # This file
+
+# Protocol Implementations
+├── musig2/            # MuSig2 multi-signature coordination
+│   ├── coordinator.ts      # MuSig2 P2P coordinator
+│   ├── protocol-handler.ts # MuSig2 protocol handler
+│   ├── security.ts         # MuSig2-specific security
+│   ├── identity-manager.ts  # Burn-based identity management
+│   ├── election.ts         # Coordinator election
+│   ├── types.ts            # MuSig2 types
+│   ├── serialization.ts    # Message serialization
+│   ├── validation.ts       # Input validation
+│   └── errors.ts           # MuSig2 errors
+└── swapsig/           # SwapSig protocol (CoinJoin with MuSig2)
+    ├── coordinator.ts      # SwapSig coordinator (extends MuSig2)
+    ├── protocol-handler.ts # SwapSig protocol handler
+    ├── pool.ts             # Pool state management
+    ├── burn.ts             # XPI burn mechanism
+    ├── types.ts            # SwapSig types
+    └── validation.ts       # SwapSig validation
 
 examples/
 ├── p2p-basic-example.ts              # Basic usage
