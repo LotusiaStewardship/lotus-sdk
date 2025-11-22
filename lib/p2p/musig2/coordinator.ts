@@ -72,6 +72,7 @@ import { SecurityManager, PEER_KEY_LIMITS } from './security.js'
 import { IProtocolValidator } from '../types.js'
 import { MuSig2IdentityManager } from './identity-manager.js'
 import { Mutex } from 'async-mutex'
+import { yieldToEventLoop } from '../../../utils/functions.js'
 
 /**
  * MuSig2 P2P Coordinator
@@ -326,7 +327,7 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       this.emit(nextEvent.event, ...nextEvent.args)
 
       // Yield to event loop to allow handlers to complete
-      await new Promise(resolve => setImmediate(resolve))
+      await yieldToEventLoop()
     }
   }
 

@@ -132,6 +132,16 @@ The following configuration options remain:
 interface MuSig2P2PConfig {
   // ✅ RETAINED: Used by manual cleanup to determine "stuck" threshold
   stuckSessionTimeout?: number // Default: 10 minutes
+
+  // ✅ RETAINED: Security and identity management
+  enableBurnBasedIdentity?: boolean
+  enableCoordinatorElection?: boolean
+  enableSessionDiscovery?: boolean
+
+  // ✅ RETAINED: Performance tuning
+  maxConcurrentSessions?: number
+  maxAdvertisementsPerPeer?: number
+  maxSigningRequestsPerPeer?: number
 }
 ```
 
@@ -146,7 +156,7 @@ interface MuSig2P2PConfig {
 Manually clean up expired and stuck sessions.
 
 ```typescript
-public cleanupExpiredSessions(): void
+public async cleanupExpiredSessions(): Promise<void>
 ```
 
 **When to call**:
@@ -160,7 +170,7 @@ public cleanupExpiredSessions(): void
 
 ```typescript
 // Option 1: On-demand cleanup
-coordinator.cleanupExpiredSessions()
+await coordinator.cleanupExpiredSessions()
 
 // Option 2: Periodic cleanup (application-managed)
 setInterval(() => {
@@ -168,8 +178,8 @@ setInterval(() => {
 }, 60000) // Every minute
 
 // Option 3: Event-triggered cleanup
-coordinator.on('session:created', () => {
-  coordinator.cleanupExpiredSessions() // Clean before creating new session
+coordinator.on('session:created', async () => {
+  await coordinator.cleanupExpiredSessions() // Clean before creating new session
 })
 ```
 
@@ -195,7 +205,7 @@ coordinator.on('session:should-broadcast', async sessionId => {
   const timeout = setTimeout(
     () => {
       console.warn('Coordinator timeout, triggering failover')
-      coordinator.triggerCoordinatorFailover(sessionId)
+      await coordinator.triggerCoordinatorFailover(sessionId)
     },
     5 * 60 * 1000,
   )
@@ -235,6 +245,224 @@ try {
 } catch (error) {
   // Handle error, possibly trigger failover
 }
+```
+
+#### 4. Session Management Methods
+
+```typescript
+// Get active session IDs
+public async getActiveSessions(): Promise<string[]>
+
+// Get session details
+public async getSession(sessionId: string): Promise<MuSigSession | null>
+
+// Get active session (throws if not found)
+public async getActiveSession(sessionId: string): Promise<MuSigSession | undefined>
+
+// Close session manually
+public async closeSession(sessionId: string): Promise<void>
+
+// Get session status
+public async getSessionStatus(sessionId: string): Promise<{
+  phase: MuSigSessionPhase
+  participants: number
+  isCoordinator: boolean
+  hasMyNonceShare: boolean
+  hasAllNonceShares: boolean
+  hasMyPartialSig: boolean
+  hasAllPartialSigs: boolean
+}>
+```
+
+#### 5. Signer Discovery Methods
+
+```typescript
+// Subscribe to real-time signer discovery
+public async subscribeToSignerDiscovery(
+  transactionTypes: TransactionType[]
+): Promise<void>
+
+// Unsubscribe from signer discovery
+public async unsubscribeFromSignerDiscovery(): Promise<void>
+
+// Advertise yourself as a signer
+public async advertiseSigner(
+  criteria: SignerCriteria,
+  metadata?: Record<string, unknown>
+): Promise<void>
+
+// Withdraw advertisement
+public async withdrawAdvertisement(): Promise<void>
+
+// Find available signers (DHT query)
+public async findAvailableSigners(
+  filters: SignerSearchFilters
+): Promise<SignerAdvertisement[]>
+
+// Connect to specific signer
+public async connectToSigner(
+  peerId: string,
+  multiaddrs?: string[]
+): Promise<void>
+```
+
+#### 6. Signing Request Methods
+
+```typescript
+// Subscribe to signing requests
+public async subscribeToSigningRequests(
+  criteria?: SignerCriteria
+): Promise<void>
+
+// Create signing request
+public async announceSigningRequest(
+  signers: string[],
+  message: Buffer,
+  options?: {
+    timeout?: number
+    metadata?: Record<string, unknown>
+  }
+): Promise<string> // Returns requestId
+
+// Find signing requests for you
+public async findSigningRequestsForMe(
+  filters?: {
+    minAmount?: number
+    maxAmount?: number
+    transactionType?: TransactionType
+  }
+): Promise<SigningRequest[]>
+
+// Join a signing request
+public async joinSigningRequest(
+  requestId: string,
+  signerKey: PrivateKey
+): Promise<void>
+```
+
+---
+
+## Implementation Details
+
+### Why Deferred Events?
+
+- Prevents race conditions between state updates and event emissions
+- Ensures all listeners see consistent state
+- Guarantees event ordering across async operations
+- **Cross-platform compatible**: Works in both Node.js and browsers
+
+```typescript
+private deferredEvents: Array<{event: string, data: unknown}> = []
+
+private deferEvent<T>(event: string, data: T): void {
+  this.deferredEvents.push({ event, data })
+
+  // Process in next tick to ensure state consistency
+  // Uses cross-platform scheduleNextTick() for browser compatibility
+  import { scheduleNextTick } from './utils.js'
+  scheduleNextTick(() => {
+    this._collectDeferredEvents()
+  })
+}
+```
+
+### Mutex-Based Concurrency Control
+
+Prevents concurrent state modifications with hierarchical mutex locks:
+
+```typescript
+// State operations (sessions, metadata)
+private async withStateLock<T>(fn: () => Promise<T>): Promise<T>
+
+// Advertisement operations
+private async withAdvertisementLock<T>(fn: () => Promise<T>): Promise<T>
+
+// Signing request operations
+private async withSigningRequestLock<T>(fn: () => Promise<T>): Promise<T>
+```
+
+### Session Lifecycle Management
+
+Sessions are managed through explicit lifecycle events:
+
+```typescript
+// Session creation
+coordinator.on('session:created', sessionId => {
+  console.log('Session created:', sessionId)
+})
+
+// Session ready for signing
+coordinator.on('session:ready', data => {
+  console.log('Session ready:', data.requestId, data.sessionId)
+  // Start Round 1
+  await coordinator.startRound1(data.sessionId, privateKey)
+})
+
+// Session completion
+coordinator.on('session:complete', sessionId => {
+  console.log('Session completed:', sessionId)
+  // Clean up
+  await coordinator.closeSession(sessionId)
+})
+
+// Session errors
+coordinator.on('session:error', (sessionId, error, code) => {
+  console.error('Session error:', sessionId, error)
+  // Handle error appropriately
+})
+```
+
+### Coordinator Election & Failover
+
+Deterministic coordinator election with automatic failover:
+
+```typescript
+// Election methods available
+import { ElectionMethod, electCoordinator } from './election.js'
+
+// Default: Lexicographic ordering of public keys
+const election = electCoordinator(signers, ElectionMethod.LEXICOGRAPHIC)
+
+// Coordinator failover events
+coordinator.on(
+  'session:coordinator-failed',
+  (sessionId, failedIndex, newIndex) => {
+    console.log(
+      `Coordinator ${failedIndex} failed, new coordinator: ${newIndex}`,
+    )
+  },
+)
+
+coordinator.on('session:failover-exhausted', (sessionId, attempts) => {
+  console.error(`Failover exhausted after ${attempts} attempts`)
+  // Session cannot continue
+})
+```
+
+### Security & Identity Management
+
+Burn-based identity registration with reputation tracking:
+
+```typescript
+const identityManager = coordinator.getIdentityManager()
+
+// Register identity with burn proof
+await identityManager.registerIdentity(txId, outputIndex, publicKey, signature)
+
+// Verify identity
+const isValid = await identityManager.verifyIdentity(peerId, publicKey)
+
+// Get reputation
+const reputation = identityManager.getReputation(identityId)
+
+// Identity events
+identityManager.on('identity:registered', (identityId, burnProof) => {
+  console.log('Identity registered:', identityId)
+})
+
+identityManager.on('reputation:updated', (identityId, oldScore, newScore) => {
+  console.log(`Reputation updated: ${identityId} ${oldScore} → ${newScore}`)
+})
 ```
 
 ---

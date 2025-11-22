@@ -527,3 +527,154 @@ export function createWallet(
     scriptPayload: script.getData().toString('hex'),
   }
 }
+/**
+ * Cross-platform alternative to Node.js setImmediate
+ *
+ * Yields control to the event loop, allowing other tasks to run.
+ * This is essential for preventing event handler starvation and
+ * ensuring responsive UI in browser environments.
+ *
+ * Uses the best available scheduling method for each environment:
+ * - Browser: MessageChannel (zero-delay) or queueMicrotask (microtask)
+ * - Node.js: setImmediate (macrotask) or process.nextTick (microtask)
+ * - Fallback: setTimeout(0)
+ *
+ * @returns Promise that resolves on the next tick of the event loop
+ */
+export function yieldToEventLoop(): Promise<void> {
+  return new Promise(resolve => {
+    // Check if we're in a browser environment
+    if (typeof window !== 'undefined') {
+      // Browser: Use the best available method
+      if (typeof queueMicrotask !== 'undefined') {
+        // Modern browsers: Use microtask scheduling (fastest)
+        queueMicrotask(resolve)
+      } else if (typeof MessageChannel !== 'undefined') {
+        // Fallback: Use MessageChannel for zero-delay macrotask
+        const channel = new MessageChannel()
+        channel.port1.onmessage = () => {
+          channel.port1.close()
+          channel.port2.close()
+          resolve()
+        }
+        channel.port2.postMessage(null)
+      } else if (typeof setTimeout !== 'undefined') {
+        // Ultimate fallback: setTimeout with 0ms delay
+        setTimeout(resolve, 0)
+      } else {
+        // Last resort: resolve immediately
+        resolve()
+      }
+    } else if (typeof setImmediate !== 'undefined') {
+      // Node.js: Use native setImmediate (macrotask)
+      setImmediate(resolve)
+    } else if (
+      typeof process !== 'undefined' &&
+      typeof process.nextTick === 'function'
+    ) {
+      // Node.js fallback: Use process.nextTick (microtask)
+      process.nextTick(resolve)
+    } else if (typeof setTimeout !== 'undefined') {
+      // Universal fallback: setTimeout with 0ms delay
+      setTimeout(resolve, 0)
+    } else {
+      // Ultimate fallback: resolve immediately
+      resolve()
+    }
+  })
+}
+
+/**
+ * Cross-platform alternative to Node.js setImmediate for deferred execution
+ *
+ * Schedules a function to run on the next tick of the event loop.
+ * Used for deferred event processing to ensure state consistency.
+ *
+ * Uses the best available scheduling method for each environment:
+ * - Browser: queueMicrotask (preferred) or MessageChannel (fallback)
+ * - Node.js: setImmediate (preferred) or process.nextTick (fallback)
+ * - Fallback: setTimeout(0)
+ *
+ * @param fn - Function to execute on next tick
+ * @returns void
+ */
+export function scheduleNextTick(fn: () => void): void {
+  // Check if we're in a browser environment
+  if (typeof window !== 'undefined') {
+    // Browser: Use the best available method
+    if (typeof queueMicrotask !== 'undefined') {
+      // Modern browsers: Use microtask scheduling (fastest)
+      queueMicrotask(fn)
+    } else if (typeof MessageChannel !== 'undefined') {
+      // Fallback: Use MessageChannel for zero-delay macrotask
+      const channel = new MessageChannel()
+      channel.port1.onmessage = () => {
+        channel.port1.close()
+        channel.port2.close()
+        fn()
+      }
+      channel.port2.postMessage(null)
+    } else if (typeof setTimeout !== 'undefined') {
+      // Ultimate fallback: setTimeout with 0ms delay
+      setTimeout(fn, 0)
+    } else {
+      // Last resort: execute immediately
+      fn()
+    }
+  } else if (typeof setImmediate !== 'undefined') {
+    // Node.js: Use native setImmediate (macrotask)
+    setImmediate(fn)
+  } else if (
+    typeof process !== 'undefined' &&
+    typeof process.nextTick === 'function'
+  ) {
+    // Node.js fallback: Use process.nextTick (microtask)
+    process.nextTick(fn)
+  } else if (typeof setTimeout !== 'undefined') {
+    // Universal fallback: setTimeout with 0ms delay
+    setTimeout(fn, 0)
+  } else {
+    // Ultimate fallback: execute immediately
+    fn()
+  }
+}
+
+/**
+ * Browser-compatible performance timer
+ *
+ * Provides high-resolution timing in both Node.js and browser environments.
+ *
+ * @returns Current time in milliseconds
+ */
+export function getHighResTime(): number {
+  if (typeof performance !== 'undefined' && performance.now) {
+    return performance.now()
+  } else if (typeof process !== 'undefined' && process.hrtime) {
+    const [seconds, nanoseconds] = process.hrtime()
+    return seconds * 1000 + nanoseconds / 1e6
+  } else {
+    return Date.now()
+  }
+}
+
+/**
+ * Check if running in a browser environment
+ *
+ * @returns true if running in browser, false if running in Node.js
+ */
+export function isBrowser(): boolean {
+  return typeof window !== 'undefined' && typeof document !== 'undefined'
+}
+
+/**
+ * Check if running in Node.js environment
+ *
+ * @returns true if running in Node.js, false if running in browser
+ */
+export function isNode(): boolean {
+  return !!(
+    typeof process !== 'undefined' &&
+    process.versions &&
+    process.versions.node
+  )
+}

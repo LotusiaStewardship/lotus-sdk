@@ -111,13 +111,105 @@ async subscribeToSignerDiscovery(
         return // Drop invalid
       }
 
-      this.emit(MuSig2Event.SIGNER_DISCOVERED, advertisement)
+      // SECURITY: Check rate limits and key counts
+      if (!this.securityManager.canAdvertiseKey(
+        payload.peerId,
+        advertisement.publicKey
+      )) {
+        return // Drop rate-limited
+      }
+
+      // Prevent duplicate emissions
+      const pubKeyStr = advertisement.publicKey.toString()
+      if (this.signerAdvertisements.has(pubKeyStr)) {
+        return // Already discovered
+      }
+
+      // ARCHITECTURE: Emit appropriate event based on sender
+      const isSelfAdvertisement = payload.peerId === this.peerId
+
+      if (isSelfAdvertisement) {
+        this.emit(MuSig2Event.SIGNER_ADVERTISED, advertisement)
+      } else {
+        this.emit(MuSig2Event.SIGNER_DISCOVERED, advertisement)
+      }
     })
   }
 }
 
 // Unsubscribe from all signer topics
 async unsubscribeFromSignerDiscovery(): Promise<void>
+```
+
+### 4. Message Validation Pipeline
+
+✅ **Implemented**: 4-layer security validation
+
+```typescript
+// Layer 1: Size validation (DoS prevention)
+if (messageData.length > limits.MAX_ADVERTISEMENT_SIZE) {
+  console.warn('Oversized advertisement dropped')
+  return // Drop oversized messages
+}
+
+// Layer 2: Timestamp validation (replay prevention)
+const timestampSkew = Math.abs(Date.now() - payload.timestamp)
+if (timestampSkew > limits.MAX_TIMESTAMP_SKEW) {
+  console.warn('Stale/future advertisement dropped')
+  return // Drop stale/future messages
+}
+
+// Layer 3: Expiration validation
+if (payload.expiresAt && payload.expiresAt < Date.now()) {
+  console.warn('Expired advertisement dropped')
+  return // Drop expired messages
+}
+
+// Layer 4: Signature verification (cryptographic proof)
+if (!this.verifyAdvertisementSignature(advertisement)) {
+  this.securityManager.recordInvalidSignature(payload.peerId)
+  return // Drop invalid signatures
+}
+```
+
+### 5. Topic Management
+
+✅ **Implemented**: Dynamic topic subscription
+
+```typescript
+// Topics are created dynamically based on transaction types
+const topics = transactionTypes.map(txType => `musig2:signers:${txType}`)
+
+// Supported transaction types
+export enum TransactionType {
+  SWAP = 'swap',
+  SPEND = 'spend',
+  COINJOIN = 'coinjoin',
+  MULTI_SIG = 'multi-sig',
+  ESCROW = 'escrow',
+}
+
+// Topic examples:
+// - musig2:signers:swap
+// - musig2:signers:spend
+// - musig2:signers:coinjoin
+```
+
+### 6. Relay Support
+
+✅ **Implemented**: Automatic topic propagation via relay nodes
+
+```typescript
+// GossipSub automatically propagates topics through relay nodes
+// No additional configuration needed - works out of the box
+
+// For nodes behind NAT, ensure relay is enabled:
+const coordinator = new MuSig2P2PCoordinator({
+  enableRelay: true, // Use circuit relay v2
+  enableAutoNAT: true, // Auto-detect NAT
+  enableDCUTR: true, // Direct connection upgrade
+  enableUPnP: true, // Auto port forwarding
+})
 ```
 
 ### 4. Dual-Channel Advertisement
@@ -186,6 +278,39 @@ verifyAdvertisementSignature(advertisement: SignerAdvertisement): boolean {
 - ✅ Invalid advertisements dropped silently
 - ✅ No MITM possible (signature validation)
 - ✅ Multiaddr tampering detected (breaks signature)
+
+### 6. Application-Layer Deduplication
+
+✅ **Required**: Due to multi-channel broadcasting
+
+**Why Deduplication is Needed:**
+
+`advertiseSigner()` uses multiple channels (GossipSub + P2P broadcast) for reliability, which means Alice may receive the same advertisement twice.
+
+**Solution:** Deduplicate in your application by public key:
+
+```typescript
+const seenPublicKeys = new Set<string>()
+
+coordinator.on(MuSig2Event.SIGNER_DISCOVERED, ad => {
+  const key = ad.publicKey.toString()
+
+  if (seenPublicKeys.has(key)) {
+    return // Already processed this signer
+  }
+
+  seenPublicKeys.add(key)
+  discoveredSigners.push(ad)
+})
+```
+
+**Why NOT in the library?**
+
+- ✅ Prevents state pollution
+- ✅ Avoids memory leaks (caching signatures)
+- ✅ Handles re-advertising correctly
+- ✅ Application has full control
+- ✅ Simple `Set` tracking works perfectly
 
 ## Usage
 
