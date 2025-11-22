@@ -1119,23 +1119,18 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
         console.log(`[MuSig2P2P] 📡 Published to GossipSub topic: ${topic}`)
       } catch (error) {
         // GossipSub not enabled or no subscribers - that's ok
-        // Fall back to DHT + P2P broadcast
         console.log(`[MuSig2P2P] ❌ GossipSub publish failed for ${topic}:`)
         console.log(`    Error: ${error}`)
-        console.log(`    Falling back to DHT + P2P broadcast...`)
+        console.log(
+          `    Discovery messages require GossipSub - check network configuration`,
+        )
       }
     }
 
-    // Broadcast to connected peers (fallback for non-GossipSub clients)
-    await this.broadcast({
-      type: MuSig2MessageType.SIGNER_ADVERTISEMENT,
-      from: this.peerId,
-      payload: advertisementPayload,
-      timestamp: Date.now(),
-      messageId: this.messageProtocol.createMessage('', {}, this.peerId)
-        .messageId,
-      protocol: 'musig2',
-    })
+    // REMOVED (Phase 1): Dual-channel broadcast
+    // SIGNER_ADVERTISEMENT is a discovery message and should ONLY use GossipSub
+    // per the message channel architecture. Using direct streams creates duplicates
+    // and violates the single-channel-per-message principle.
 
     // NOTE: Do NOT emit SIGNER_ADVERTISED locally!
     // We receive our own broadcast and the protocol handler emits the event.
@@ -1598,12 +1593,14 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
         `[MuSig2P2P] ❌ GossipSub publish failed for signing request ${requestId}:`,
       )
       console.log(`    Error: ${error}`)
-      console.log(`    Falling back to direct P2P broadcast + DHT...`)
+      console.log(
+        `    Discovery messages require GossipSub - check network configuration`,
+      )
     }
 
     // ARCHITECTURE CHANGE (2025-11-21): Local-first pattern
     // 1. Emit local events IMMEDIATELY (synchronous, predictable ordering)
-    // 2. Broadcast to network (asynchronous, fire-and-forget)
+    // 2. Broadcast to network ONLY via GossipSub (no direct streams for discovery)
     // 3. Protocol handler filters out self-messages (no duplicate processing)
 
     // Emit SIGNING_REQUEST_CREATED event locally
@@ -1620,22 +1617,10 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       signature: Buffer.from(creatorParticipation.signature, 'hex'),
     })
 
-    // Broadcast to connected peers (asynchronous, fire-and-forget)
-    // Protocol handler will filter out our own broadcast to prevent duplicates
-    this.broadcast({
-      type: MuSig2MessageType.SIGNING_REQUEST,
-      from: this.peerId,
-      payload: signingRequestPayload,
-      timestamp: Date.now(),
-      messageId: this.messageProtocol.createMessage('', {}, this.peerId)
-        .messageId,
-      protocol: 'musig2',
-    }).catch(error => {
-      console.error(
-        `[MuSig2P2P] Failed to broadcast signing request ${requestId}:`,
-        error,
-      )
-    })
+    // REMOVED (Phase 1): Dual-channel broadcast for SIGNING_REQUEST
+    // SIGNING_REQUEST is a discovery message and should ONLY use GossipSub
+    // per the message channel architecture. Using direct streams creates duplicates
+    // and violates the single-channel-per-message principle.
 
     return requestId
   }
@@ -4190,6 +4175,9 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
 
   /**
    * Broadcast nonce share to all participants
+   *
+   * ARCHITECTURE (Phase 1): Direct streams only - no GossipSub fallback
+   * Critical session messages use reliable, ordered direct streams
    */
   private async _broadcastNonceShare(
     sessionId: string,
@@ -4216,26 +4204,32 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       ([idx, peerId]) => idx !== signerIndex && peerId !== this.peerId,
     )
 
-    this.debugLog('round1:broadcast', 'Sending nonce share', {
-      sessionId,
-      signerIndex,
-      directTargets: directTargets.length,
-    })
+    this.debugLog(
+      'round1:broadcast',
+      'Sending nonce share via direct streams',
+      {
+        sessionId,
+        signerIndex,
+        directTargets: directTargets.length,
+      },
+    )
 
     const sendPromises = directTargets.map(([, peerId]) =>
       this._sendMessageToPeer(peerId, MuSig2MessageType.NONCE_SHARE, payload),
     )
 
-    const results = await Promise.allSettled(sendPromises)
-    const failed = results.some(r => r.status === 'rejected')
+    await Promise.allSettled(sendPromises)
 
-    if (failed || directTargets.length === 0) {
-      await this.publishToTopic(MuSig2MessageType.NONCE_SHARE, payload)
-    }
+    // REMOVED: GossipSub fallback (Phase 1 refactoring)
+    // If direct stream fails, the session should abort rather than using unreliable GossipSub
+    // This ensures proper error handling and prevents silent failures
   }
 
   /**
    * Broadcast partial signature share to all participants
+   *
+   * ARCHITECTURE (Phase 1): Direct streams only - no GossipSub fallback
+   * Critical session messages use reliable, ordered direct streams
    */
   private async _broadcastPartialSigShare(
     sessionId: string,
@@ -4276,12 +4270,11 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       ),
     )
 
-    const results = await Promise.allSettled(sendPromises)
-    const failed = results.some(r => r.status === 'rejected')
+    await Promise.allSettled(sendPromises)
 
-    if (failed || directTargets.length === 0) {
-      await this.publishToTopic(MuSig2MessageType.PARTIAL_SIG_SHARE, payload)
-    }
+    // REMOVED: GossipSub fallback (Phase 1 refactoring)
+    // If direct stream fails, the session should abort rather than using unreliable GossipSub
+    // This ensures proper error handling and prevents silent failures
   }
 
   /**
@@ -4342,6 +4335,9 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
 
   /**
    * Broadcast nonce commitment
+   *
+   * ARCHITECTURE (Phase 1): Direct streams only - no GossipSub
+   * Critical session messages use reliable, ordered direct streams
    */
   private async _broadcastNonceCommit(
     sessionId: string,
@@ -4383,14 +4379,22 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
 
     await Promise.allSettled(sendPromises)
 
-    // Also publish to topic for discovery
-    await this.publishToTopic(MuSig2MessageType.NONCE_COMMIT, payload)
+    // REMOVED: GossipSub publishing for critical messages (Phase 1 refactoring)
+    // Critical session messages now use ONLY direct streams for:
+    // - Reliable delivery
+    // - Ordered processing
+    // - No duplicate message handling
 
-    this.debugLog('nonce:commit:broadcast', 'Broadcasted nonce commitment', {
-      sessionId,
-      signerIndex,
-      commitment: commitment.substring(0, 16) + '...',
-    })
+    this.debugLog(
+      'nonce:commit:broadcast',
+      'Broadcasted nonce commitment via direct streams',
+      {
+        sessionId,
+        signerIndex,
+        commitment: commitment.substring(0, 16) + '...',
+        targets: sendPromises.length,
+      },
+    )
   }
 
   /**

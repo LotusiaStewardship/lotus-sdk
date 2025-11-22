@@ -38,7 +38,7 @@ import {
   deserializePublicKey,
   deserializeMessage,
 } from './serialization.js'
-import { SecurityManager } from './security.js'
+import { SecurityManager, PEER_KEY_LIMITS } from './security.js'
 import { DeserializationError, ValidationError } from './errors.js'
 import {
   validateSessionAnnouncementPayload,
@@ -50,6 +50,7 @@ import {
   validateSigningRequestPayload,
   validateParticipantJoinedPayload,
 } from './validation.js'
+import { MessageValidator, MessageChannel } from './message-validator.js'
 
 /**
  * MuSig2 P2P Protocol Handler
@@ -62,6 +63,7 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
 
   private coordinator?: MuSig2P2PCoordinator
   private securityManager?: SecurityManager
+  private messageValidator: MessageValidator = new MessageValidator()
   // REMOVED participantJoinCache - duplicate prevention now handled by coordinator only
 
   private debugLog(
@@ -225,6 +227,28 @@ export class MuSig2ProtocolHandler implements IProtocolHandler {
       type: message.type,
       from: from.peerId,
     })
+
+    // PHASE 1: Channel validation
+    // Messages received via handleMessage come from direct libp2p streams (handleStream)
+    // They should be DIRECT channel messages per our architecture
+    try {
+      this.messageValidator.validateChannel(
+        message.type as MuSig2MessageType,
+        MessageChannel.DIRECT,
+      )
+    } catch (error) {
+      // Log channel violations but don't reject during transition
+      // This helps identify any messages that should be moved to GossipSub
+      console.warn(
+        `[MuSig2P2P] Channel validation warning: ${error instanceof Error ? error.message : String(error)}`,
+      )
+      this.debugLog('message', 'Channel validation failed', {
+        type: message.type,
+        from: from.peerId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      // Continue processing for now - remove this after transition is complete
+    }
 
     try {
       switch (message.type) {
