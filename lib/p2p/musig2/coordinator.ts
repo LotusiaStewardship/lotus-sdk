@@ -2061,18 +2061,18 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       throw new Error(`P2P metadata not found for session ${sessionId}`)
     }
 
-    // Set phase to NONCE_EXCHANGE for Round 1
-    session.phase = MuSigSessionPhase.NONCE_EXCHANGE
-    session.updatedAt = Date.now()
-
     // Initialize commitment tracking
     if (!metadata.nonceCommitments) {
       metadata.nonceCommitments = new Map()
     }
     metadata.nonceCommitmentsComplete = false
 
-    // Generate nonces locally
+    // Generate nonces locally (must be done before phase transition)
     const publicNonces = this.sessionManager.generateNonces(session, privateKey)
+
+    // Set phase to NONCE_EXCHANGE for Round 1 (after nonces generated)
+    session.phase = MuSigSessionPhase.NONCE_EXCHANGE
+    session.updatedAt = Date.now()
 
     // Compute commitment to the nonces
     const commitment = this._computeNonceCommitment(publicNonces)
@@ -2643,10 +2643,12 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     )
 
     // Now reveal our nonces (we generated them in startRound1)
-    const publicNonces = this.sessionManager.generateNonces(
-      session,
-      metadata.myPrivateKey!,
-    )
+    if (!session.myPublicNonce) {
+      throw new Error(
+        `Public nonces not found for session ${sessionId}. This should have been generated in startRound1().`,
+      )
+    }
+    const publicNonces = session.myPublicNonce
 
     // Broadcast our nonces to all participants
     await this._broadcastNonceShare(
