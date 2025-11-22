@@ -73,7 +73,11 @@ import { MuSig2IdentityManager } from './identity-manager.js'
 import { Mutex } from 'async-mutex'
 import { yieldToEventLoop } from '../../../utils/functions.js'
 import { SessionStateMachine } from './session-state-machine.js'
-import { MESSAGE_CHANNELS, MessageChannel } from './message-channels.js'
+import {
+  MESSAGE_CHANNELS,
+  MessageChannel,
+  MessageAuthority,
+} from './message-channels.js'
 
 /**
  * MuSig2 P2P Coordinator
@@ -4498,6 +4502,127 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
   }
 
   /**
+   * Phase 3: Validate message authority based on coordinator role
+   *
+   * This enforces strict authority rules:
+   * - COORDINATOR messages can only be sent by the coordinator
+   * - PARTICIPANT messages can only be sent by non-coordinators
+   * - ANY messages can be sent by anyone
+   */
+  private _validateMessageAuthority(
+    messageType: MuSig2MessageType,
+    payload: unknown,
+  ): void {
+    const config = MESSAGE_CHANNELS[messageType]
+
+    // Skip authority validation for ANY messages
+    if (config.authority === MessageAuthority.ANY) {
+      return
+    }
+
+    // Extract session ID from payload for authority validation
+    const sessionId = this._extractSessionIdFromPayload(messageType, payload)
+    if (!sessionId) {
+      throw new Error(
+        `AUTHORITY_VALIDATION: Cannot extract session ID from ${messageType} payload`,
+      )
+    }
+
+    const isCoordinator = this.isCoordinator(sessionId)
+
+    switch (config.authority) {
+      case MessageAuthority.COORDINATOR:
+        if (!isCoordinator) {
+          throw new Error(
+            `COORDINATOR_ONLY: ${messageType} rejected - sender is not coordinator for session ${sessionId}`,
+          )
+        }
+        break
+
+      case MessageAuthority.PARTICIPANT:
+        if (isCoordinator) {
+          throw new Error(
+            `PARTICIPANT_ONLY: ${messageType} rejected - sender is coordinator for session ${sessionId}`,
+          )
+        }
+        break
+
+      default:
+        throw new Error(
+          `AUTHORITY_VALIDATION: Unknown authority ${config.authority} for ${messageType}`,
+        )
+    }
+
+    this.debugLog(
+      'authority:validated',
+      `Authority check passed for ${messageType}`,
+      {
+        messageType,
+        sessionId,
+        authority: config.authority,
+        isCoordinator,
+      },
+    )
+  }
+
+  /**
+   * Extract session ID from message payload for authority validation
+   */
+  private _extractSessionIdFromPayload(
+    messageType: MuSig2MessageType,
+    payload: unknown,
+  ): string | null {
+    // Discovery messages don't have session context - return null for ANY authority
+    if (
+      messageType === MuSig2MessageType.SIGNER_ADVERTISEMENT ||
+      messageType === MuSig2MessageType.SIGNER_UNAVAILABLE
+    ) {
+      return null // Handled by authority validation skip for discovery messages
+    }
+
+    // Most messages have sessionId as top-level property
+    if (payload && typeof payload === 'object' && 'sessionId' in payload) {
+      return (payload as { sessionId: string }).sessionId
+    }
+
+    // Handle special cases
+    switch (messageType) {
+      case MuSig2MessageType.PARTICIPANT_JOINED: {
+        // PARTICIPANT_JOINED has requestId, need to map to sessionId
+        const joinPayload = payload as { requestId: string }
+        return this._getSessionIdByRequestId(joinPayload.requestId)
+      }
+
+      case MuSig2MessageType.SESSION_JOIN: {
+        // SESSION_JOIN has sessionId
+        return (payload as { sessionId: string }).sessionId
+      }
+
+      case MuSig2MessageType.SIGNING_REQUEST: {
+        // SIGNING_REQUEST has requestId, need to map to sessionId
+        const requestPayload = payload as { requestId: string }
+        return this._getSessionIdByRequestId(requestPayload.requestId)
+      }
+
+      default:
+        return null
+    }
+  }
+
+  /**
+   * Get session ID by request ID (for PARTICIPANT_JOINED messages)
+   */
+  private _getSessionIdByRequestId(requestId: string): string | null {
+    // Iterate through active sessions to find matching request ID
+    for (const [sessionId, metadata] of this.p2pMetadata.entries()) {
+      if (metadata.request?.requestId === requestId) {
+        return sessionId
+      }
+    }
+    return null
+  }
+
+  /**
    * Send message to specific peer
    * Skips relay-only connections (limited connections cannot open protocol streams)
    */
@@ -4556,11 +4681,14 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       throw new Error(`Unknown message type: ${messageType}`)
     }
 
+    // Phase 3: Authority validation
+    // Enforce message authority based on coordinator role
+    this._validateMessageAuthority(messageType, payload)
+
     this.debugLog(
-      'message:send',
+      'message:router',
       `Routing ${messageType} via ${config.channel}`,
       {
-        messageType,
         channel: config.channel,
         authority: config.authority,
         delivery: config.delivery,
