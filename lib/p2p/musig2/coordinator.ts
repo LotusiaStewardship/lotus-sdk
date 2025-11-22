@@ -72,6 +72,7 @@ import { IProtocolValidator } from '../types.js'
 import { MuSig2IdentityManager } from './identity-manager.js'
 import { Mutex } from 'async-mutex'
 import { yieldToEventLoop } from '../../../utils/functions.js'
+import { SessionStateMachine } from './session-state-machine.js'
 
 /**
  * MuSig2 P2P Coordinator
@@ -90,6 +91,8 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
   private readonly debugLoggingEnabled: boolean
   // REMOVED participantJoinCache - now using metadata.participants as single source of truth
   private activeSessions: Map<string, MuSigSession> = new Map() // MuSigSession directly
+  // PHASE 2: State machines for session phase management (wraps MuSigSession.phase)
+  private sessionStateMachines: Map<string, SessionStateMachine> = new Map() // sessionId -> state machine
   private p2pMetadata: Map<string, P2PSessionMetadata> = new Map() // P2P-specific metadata
   // ARCHITECTURE CHANGE (2025-11-21): Request ID → Session ID mapping
   // Signing requests use requestId (SHA256 hash), sessions use sessionId (deterministic from signers+message)
@@ -239,6 +242,52 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
 
     // NOTE: Relay address monitoring is now handled by core P2P layer
     // Protocol handlers can implement onRelayAddressesChanged to receive notifications
+  }
+
+  // ========================================================================
+  // Phase 2: State Machine Management
+  // ========================================================================
+
+  /**
+   * Get or create a state machine for a session
+   *
+   * PHASE 2: This is the ONLY way to access session state management.
+   * The state machine wraps the MuSigSession and manages its phase property.
+   *
+   * @param sessionId - Session identifier
+   * @returns State machine for the session
+   * @throws Error if session doesn't exist
+   */
+  private getStateMachine(sessionId: string): SessionStateMachine {
+    // Check if state machine already exists
+    let stateMachine = this.sessionStateMachines.get(sessionId)
+
+    if (!stateMachine) {
+      // Get the session
+      const session = this.activeSessions.get(sessionId)
+      if (!session) {
+        throw new Error(
+          `Cannot create state machine: session ${sessionId} not found`,
+        )
+      }
+
+      // Create new state machine
+      stateMachine = new SessionStateMachine(session)
+
+      // Listen to state changes for logging/debugging
+      stateMachine.on('stateChanged', event => {
+        this.debugLog(
+          'state:transition',
+          `Session ${event.sessionId}: ${event.fromState} -> ${event.toState}`,
+          { reason: event.reason },
+        )
+      })
+
+      // Store state machine
+      this.sessionStateMachines.set(sessionId, stateMachine)
+    }
+
+    return stateMachine
   }
 
   // ========================================================================
@@ -1906,6 +1955,10 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     // This allows looking up sessions by requestId and prevents ID confusion
     this.requestIdToSessionId.set(requestId, session.sessionId)
 
+    // PHASE 2: Create state machine for the session
+    // The state machine wraps the session and manages its phase property
+    this.getStateMachine(session.sessionId)
+
     this.debugLog('session:create', 'Session created from request', {
       requestId,
       sessionId: session.sessionId,
@@ -2055,9 +2108,13 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     // Generate nonces locally (must be done before phase transition)
     const publicNonces = this.sessionManager.generateNonces(session, privateKey)
 
-    // Set phase to NONCE_EXCHANGE for Round 1 (after nonces generated)
-    session.phase = MuSigSessionPhase.NONCE_EXCHANGE
-    session.updatedAt = Date.now()
+    // PHASE 2: Transition to NONCE_EXCHANGE using state machine
+    // This validates the transition and updates session.phase
+    const stateMachine = this.getStateMachine(sessionId)
+    stateMachine.transition(
+      MuSigSessionPhase.NONCE_EXCHANGE,
+      'Starting Round 1: nonce generation',
+    )
 
     // Compute commitment to the nonces
     const commitment = this._computeNonceCommitment(publicNonces)
@@ -2166,9 +2223,19 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
         tweak,
       )
 
-      // Transition to PARTIAL_SIG_EXCHANGE phase
+      // Store partial signature
       session.myPartialSig = partialSig
-      session.phase = MuSigSessionPhase.PARTIAL_SIG_EXCHANGE
+
+      // PHASE 2: Transition to PARTIAL_SIG_EXCHANGE using state machine (if not already there)
+      // Note: _handleAllNoncesReceived() already transitions to PARTIAL_SIG_EXCHANGE when
+      // all nonces are received, so we may already be in the correct state.
+      if (session.phase !== MuSigSessionPhase.PARTIAL_SIG_EXCHANGE) {
+        const stateMachine = this.getStateMachine(sessionId)
+        stateMachine.transition(
+          MuSigSessionPhase.PARTIAL_SIG_EXCHANGE,
+          'Starting Round 2: partial signature generation (Taproot)',
+        )
+      }
     } else {
       // Regular MuSig2 signing (non-Taproot)
       // (createPartialSignature transitions session phase to PARTIAL_SIG_EXCHANGE)
@@ -2176,10 +2243,9 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
         session,
         privateKey,
       )
+      // Session phase is updated by createPartialSignature, update timestamp
+      session.updatedAt = Date.now()
     }
-
-    // Session phase is updated by createPartialSignature, update timestamp
-    session.updatedAt = Date.now()
     this.debugLog('round2:start', 'Created partial signature', {
       sessionId,
       signerIndex: session.myIndex,
@@ -2408,6 +2474,9 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       if (peerMap) {
         this.peerIdToSignerIndex.delete(sessionId)
       }
+
+      // PHASE 2: Clean up state machine
+      this.sessionStateMachines.delete(sessionId)
 
       // Send abort to all participants (only if node is still running)
       // Do this after cleaning up local state to prevent race conditions
@@ -2777,16 +2846,20 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       return
     }
 
-    // ROOT CAUSE FIX: Transition phase to PARTIAL_SIG_EXCHANGE when all nonces are received.
+    // PHASE 2: Transition phase to PARTIAL_SIG_EXCHANGE when all nonces are received.
     // This ensures the phase correctly reflects that Round 2 can begin, preventing
     // protocol violations when peers receive SESSION_NONCES_COMPLETE and immediately
     // start Round 2 (which sends partial signatures).
+    // Use state machine to validate the transition.
     if (
       session.phase === MuSigSessionPhase.NONCE_EXCHANGE ||
       session.phase === MuSigSessionPhase.INIT
     ) {
-      session.phase = MuSigSessionPhase.PARTIAL_SIG_EXCHANGE
-      session.updatedAt = Date.now()
+      const stateMachine = this.getStateMachine(sessionId)
+      stateMachine.transition(
+        MuSigSessionPhase.PARTIAL_SIG_EXCHANGE,
+        'All nonces received and aggregated',
+      )
     }
 
     // Defer event emission AFTER phase transition to ensure protocol consistency
@@ -2883,6 +2956,17 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
     session.updatedAt = Date.now()
     const election = metadata.election
 
+    // PHASE 2: Transition to COMPLETE state using state machine (if not already there)
+    // Note: sessionManager.finalizeSignature() may have already transitioned to COMPLETE
+    // internally when the last partial signature was received.
+    if (session.phase !== MuSigSessionPhase.COMPLETE) {
+      const stateMachine = this.getStateMachine(sessionId)
+      stateMachine.transition(
+        MuSigSessionPhase.COMPLETE,
+        'All partial signatures received and aggregated',
+      )
+    }
+
     // Signature is automatically finalized by session manager
     // Prevent duplicate emissions
     if (this._shouldEmitEvent(sessionId, MuSig2Event.SESSION_COMPLETE)) {
@@ -2911,6 +2995,12 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
 
       const metadata = this.p2pMetadata.get(sessionId)
 
+      // PHASE 2: Transition to ABORTED state using state machine (if not already terminal)
+      const stateMachine = this.getStateMachine(sessionId)
+      if (!stateMachine.isTerminal()) {
+        stateMachine.abort(reason)
+      }
+
       // Abort session
       this.sessionManager.abortSession(session, reason)
 
@@ -2924,6 +3014,8 @@ export class MuSig2P2PCoordinator extends P2PCoordinator {
       // Clean up emitted events tracking for this session
       this.emittedEvents.delete(sessionId)
       this.peerIdToSignerIndex.delete(sessionId)
+      // PHASE 2: Clean up state machine
+      this.sessionStateMachines.delete(sessionId)
     })
   }
 
