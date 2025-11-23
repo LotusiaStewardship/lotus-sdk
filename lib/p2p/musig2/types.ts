@@ -241,6 +241,12 @@ export interface SessionJoinPayload extends SessionMessage {
   publicKey: string // This signer's public key as hex
 }
 
+export interface SessionReadyPayload extends SessionMessage {
+  requestId: string
+  participantIndex?: number
+  participantPeerId?: string
+}
+
 /**
  * Nonce commitment payload (Round 1, Step 1)
  */
