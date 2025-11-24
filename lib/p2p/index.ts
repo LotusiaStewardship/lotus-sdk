@@ -40,4 +40,4 @@ export {
 export * from './musig2/index.js'
 
 // SwapSig protocol
-export * from './swapsig/index.js'
+//export * from './swapsig/index.js'

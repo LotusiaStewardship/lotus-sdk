@@ -1,21 +1,23 @@
 /**
- * Copyright 2025 The Lotusia Stewardship
- * Github: https://github.com/LotusiaStewardship
- * License: MIT
- */
-
-/**
- * MuSig2 P2P Coordination
+ * MuSig2 P2P Coordination Module
  *
- * P2P coordination layer for MuSig2 multi-signature sessions
+ * Exports all components for MuSig2 multi-signature coordination over P2P networks
  */
 
 export { MuSig2P2PCoordinator } from './coordinator.js'
-export { MuSig2ProtocolHandler } from './protocol-handler.js'
+export { MuSig2ProtocolHandler } from './protocol.js'
+export { MuSig2SecurityValidator } from './security.js'
+export type { MuSig2SecurityConfig } from './security.js'
 export * from './types.js'
-export * from './serialization.js'
-export * from './election.js'
-export * from './security.js'
-export * from './identity-manager.js'
-export * from './errors.js'
-export * from './validation.js'
+
+// Coordinator Election
+export {
+  electCoordinator,
+  verifyElectionResult,
+  isCoordinator,
+  getCoordinatorPublicKey,
+  getBackupCoordinator,
+  getCoordinatorPriorityList,
+  ElectionMethod,
+  type ElectionResult,
+} from './election.js'

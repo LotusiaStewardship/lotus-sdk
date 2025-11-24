@@ -221,7 +221,6 @@ export class P2PCoordinator extends EventEmitter {
     }
 
     // Peer discovery configuration
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const peerDiscovery: ReturnType<typeof bootstrap>[] = []
 
     // Bootstrap peer discovery (automatic connection to bootstrap nodes)
@@ -234,7 +233,6 @@ export class P2PCoordinator extends EventEmitter {
       )
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const config: Parameters<typeof createLibp2p>[0] = {
       privateKey: this.config.privateKey, // Use fixed privateKey if provided (for persistent identity)
       addresses: {
@@ -447,7 +445,7 @@ export class P2PCoordinator extends EventEmitter {
     const promises = targetPeers
       .filter(peer => {
         // Check if peer has any direct (non-relay) connections
-        const connections = this.node!.getConnections(peer)
+        const connections = this.libp2pNode.getConnections(peer)
         const hasDirectConnection = connections.some(conn => {
           // A connection is direct if it doesn't have /p2p-circuit in the multiaddr
           const addr = conn.remoteAddr?.toString() || ''
@@ -767,7 +765,7 @@ export class P2PCoordinator extends EventEmitter {
       }
 
       // Create basic peer info
-      const connections = this.node!.getConnections(peerId)
+      const connections = this.libp2pNode.getConnections(peerId)
       const multiaddrs = connections.flatMap(conn =>
         conn.remoteAddr ? [conn.remoteAddr.toString()] : [],
       )
@@ -1194,7 +1192,7 @@ export class P2PCoordinator extends EventEmitter {
       const existing = this.peerInfo.get(peerId)
 
       // Get fresh multiaddrs from active connections
-      const connections = this.node!.getConnections(event.detail)
+      const connections = this.libp2pNode.getConnections(event.detail)
       const multiaddrs = connections.flatMap(conn =>
         conn.remoteAddr ? [conn.remoteAddr.toString()] : [],
       )
@@ -1275,7 +1273,7 @@ export class P2PCoordinator extends EventEmitter {
       const existing = this.peerInfo.get(peerId)
 
       // Get fresh multiaddrs from active connections if available
-      const connections = this.node!.getConnections(peer.id)
+      const connections = this.libp2pNode.getConnections(peer.id)
       const multiaddrs = connections.flatMap(conn =>
         conn.remoteAddr ? [conn.remoteAddr.toString()] : [],
       )

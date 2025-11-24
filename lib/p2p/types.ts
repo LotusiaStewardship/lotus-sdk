@@ -116,10 +116,10 @@ export enum ConnectionEvent {
 export enum RelayEvent {
   /** New relay circuit addresses available */
   ADDRESSES_AVAILABLE = 'relay:addresses-available',
-  
+
   /** Relay connection established */
   CONNECTED = 'relay:connected',
-  
+
   /** Relay connection lost */
   DISCONNECTED = 'relay:disconnected',
 }
@@ -266,7 +266,7 @@ export interface P2PConfig {
 
   /** Connection manager options */
   connectionManager?: {
-    minConnections?: number
+    //minConnections?: number
     maxConnections?: number
   }
 
@@ -281,10 +281,10 @@ export interface P2PConfig {
   relayMonitoring?: {
     /** Enable relay address monitoring (default: false) */
     enabled?: boolean
-    
+
     /** Check interval in milliseconds (default: 10000) */
     checkInterval?: number
-    
+
     /** Only monitor bootstrap relay connections (default: true) */
     bootstrapOnly?: boolean
   }
