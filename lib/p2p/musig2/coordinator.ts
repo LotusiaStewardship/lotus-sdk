@@ -47,6 +47,33 @@ import { Point, BN } from '../../bitcore/crypto/index.js'
 import { Hash } from '../../bitcore/crypto/hash.js'
 import { MuSig2Discovery } from './discovery-extension.js'
 import type { MuSig2DiscoveryConfig } from './discovery-types.js'
+import {
+  serializeMessage,
+  deserializeMessage,
+  serializePoint,
+  deserializePoint,
+  serializePublicNonces,
+  deserializePublicNonces,
+  serializeBN,
+  deserializeBN,
+  serializePublicKey,
+  deserializePublicKey,
+  serializePublicKeys,
+  deserializePublicKeys,
+  serializeSignature,
+  deserializeSignature,
+  type SerializedSignature,
+} from './serialization.js'
+import {
+  validateMessageStructure,
+  validateSessionJoinPayload,
+  validateSessionJoinAckPayload,
+  validateNonceSharePayload,
+  validatePartialSigSharePayload,
+  validateSessionAbortPayload,
+  validateSessionCompletePayload,
+  validateSessionAnnouncementPayload,
+} from './validation.js'
 
 /**
  * MuSig2 P2P Coordinator
@@ -105,10 +132,13 @@ export class MuSig2P2PCoordinator extends EventEmitter {
     this.sessionManager = new MuSigSessionManager()
     this.protocol = new P2PProtocol()
 
+    // Connect security validator to protocol handler for message validation
+    this.protocolHandler.setSecurityValidator(this.securityValidator)
+
     // Register protocol handler
     this.coordinator.registerProtocol(this.protocolHandler)
 
-    // Register security validator
+    // Register security validator with core security manager
     this.coordinator
       .getCoreSecurityManager()
       .registerProtocolValidator('musig2', this.securityValidator)
@@ -140,7 +170,7 @@ export class MuSig2P2PCoordinator extends EventEmitter {
     // Subscribe to session announcement topic
     await this.coordinator.subscribeToTopic(
       this.config.announcementTopic,
-      this._handleSessionAnnouncement.bind(this),
+      this._handleSessionAnnouncement,
     )
 
     // Start discovery layer if available
@@ -322,13 +352,13 @@ export class MuSig2P2PCoordinator extends EventEmitter {
 
     const session = p2pSession.session
 
-    // Create announcement
+    // Create announcement with serialized data
     const announcement: SessionAnnouncement = {
       sessionId: session.sessionId,
       requiredSigners: session.signers.length,
       coordinatorPeerId: this.peerId,
-      signers: session.signers.map(pk => pk.toString()),
-      messageHash: Hash.sha256(session.message).toString('hex'),
+      signers: serializePublicKeys(session.signers),
+      messageHash: serializeMessage(Hash.sha256(session.message)),
       createdAt: Date.now(),
       expiresAt: Date.now() + this.config.announcementTTL,
       metadata: session.metadata,
@@ -406,11 +436,8 @@ export class MuSig2P2PCoordinator extends EventEmitter {
     // Update session state
     p2pSession.lastActivity = Date.now()
 
-    // Convert nonces to serializable format
-    const nonceMap: { [key: string]: string } = {}
-    publicNonces.forEach((nonce, index) => {
-      nonceMap[`r${index + 1}`] = Point.pointToCompressed(nonce).toString('hex')
-    })
+    // Serialize nonces using serialization layer
+    const nonceMap = serializePublicNonces(publicNonces)
 
     // Broadcast nonces directly to all participants (no commitment phase)
     const payload: NonceSharePayload = {
@@ -478,7 +505,7 @@ export class MuSig2P2PCoordinator extends EventEmitter {
     const payload: PartialSigSharePayload = {
       sessionId,
       signerIndex: session.myIndex,
-      partialSig: partialSig.toBuffer({ size: 32 }).toString('hex'),
+      partialSig: serializeBN(partialSig),
       timestamp: Date.now(),
     }
 
@@ -537,14 +564,11 @@ export class MuSig2P2PCoordinator extends EventEmitter {
     this._clearSessionTimeout(sessionId)
     this._clearBroadcastTimeout(sessionId)
 
-    // Broadcast completion to participants
+    // Broadcast completion to participants with serialized signature
     const sigBuffer = signature.toBuffer()
     const completionPayload: SessionCompletePayload = {
       sessionId,
-      finalSignature: {
-        r: sigBuffer.subarray(0, 32).toString('hex'),
-        s: sigBuffer.subarray(32, 64).toString('hex'),
-      },
+      finalSignature: serializeSignature(sigBuffer),
       timestamp: Date.now(),
     }
 
@@ -618,14 +642,18 @@ export class MuSig2P2PCoordinator extends EventEmitter {
   // ============================================================================
 
   /**
-   * Setup protocol event handlers
+   * Setup protocol event handlers with validation error handling
    */
   private _setupProtocolHandlers(): void {
     // Nonce received (MuSig2 Round 1)
     this.protocolHandler.on(
       'nonce:share',
       async (payload: NonceSharePayload, from) => {
-        await this._handleNonceShare(payload, from.peerId)
+        try {
+          await this._handleNonceShare(payload, from.peerId)
+        } catch (error) {
+          this._handleProtocolError('nonce:share', error, payload, from.peerId)
+        }
       },
     )
 
@@ -633,7 +661,16 @@ export class MuSig2P2PCoordinator extends EventEmitter {
     this.protocolHandler.on(
       'partial-sig:share',
       async (payload: PartialSigSharePayload, from) => {
-        await this._handlePartialSigShare(payload, from.peerId)
+        try {
+          await this._handlePartialSigShare(payload, from.peerId)
+        } catch (error) {
+          this._handleProtocolError(
+            'partial-sig:share',
+            error,
+            payload,
+            from.peerId,
+          )
+        }
       },
     )
 
@@ -641,7 +678,80 @@ export class MuSig2P2PCoordinator extends EventEmitter {
     this.protocolHandler.on(
       'session:abort',
       async (payload: SessionAbortPayload, from) => {
-        await this._handleSessionAbort(payload, from.peerId)
+        try {
+          await this._handleSessionAbort(payload, from.peerId)
+        } catch (error) {
+          this._handleProtocolError(
+            'session:abort',
+            error,
+            payload,
+            from.peerId,
+          )
+        }
+      },
+    )
+
+    // Session complete
+    this.protocolHandler.on(
+      'session:complete',
+      async (payload: SessionCompletePayload, from) => {
+        try {
+          await this._handleSessionComplete(payload, from.peerId)
+        } catch (error) {
+          this._handleProtocolError(
+            'session:complete',
+            error,
+            payload,
+            from.peerId,
+          )
+        }
+      },
+    )
+
+    // Validation errors from protocol handler
+    this.protocolHandler.on('validation:error', ({ error, message, from }) => {
+      console.warn(
+        `[MuSig2] Validation error from ${from.peerId}: ${error.message}`,
+      )
+      this.emit('validation:error', { error, message, from })
+    })
+
+    // Deserialization errors from protocol handler
+    this.protocolHandler.on(
+      'deserialization:error',
+      ({ error, message, from }) => {
+        console.warn(
+          `[MuSig2] Deserialization error from ${from.peerId}: ${error.message}`,
+        )
+        this.emit('deserialization:error', { error, message, from })
+      },
+    )
+
+    // Serialization errors from protocol handler
+    this.protocolHandler.on(
+      'serialization:error',
+      ({ error, message, from }) => {
+        console.warn(
+          `[MuSig2] Serialization error from ${from.peerId}: ${error.message}`,
+        )
+        this.emit('serialization:error', { error, message, from })
+      },
+    )
+
+    // Unexpected errors from protocol handler
+    this.protocolHandler.on('unexpected:error', ({ error, message, from }) => {
+      console.error(`[MuSig2] Unexpected error from ${from.peerId}:`, error)
+      this.emit('unexpected:error', { error, message, from })
+    })
+
+    // Security rejected messages from protocol handler
+    this.protocolHandler.on(
+      'security:rejected',
+      ({ message, from, reason }) => {
+        console.warn(
+          `[MuSig2] Security rejected message ${message.type} from ${from.peerId}: ${reason}`,
+        )
+        this.emit('security:rejected', { message, from, reason })
       },
     )
 
@@ -652,30 +762,126 @@ export class MuSig2P2PCoordinator extends EventEmitter {
   }
 
   /**
-   * Handle session announcement from GossipSub
+   * Handle protocol-level errors with proper logging and metrics
    */
-  private _handleSessionAnnouncement(data: Uint8Array): void {
+  private _handleProtocolError = (
+    messageType: string,
+    error: unknown,
+    payload: unknown,
+    fromPeerId: string,
+  ): void => {
+    console.error(
+      `[MuSig2] Error handling ${messageType} from ${fromPeerId}:`,
+      error,
+    )
+
+    // Emit error for monitoring and handling
+    this.emit('protocol:error', {
+      messageType,
+      error,
+      payload,
+      fromPeerId,
+      timestamp: Date.now(),
+    })
+
+    // Update metrics if applicable
+    if (messageType === 'session:abort') {
+      this.metrics.sessionsAborted++
+    }
+  }
+
+  /**
+   * Handle session announcement from GossipSub with security and validation
+   */
+  private _handleSessionAnnouncement = async (
+    data: Uint8Array,
+  ): Promise<void> => {
     try {
       const json = Buffer.from(data).toString('utf8')
       const announcement = JSON.parse(json) as SessionAnnouncement
 
+      // Check if coordinator peer is blocked
+      if (
+        this.securityValidator.isPeerBlocked(announcement.coordinatorPeerId)
+      ) {
+        console.warn(
+          `[MuSig2] Ignoring announcement from blocked peer: ${announcement.coordinatorPeerId}`,
+        )
+        return
+      }
+
+      // Validate session announcement using security validator
+      const isValid = await this.securityValidator.validateResourceAnnouncement(
+        'musig2-session',
+        announcement.sessionId,
+        announcement,
+        announcement.coordinatorPeerId,
+      )
+
+      if (!isValid) {
+        console.warn(
+          `[MuSig2] Security validation failed for announcement: ${announcement.sessionId}`,
+        )
+        this.emit('announcement:rejected', {
+          announcement,
+          reason: 'security_validation_failed',
+        })
+        return
+      }
+
+      // Additional validation using validation layer
+      validateSessionAnnouncementPayload(announcement)
+
       console.log(
-        `[MuSig2] Discovered session: ${announcement.sessionId} from ${announcement.coordinatorPeerId}`,
+        `[MuSig2] Discovered valid session: ${announcement.sessionId} from ${announcement.coordinatorPeerId}`,
       )
 
       this.emit(MuSig2Event.SESSION_DISCOVERED, announcement)
     } catch (error) {
-      console.error('[MuSig2] Error parsing session announcement:', error)
+      console.error('[MuSig2] Error processing session announcement:', error)
+      this.emit('announcement:error', { error, data })
     }
+  }
+
+  /**
+   * Handle session complete message
+   */
+  private _handleSessionComplete = async (
+    payload: SessionCompletePayload,
+    fromPeerId: string,
+  ): Promise<void> => {
+    const p2pSession = this.sessions.get(payload.sessionId)
+    if (!p2pSession) {
+      console.warn(
+        `[MuSig2] Received complete for unknown session: ${payload.sessionId}`,
+      )
+      return
+    }
+
+    console.log(`[MuSig2] Session completed: ${payload.sessionId}`)
+
+    // Update session state
+    p2pSession.session.phase = MuSigSessionPhase.COMPLETE
+    p2pSession.session.updatedAt = Date.now()
+
+    // Update metrics
+    this.metrics.sessionsCompleted++
+
+    // Emit completion event
+    this.emit(MuSig2Event.SESSION_COMPLETE, {
+      sessionId: payload.sessionId,
+      finalSignature: payload.finalSignature,
+      fromPeerId,
+    })
   }
 
   /**
    * Handle nonce share from peer (MuSig2 Round 1)
    */
-  private async _handleNonceShare(
+  private _handleNonceShare = async (
     payload: NonceSharePayload,
     fromPeerId: string,
-  ): Promise<void> {
+  ): Promise<void> => {
     const p2pSession = this.sessions.get(payload.sessionId)
     if (!p2pSession) {
       console.warn(
@@ -685,14 +891,8 @@ export class MuSig2P2PCoordinator extends EventEmitter {
     }
 
     try {
-      // Deserialize nonce points from the ν nonces
-      const publicNonces: Point[] = []
-
-      // Convert all nonces from hex format to Points
-      for (const [, hexValue] of Object.entries(payload.publicNonces)) {
-        const point = PublicKey.fromBuffer(Buffer.from(hexValue, 'hex')).point
-        publicNonces.push(point)
-      }
+      // Deserialize nonce points using serialization layer
+      const publicNonces = deserializePublicNonces(payload.publicNonces)
 
       // Add nonces to session using session manager
       // TODO: Update session manager to support ν ≥ 2 nonces
@@ -746,10 +946,10 @@ export class MuSig2P2PCoordinator extends EventEmitter {
   /**
    * Handle partial signature share from peer
    */
-  private async _handlePartialSigShare(
+  private _handlePartialSigShare = async (
     payload: PartialSigSharePayload,
     fromPeerId: string,
-  ): Promise<void> {
+  ): Promise<void> => {
     const p2pSession = this.sessions.get(payload.sessionId)
     if (!p2pSession) {
       console.warn(
@@ -759,8 +959,8 @@ export class MuSig2P2PCoordinator extends EventEmitter {
     }
 
     try {
-      // Deserialize partial signature
-      const partialSig = new BN(Buffer.from(payload.partialSig, 'hex'))
+      // Deserialize partial signature using serialization layer
+      const partialSig = deserializeBN(payload.partialSig)
 
       // Add partial signature to session using session manager
       this.sessionManager.receivePartialSignature(
@@ -826,10 +1026,10 @@ export class MuSig2P2PCoordinator extends EventEmitter {
   /**
    * Handle session abort from peer
    */
-  private async _handleSessionAbort(
+  private _handleSessionAbort = async (
     payload: SessionAbortPayload,
     fromPeerId: string,
-  ): Promise<void> {
+  ): Promise<void> => {
     const p2pSession = this.sessions.get(payload.sessionId)
     if (!p2pSession) {
       return
@@ -852,7 +1052,7 @@ export class MuSig2P2PCoordinator extends EventEmitter {
   /**
    * Handle peer disconnection
    */
-  private _handlePeerDisconnected(peerId: string): void {
+  private _handlePeerDisconnected = (peerId: string): void => {
     // Find sessions with this peer
     for (const [sessionId, p2pSession] of this.sessions) {
       if (p2pSession.participants.has(peerId)) {
@@ -881,12 +1081,18 @@ export class MuSig2P2PCoordinator extends EventEmitter {
   // ============================================================================
 
   /**
-   * Broadcast message to all session participants
+   * Send message to participants with validation and serialization integration
    */
   private async _broadcastToSessionParticipants(
     sessionId: string,
     messageType: MuSig2MessageType,
-    payload: unknown,
+    payload:
+      | SessionJoinPayload
+      | SessionJoinAckPayload
+      | NonceSharePayload
+      | PartialSigSharePayload
+      | SessionAbortPayload
+      | SessionCompletePayload,
   ): Promise<void> {
     const p2pSession = this.sessions.get(sessionId)
     if (!p2pSession) {
@@ -896,18 +1102,94 @@ export class MuSig2P2PCoordinator extends EventEmitter {
     // Get all participant peer IDs
     const peerIds = Array.from(p2pSession.participants.keys())
 
-    // Create P2P message
-    const message = this.protocol.createMessage(
-      messageType,
-      payload,
-      this.peerId,
-      { protocol: 'musig2' },
-    )
+    try {
+      // Step 1: Validate payload before serialization
+      const validatedPayload = this._validatePayloadForMessage(
+        messageType,
+        payload,
+      )
 
-    // Send to all participants
-    await this.coordinator.broadcast(message, {
-      includedOnly: peerIds,
-    })
+      // Step 2: Serialize payload using JSON (for now - can be enhanced later)
+      const serializedPayload = JSON.stringify(validatedPayload)
+
+      // Step 3: Create P2P message with serialized payload
+      const message = this.protocol.createMessage(
+        messageType,
+        serializedPayload,
+        this.peerId,
+        { protocol: 'musig2' },
+      )
+
+      // Step 4: Send to all participants
+      await this.coordinator.broadcast(message, {
+        includedOnly: peerIds,
+      })
+
+      console.log(
+        `[MuSig2] Sent ${messageType} to ${peerIds.length} participants for session ${p2pSession.session.sessionId}`,
+      )
+    } catch (error) {
+      console.error(
+        `[MuSig2] Failed to send ${messageType} for session ${p2pSession.session.sessionId}:`,
+        error,
+      )
+      this.emit('send:error', {
+        messageType,
+        sessionId: p2pSession.session.sessionId,
+        error,
+        peerIds,
+      })
+      throw error
+    }
+  }
+
+  /**
+   * Validate payload for specific message type
+   */
+  private _validatePayloadForMessage(
+    messageType: MuSig2MessageType,
+    payload:
+      | SessionJoinPayload
+      | SessionJoinAckPayload
+      | NonceSharePayload
+      | PartialSigSharePayload
+      | SessionAbortPayload
+      | SessionCompletePayload,
+  ):
+    | SessionJoinPayload
+    | SessionJoinAckPayload
+    | NonceSharePayload
+    | PartialSigSharePayload
+    | SessionAbortPayload
+    | SessionCompletePayload {
+    switch (messageType) {
+      case MuSig2MessageType.SESSION_JOIN:
+        validateSessionJoinPayload(payload)
+        return payload
+
+      case MuSig2MessageType.SESSION_JOIN_ACK:
+        validateSessionJoinAckPayload(payload)
+        return payload
+
+      case MuSig2MessageType.NONCE_SHARE:
+        validateNonceSharePayload(payload)
+        return payload
+
+      case MuSig2MessageType.PARTIAL_SIG_SHARE:
+        validatePartialSigSharePayload(payload)
+        return payload
+
+      case MuSig2MessageType.SESSION_ABORT:
+        validateSessionAbortPayload(payload)
+        return payload
+
+      case MuSig2MessageType.SESSION_COMPLETE:
+        validateSessionCompletePayload(payload)
+        return payload
+
+      default:
+        throw new Error(`Unknown message type: ${messageType}`)
+    }
   }
 
   /**
@@ -1167,6 +1449,71 @@ export class MuSig2P2PCoordinator extends EventEmitter {
   }
 
   /**
+   * Get comprehensive validation and serialization status
+   */
+  getValidationStatus() {
+    return {
+      validation: {
+        enabled: true,
+        layer: 'comprehensive',
+        fieldSafety: 'type-safe',
+        errorHandling: 'enhanced',
+      },
+      serialization: {
+        enabled: true,
+        format: 'network-safe',
+        compression: 'optional',
+        errorHandling: 'enhanced',
+      },
+      protocol: {
+        validationEnabled: true,
+        errorHandlingEnabled: true,
+        securityChecksEnabled: true,
+      },
+      security: this.securityValidator.getSecurityStatus(),
+      metrics: this.metrics,
+    }
+  }
+
+  /**
+   * Get security status from the security validator (Phase 5)
+   */
+  getSecurityStatus() {
+    return this.securityValidator.getSecurityStatus()
+  }
+
+  /**
+   * Check if a peer is blocked by the security validator (Phase 5)
+   */
+  isPeerBlocked(peerId: string): boolean {
+    return this.securityValidator.isPeerBlocked(peerId)
+  }
+
+  /**
+   * Unblock a peer (Phase 5)
+   */
+  unblockPeer(peerId: string): boolean {
+    return this.securityValidator.unblockPeer(peerId)
+  }
+
+  /**
+   * Get session metrics and status
+   */
+  getSessionMetrics() {
+    return {
+      ...this.metrics,
+      activeSessions: this.sessions.size,
+      usedNonces: this.usedNonces.size,
+      validation: {
+        enabled: true,
+        errorHandlingEnabled: true,
+        securityChecksEnabled: true,
+      },
+      security: this.securityValidator.getSecurityStatus(),
+    }
+  }
+
+  /**
    * Get coordinator metrics
    */
   getMetrics() {
@@ -1174,6 +1521,7 @@ export class MuSig2P2PCoordinator extends EventEmitter {
       ...this.metrics,
       activeSessions: this.sessions.size,
       totalUsedNonces: this.usedNonces.size,
+      validationStatus: this.getValidationStatus(),
     }
   }
 

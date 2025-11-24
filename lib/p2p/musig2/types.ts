@@ -227,6 +227,28 @@ export interface MuSig2P2PConfig {
   /** Enable coordinator election */
   enableCoordinatorElection?: boolean
 
+  // ============================================================================
+  // Security Validation Limits (Phase 5)
+  // ============================================================================
+
+  /** Maximum message size in bytes (DoS protection) */
+  maxMessageSize?: number
+
+  /** Maximum timestamp skew in milliseconds */
+  maxTimestampSkew?: number
+
+  /** Maximum invalid messages per peer before blocking */
+  maxInvalidMessagesPerPeer?: number
+
+  /** Maximum nonce count per session (ν ≥ 2, but reasonable upper limit) */
+  maxNonceCount?: number
+
+  /** Enable validation-based security checks */
+  enableValidationSecurity?: boolean
+
+  /** Track validation violations for reputation */
+  trackValidationViolations?: boolean
+
   /** Election method (lexicographic, hash-based, first-signer, last-signer) */
   electionMethod?:
     | 'lexicographic'
@@ -256,6 +278,14 @@ export const DEFAULT_MUSIG2_P2P_CONFIG: Required<MuSig2P2PConfig> = {
   electionMethod: 'lexicographic',
   enableCoordinatorFailover: true,
   broadcastTimeout: 5 * 60 * 1000, // 5 minutes
+
+  // Security Validation Limits (Phase 5)
+  maxMessageSize: 100_000, // 100KB - DoS protection
+  maxTimestampSkew: 5 * 60 * 1000, // 5 minutes
+  maxInvalidMessagesPerPeer: 10, // Block peer after 10 invalid messages
+  maxNonceCount: 10, // ν ≥ 2, but reasonable upper limit
+  enableValidationSecurity: true,
+  trackValidationViolations: true,
 }
 
 // ============================================================================

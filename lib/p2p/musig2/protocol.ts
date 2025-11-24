@@ -21,12 +21,29 @@ import {
   type SessionCompletePayload,
 } from './types.js'
 import { EventEmitter } from 'events'
+import {
+  validateMessageStructure,
+  validateSessionJoinPayload,
+  validateSessionJoinAckPayload,
+  validateNonceSharePayload,
+  validatePartialSigSharePayload,
+  validateSessionAbortPayload,
+  validateSessionCompletePayload,
+} from './validation.js'
+import {
+  ValidationError,
+  DeserializationError,
+  SerializationError,
+  ErrorCode,
+} from './errors.js'
+import type { MuSig2SecurityValidator } from './security.js'
 
 /**
  * MuSig2 Protocol Handler
  *
  * Implements IProtocolHandler for MuSig2-specific messages
  * Routes messages to appropriate event handlers
+ * Integrates with security validator for message validation
  */
 export class MuSig2ProtocolHandler
   extends EventEmitter
@@ -35,59 +52,191 @@ export class MuSig2ProtocolHandler
   readonly protocolName = 'musig2'
   readonly protocolId = '/lotus/musig2/1.0.0'
 
+  // Security validator reference (set by coordinator)
+  private securityValidator?: MuSig2SecurityValidator
+
   /**
-   * Handle incoming MuSig2 message
+   * Set the security validator for message validation
+   */
+  setSecurityValidator(validator: MuSig2SecurityValidator): void {
+    this.securityValidator = validator
+  }
+
+  /**
+   * Handle incoming MuSig2 message with security and validation integration
    */
   async handleMessage(message: P2PMessage, from: PeerInfo): Promise<void> {
-    // Validate message has protocol field
-    if (message.protocol !== this.protocolName) {
-      console.warn(
-        `[MuSig2Protocol] Ignoring message with wrong protocol: ${message.protocol}`,
-      )
-      return
-    }
+    try {
+      // Step 1: Basic protocol validation
+      if (message.protocol !== this.protocolName) {
+        console.warn(
+          `[MuSig2Protocol] Ignoring message with wrong protocol: ${message.protocol}`,
+        )
+        return
+      }
 
-    // Route based on message type
+      // Step 2: Security validation (if validator is set)
+      if (this.securityValidator) {
+        const isSecure = await this.securityValidator.validateMessage(
+          message,
+          from,
+        )
+        if (!isSecure) {
+          console.warn(
+            `[MuSig2Protocol] Security validation failed for ${message.type} from ${from.peerId}`,
+          )
+          this.emit('security:rejected', {
+            message,
+            from,
+            reason: 'security_validation_failed',
+          })
+          return
+        }
+      }
+
+      // Step 3: Validate message structure (additional validation checks)
+      validateMessageStructure(message)
+
+      // Step 4: Route and validate payload based on message type
+      const validatedPayload = this._validateAndRouteMessage(message, from)
+
+      // Step 5: Emit events with validated payloads
+      this._emitValidatedMessage(
+        message.type as MuSig2MessageType,
+        validatedPayload,
+        from,
+      )
+    } catch (error) {
+      // Handle validation and security errors
+      this._handleMessageError(error, message, from)
+    }
+  }
+
+  /**
+   * Validate message payload and route to appropriate handler
+   */
+  private _validateAndRouteMessage(
+    message: P2PMessage,
+    from: PeerInfo,
+  ):
+    | SessionJoinPayload
+    | SessionJoinAckPayload
+    | NonceSharePayload
+    | PartialSigSharePayload
+    | SessionAbortPayload
+    | SessionCompletePayload {
     switch (message.type) {
       case MuSig2MessageType.SESSION_JOIN:
-        this.emit('session:join', message.payload as SessionJoinPayload, from)
+        validateSessionJoinPayload(message.payload)
+        return message.payload as SessionJoinPayload
+
+      case MuSig2MessageType.SESSION_JOIN_ACK:
+        validateSessionJoinAckPayload(message.payload)
+        return message.payload as SessionJoinAckPayload
+
+      case MuSig2MessageType.NONCE_SHARE:
+        validateNonceSharePayload(message.payload)
+        return message.payload as NonceSharePayload
+
+      case MuSig2MessageType.PARTIAL_SIG_SHARE:
+        validatePartialSigSharePayload(message.payload)
+        return message.payload as PartialSigSharePayload
+
+      case MuSig2MessageType.SESSION_ABORT:
+        validateSessionAbortPayload(message.payload)
+        return message.payload as SessionAbortPayload
+
+      case MuSig2MessageType.SESSION_COMPLETE:
+        validateSessionCompletePayload(message.payload)
+        return message.payload as SessionCompletePayload
+
+      default:
+        throw new ValidationError(
+          ErrorCode.INVALID_PAYLOAD,
+          `Unknown message type: ${message.type}`,
+        )
+    }
+  }
+
+  /**
+   * Emit validated message events
+   */
+  private _emitValidatedMessage(
+    type: MuSig2MessageType,
+    payload:
+      | SessionJoinPayload
+      | SessionJoinAckPayload
+      | NonceSharePayload
+      | PartialSigSharePayload
+      | SessionAbortPayload
+      | SessionCompletePayload,
+    from: PeerInfo,
+  ): void {
+    switch (type) {
+      case MuSig2MessageType.SESSION_JOIN:
+        this.emit('session:join', payload as SessionJoinPayload, from)
         break
 
       case MuSig2MessageType.SESSION_JOIN_ACK:
-        this.emit(
-          'session:join-ack',
-          message.payload as SessionJoinAckPayload,
-          from,
-        )
+        this.emit('session:join-ack', payload as SessionJoinAckPayload, from)
         break
 
       case MuSig2MessageType.NONCE_SHARE:
-        this.emit('nonce:share', message.payload as NonceSharePayload, from)
+        this.emit('nonce:share', payload as NonceSharePayload, from)
         break
 
       case MuSig2MessageType.PARTIAL_SIG_SHARE:
-        this.emit(
-          'partial-sig:share',
-          message.payload as PartialSigSharePayload,
-          from,
-        )
+        this.emit('partial-sig:share', payload as PartialSigSharePayload, from)
         break
 
       case MuSig2MessageType.SESSION_ABORT:
-        this.emit('session:abort', message.payload as SessionAbortPayload, from)
+        this.emit('session:abort', payload as SessionAbortPayload, from)
         break
 
       case MuSig2MessageType.SESSION_COMPLETE:
-        this.emit(
-          'session:complete',
-          message.payload as SessionCompletePayload,
-          from,
-        )
+        this.emit('session:complete', payload as SessionCompletePayload, from)
         break
-
-      default:
-        console.warn(`[MuSig2Protocol] Unknown message type: ${message.type}`)
     }
+  }
+
+  /**
+   * Handle message validation and security errors
+   */
+  private _handleMessageError(
+    error: unknown,
+    message: P2PMessage,
+    from: PeerInfo,
+  ): void {
+    if (error instanceof ValidationError) {
+      console.warn(
+        `[MuSig2Protocol] Validation failed for ${message.type} from ${from.peerId}: ${error.message}`,
+      )
+      this.emit('validation:error', { error, message, from })
+      return
+    }
+
+    if (error instanceof DeserializationError) {
+      console.warn(
+        `[MuSig2Protocol] Deserialization failed for ${message.type} from ${from.peerId}: ${error.message}`,
+      )
+      this.emit('deserialization:error', { error, message, from })
+      return
+    }
+
+    if (error instanceof SerializationError) {
+      console.warn(
+        `[MuSig2Protocol] Serialization error for ${message.type} from ${from.peerId}: ${error.message}`,
+      )
+      this.emit('serialization:error', { error, message, from })
+      return
+    }
+
+    // Unknown error
+    console.error(
+      `[MuSig2Protocol] Unexpected error processing ${message.type} from ${from.peerId}:`,
+      error,
+    )
+    this.emit('unexpected:error', { error, message, from })
   }
 
   /**
@@ -115,48 +264,64 @@ export class MuSig2ProtocolHandler
   }
 
   /**
-   * Validate message payload structure
+   * Enhanced message payload validation using comprehensive validation layer
+   * @deprecated Use validateMessageStructure and specific payload validators instead
    */
   validateMessagePayload(type: MuSig2MessageType, payload: unknown): boolean {
-    if (!payload || typeof payload !== 'object') {
+    try {
+      // Use the new comprehensive validation system
+      switch (type) {
+        case MuSig2MessageType.SESSION_JOIN:
+          validateSessionJoinPayload(payload)
+          break
+
+        case MuSig2MessageType.SESSION_JOIN_ACK:
+          validateSessionJoinAckPayload(payload)
+          break
+
+        case MuSig2MessageType.NONCE_SHARE:
+          validateNonceSharePayload(payload)
+          break
+
+        case MuSig2MessageType.PARTIAL_SIG_SHARE:
+          validatePartialSigSharePayload(payload)
+          break
+
+        case MuSig2MessageType.SESSION_ABORT:
+          validateSessionAbortPayload(payload)
+          break
+
+        case MuSig2MessageType.SESSION_COMPLETE:
+          validateSessionCompletePayload(payload)
+          break
+
+        default:
+          return false
+      }
+
+      return true
+    } catch (error) {
+      // Validation failed
       return false
     }
+  }
 
-    const data = payload as Record<string, unknown>
-
-    switch (type) {
-      case MuSig2MessageType.SESSION_JOIN:
-        return !!(data.sessionId && data.signerPublicKey && data.timestamp)
-
-      case MuSig2MessageType.SESSION_JOIN_ACK:
-        return !!(
-          data.sessionId &&
-          typeof data.accepted === 'boolean' &&
-          data.timestamp
-        )
-
-      case MuSig2MessageType.NONCE_SHARE:
-        return !!(
-          data.sessionId &&
-          typeof data.signerIndex === 'number' &&
-          data.publicNonces &&
-          data.timestamp
-        )
-
-      case MuSig2MessageType.PARTIAL_SIG_SHARE:
-        return !!(
-          data.sessionId &&
-          typeof data.signerIndex === 'number' &&
-          data.partialSig &&
-          data.timestamp
-        )
-
-      case MuSig2MessageType.SESSION_ABORT:
-      case MuSig2MessageType.SESSION_COMPLETE:
-        return !!(data.sessionId && data.timestamp)
-
-      default:
-        return false
+  /**
+   * Get validation info for debugging and monitoring
+   */
+  getValidationInfo() {
+    return {
+      supportedMessageTypes: [
+        MuSig2MessageType.SESSION_JOIN,
+        MuSig2MessageType.SESSION_JOIN_ACK,
+        MuSig2MessageType.NONCE_SHARE,
+        MuSig2MessageType.PARTIAL_SIG_SHARE,
+        MuSig2MessageType.SESSION_ABORT,
+        MuSig2MessageType.SESSION_COMPLETE,
+      ],
+      validationEnabled: true,
+      errorHandlingEnabled: true,
+      securityChecksEnabled: true,
     }
   }
 }
