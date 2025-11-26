@@ -7,8 +7,23 @@
 /**
  * MuSig2 P2P Validation Utilities
  *
- * Comprehensive validation for MuSig2 message payloads and security checks
- * Supports all 8 message types in the new architecture with MuSig2 ν ≥ 2 compliance
+ * Comprehensive validation for MuSig2 message payloads and security checks.
+ * Supports all 8 message types in the new architecture with MuSig2 ν ≥ 2 compliance.
+ *
+ * ARCHITECTURE:
+ * This module provides PURE VALIDATOR FUNCTIONS with no side effects.
+ * These validators are used by:
+ * - protocol.ts: For ingress payload validation (single validation point)
+ * - coordinator.ts: For egress payload validation (before sending)
+ *
+ * Validators throw ValidationError on failure, allowing callers to handle
+ * errors appropriately (reject message, block peer, etc.).
+ *
+ * TODO: Add the following validators:
+ * - validateSessionAnnouncementSignature(): Verify coordinator signature on announcement
+ * - validateNonceProofOfKnowledge(): Verify DLEQ proof for nonce (if implemented)
+ * - validatePartialSigProof(): Verify partial signature is valid for the session
+ * - validateAggregatedSignature(): Verify final signature before broadcasting
  */
 
 import { ValidationError, ErrorCode, createValidationError } from './errors.js'
@@ -23,13 +38,16 @@ import type {
 } from './types.js'
 
 // ============================================================================
-// Type-Safe Field Name Utilities
+// Local constants
 // ============================================================================
 
-/**
- * Type-safe field name extractor using keyof operator
- */
-type FieldNames<T> = keyof T
+const MAX_MESSAGE_SIZE = 100_000 // 100KB - DoS protection
+const MAX_TIMESTAMP_SKEW = 5 * 60 * 1000 // 5 minutes
+const MAX_INVALID_MESSAGES = 10 // Block peer after 10 invalid messages
+
+// ============================================================================
+// Type-Safe Field Name Utilities
+// ============================================================================
 
 /**
  * Helper to get field names as strings with full type safety
@@ -604,8 +622,8 @@ export function getValidationInfo(): {
       'sessionAbort',
       'sessionComplete',
     ],
-    maxMessageSize: 100_000, // 100KB
-    maxTimestampSkew: 300_000, // 5 minutes
+    maxMessageSize: MAX_MESSAGE_SIZE,
+    maxTimestampSkew: MAX_TIMESTAMP_SKEW,
     nonceRequirements: { min: 2, max: 10 }, // ν ≥ 2, reasonable upper limit
   }
 }

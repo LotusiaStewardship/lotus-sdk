@@ -1,8 +1,29 @@
 /**
  * MuSig2 P2P Coordinator
  *
- * Coordinates MuSig2 multi-signature sessions over P2P networks
- * Uses GossipSub for session discovery and direct P2P for coordination
+ * Coordinates MuSig2 multi-signature sessions over P2P networks.
+ * Uses GossipSub for session discovery and direct P2P for coordination.
+ *
+ * ARCHITECTURE:
+ * This module handles SESSION MANAGEMENT and BUSINESS LOGIC:
+ * - Session creation, joining, and lifecycle management
+ * - Nonce exchange coordination (MuSig2 Round 1)
+ * - Partial signature exchange (MuSig2 Round 2)
+ * - Coordinator election and failover
+ * - EGRESS payload validation (before sending)
+ *
+ * IMPORTANT: This module does NOT re-validate ingress payloads.
+ * Ingress validation is handled by protocol.ts before events are emitted.
+ * Event handlers receive pre-validated payloads.
+ *
+ * Validation Flow:
+ * 1. security.ts: Security constraints (DoS, blocking, timestamp)
+ * 2. protocol.ts: Payload structure validation (single ingress point)
+ * 3. coordinator.ts: Business logic handlers (no re-validation)
+ *
+ * Egress Flow:
+ * 1. coordinator.ts: _validatePayloadForMessage() - Validates before sending
+ * 2. coordinator.ts: _broadcastToSessionParticipants() - Sends validated payload
  */
 
 import { EventEmitter } from 'events'
@@ -51,7 +72,6 @@ import {
   serializeMessage,
   deserializeMessage,
   serializePoint,
-  deserializePoint,
   serializePublicNonces,
   deserializePublicNonces,
   serializeBN,
@@ -64,8 +84,9 @@ import {
   deserializeSignature,
   type SerializedSignature,
 } from './serialization.js'
+// NOTE: These validators are used for EGRESS validation only.
+// Ingress validation is handled by protocol.ts before events are emitted.
 import {
-  validateMessageStructure,
   validateSessionJoinPayload,
   validateSessionJoinAckPayload,
   validateNonceSharePayload,
@@ -377,6 +398,118 @@ export class MuSig2P2PCoordinator extends EventEmitter {
   }
 
   /**
+   * Join an existing MuSig2 session discovered via announcement
+   *
+   * This method is called by participants who discover a session via GossipSub
+   * and want to join it. It creates a local session state and sends a join
+   * request to the coordinator.
+   *
+   * @param announcement - Session announcement received from GossipSub
+   * @param myPrivateKey - This signer's private key
+   * @returns Session ID if join request was sent successfully
+   */
+  async joinSession(
+    announcement: SessionAnnouncement,
+    myPrivateKey: PrivateKey,
+  ): Promise<string> {
+    const sessionId = announcement.sessionId
+
+    // Check if session already exists locally
+    if (this.sessions.has(sessionId)) {
+      throw new Error(`Session already exists locally: ${sessionId}`)
+    }
+
+    // Check max concurrent sessions
+    if (this.sessions.size >= this.config.maxConcurrentSessions) {
+      throw new Error(
+        `Maximum concurrent sessions (${this.config.maxConcurrentSessions}) reached`,
+      )
+    }
+
+    // Validate our public key is in the signers list
+    const myPubKey = myPrivateKey.publicKey
+    const myPubKeyHex = serializePublicKey(myPubKey)
+
+    if (!announcement.signers) {
+      throw new Error('Session announcement does not include signers list')
+    }
+
+    const myIndex = announcement.signers.findIndex(pk => pk === myPubKeyHex)
+    if (myIndex === -1) {
+      throw new Error('My public key is not in the signers list')
+    }
+
+    // Deserialize signers from announcement
+    const signers = deserializePublicKeys(announcement.signers)
+
+    // Deserialize message hash
+    const messageHash = deserializeMessage(announcement.messageHash)
+
+    // Create local session using session manager
+    const session = this.sessionManager.createSession(
+      signers,
+      myPrivateKey,
+      messageHash,
+      announcement.metadata,
+    )
+
+    // Override session ID to match announcement
+    session.sessionId = sessionId
+
+    // Create P2P session wrapper (we are NOT the coordinator)
+    const p2pSession: MuSig2P2PSession = {
+      session,
+      coordinatorPeerId: announcement.coordinatorPeerId,
+      participants: new Map(),
+      isCoordinator: false,
+      announcement,
+      createdAt: Date.now(),
+      lastActivity: Date.now(),
+    }
+
+    // Store session
+    this.sessions.set(sessionId, p2pSession)
+
+    // Send join request to coordinator
+    const joinPayload: SessionJoinPayload = {
+      sessionId,
+      signerPublicKey: myPubKeyHex,
+      timestamp: Date.now(),
+    }
+
+    try {
+      // Validate payload before sending
+      validateSessionJoinPayload(joinPayload)
+
+      const message = this.protocol.createMessage(
+        MuSig2MessageType.SESSION_JOIN,
+        JSON.stringify(joinPayload),
+        this.peerId,
+        { protocol: 'musig2' },
+      )
+
+      await this.coordinator.sendTo(
+        announcement.coordinatorPeerId,
+        message,
+        this.protocolHandler.protocolId,
+      )
+
+      console.log(
+        `[MuSig2] Sent join request for session ${sessionId} to coordinator ${announcement.coordinatorPeerId}`,
+      )
+
+      // Update metrics
+      this.metrics.sessionsCreated++
+
+      return sessionId
+    } catch (error) {
+      // Remove session on failure
+      this.sessions.delete(sessionId)
+      throw error
+    }
+  }
+
+  /**
    * Get session by ID
    */
   getSession(sessionId: string): MuSig2P2PSession | undefined {
@@ -600,7 +733,10 @@ export class MuSig2P2PCoordinator extends EventEmitter {
   async abortSession(sessionId: string, reason: string): Promise<void> {
     const p2pSession = this.sessions.get(sessionId)
     if (!p2pSession) {
-      throw new Error(`Session not found: ${sessionId}`)
+      console.warn(
+        `[MuSig2] Attempted to abort non-existent session: ${sessionId}`,
+      )
+      return
     }
 
     // Update session state
@@ -645,6 +781,35 @@ export class MuSig2P2PCoordinator extends EventEmitter {
    * Setup protocol event handlers with validation error handling
    */
   private _setupProtocolHandlers(): void {
+    // Session join request received (from participant wanting to join)
+    this.protocolHandler.on(
+      'session:join',
+      async (payload: SessionJoinPayload, from) => {
+        try {
+          await this._handleSessionJoin(payload, from.peerId)
+        } catch (error) {
+          this._handleProtocolError('session:join', error, payload, from.peerId)
+        }
+      },
+    )
+
+    // Session join acknowledgment received (from coordinator)
+    this.protocolHandler.on(
+      'session:join-ack',
+      async (payload: SessionJoinAckPayload, from) => {
+        try {
+          await this._handleSessionJoinAck(payload, from.peerId)
+        } catch (error) {
+          this._handleProtocolError(
+            'session:join-ack',
+            error,
+            payload,
+            from.peerId,
+          )
+        }
+      },
+    )
+
     // Nonce received (MuSig2 Round 1)
     this.protocolHandler.on(
       'nonce:share',
@@ -759,6 +924,18 @@ export class MuSig2P2PCoordinator extends EventEmitter {
     this.protocolHandler.on('peer:disconnected', (peerId: string) => {
       this._handlePeerDisconnected(peerId)
     })
+
+    // Peer connected - forward to coordinator event emitter
+    this.protocolHandler.on('peer:connected', (peerId: string) => {
+      console.log(`[MuSig2] Peer connected: ${peerId}`)
+      this.emit('peer:connected', peerId)
+    })
+
+    // Peer discovered - forward to coordinator event emitter
+    this.protocolHandler.on('peer:discovered', peerInfo => {
+      console.log(`[MuSig2] Peer discovered: ${peerInfo.peerId}`)
+      this.emit('peer:discovered', peerInfo)
+    })
   }
 
   /**
@@ -845,11 +1022,16 @@ export class MuSig2P2PCoordinator extends EventEmitter {
 
   /**
    * Handle session complete message
+   *
+   * ARCHITECTURE NOTE: Payload validation is performed by protocol.ts before
+   * this handler is called. No re-validation needed here.
    */
   private _handleSessionComplete = async (
     payload: SessionCompletePayload,
     fromPeerId: string,
   ): Promise<void> => {
+    // NOTE: Payload already validated by protocol.ts via _validateAndRouteMessage()
+
     const p2pSession = this.sessions.get(payload.sessionId)
     if (!p2pSession) {
       console.warn(
@@ -867,21 +1049,46 @@ export class MuSig2P2PCoordinator extends EventEmitter {
     // Update metrics
     this.metrics.sessionsCompleted++
 
-    // Emit completion event
+    // Deserialize final signature if present
+    let finalSignature: Buffer | undefined
+    if (payload.finalSignature) {
+      try {
+        finalSignature = deserializeSignature(payload.finalSignature)
+      } catch (error) {
+        console.error(
+          `[MuSig2] Failed to deserialize final signature for session ${payload.sessionId}:`,
+          error,
+        )
+        // Still emit event but without signature
+        this.emit(MuSig2Event.SESSION_COMPLETE, {
+          sessionId: payload.sessionId,
+          finalSignature: undefined,
+          fromPeerId,
+        })
+        return
+      }
+    }
+
+    // Emit completion event with deserialized signature
     this.emit(MuSig2Event.SESSION_COMPLETE, {
       sessionId: payload.sessionId,
-      finalSignature: payload.finalSignature,
+      finalSignature,
       fromPeerId,
     })
   }
 
   /**
    * Handle nonce share from peer (MuSig2 Round 1)
+   *
+   * ARCHITECTURE NOTE: Payload validation is performed by protocol.ts before
+   * this handler is called. No re-validation needed here.
    */
   private _handleNonceShare = async (
     payload: NonceSharePayload,
     fromPeerId: string,
   ): Promise<void> => {
+    // NOTE: Payload already validated by protocol.ts via _validateAndRouteMessage()
+
     const p2pSession = this.sessions.get(payload.sessionId)
     if (!p2pSession) {
       console.warn(
@@ -945,11 +1152,16 @@ export class MuSig2P2PCoordinator extends EventEmitter {
 
   /**
    * Handle partial signature share from peer
+   *
+   * ARCHITECTURE NOTE: Payload validation is performed by protocol.ts before
+   * this handler is called. No re-validation needed here.
    */
   private _handlePartialSigShare = async (
     payload: PartialSigSharePayload,
     fromPeerId: string,
   ): Promise<void> => {
+    // NOTE: Payload already validated by protocol.ts via _validateAndRouteMessage()
+
     const p2pSession = this.sessions.get(payload.sessionId)
     if (!p2pSession) {
       console.warn(
@@ -1025,11 +1237,16 @@ export class MuSig2P2PCoordinator extends EventEmitter {
 
   /**
    * Handle session abort from peer
+   *
+   * ARCHITECTURE NOTE: Payload validation is performed by protocol.ts before
+   * this handler is called. No re-validation needed here.
    */
   private _handleSessionAbort = async (
     payload: SessionAbortPayload,
     fromPeerId: string,
   ): Promise<void> => {
+    // NOTE: Payload already validated by protocol.ts via _validateAndRouteMessage()
+
     const p2pSession = this.sessions.get(payload.sessionId)
     if (!p2pSession) {
       return
@@ -1047,6 +1264,234 @@ export class MuSig2P2PCoordinator extends EventEmitter {
 
     // Remove session
     this.sessions.delete(payload.sessionId)
+  }
+
+  /**
+   * Handle session join request from participant (coordinator receives this)
+   *
+   * ARCHITECTURE NOTE: Payload validation is performed by protocol.ts before
+   * this handler is called. No re-validation needed here.
+   */
+  private _handleSessionJoin = async (
+    payload: SessionJoinPayload,
+    fromPeerId: string,
+  ): Promise<void> => {
+    // NOTE: Payload already validated by protocol.ts via _validateAndRouteMessage()
+    // If we reach this handler, the payload structure is guaranteed to be valid.
+
+    const p2pSession = this.sessions.get(payload.sessionId)
+
+    // Session not found - reject
+    if (!p2pSession) {
+      console.warn(
+        `[MuSig2] Received join request for unknown session: ${payload.sessionId}`,
+      )
+      await this._sendJoinAck(fromPeerId, {
+        sessionId: payload.sessionId,
+        accepted: false,
+        reason: 'Session not found',
+        timestamp: Date.now(),
+      })
+      return
+    }
+
+    // Only coordinator can accept join requests
+    if (!p2pSession.isCoordinator) {
+      console.warn(
+        `[MuSig2] Received join request but not coordinator for session: ${payload.sessionId}`,
+      )
+      await this._sendJoinAck(fromPeerId, {
+        sessionId: payload.sessionId,
+        accepted: false,
+        reason: 'Not the coordinator',
+        timestamp: Date.now(),
+      })
+      return
+    }
+
+    // Validate the signer public key
+    let signerPubKey: PublicKey
+    try {
+      signerPubKey = deserializePublicKey(payload.signerPublicKey)
+    } catch (error) {
+      console.warn(`[MuSig2] Invalid signer public key in join request`)
+      await this._sendJoinAck(fromPeerId, {
+        sessionId: payload.sessionId,
+        accepted: false,
+        reason: 'Invalid public key format',
+        timestamp: Date.now(),
+      })
+      return
+    }
+
+    // Find signer index in session
+    const signerIndex = p2pSession.session.signers.findIndex(pk =>
+      pk.toBuffer().equals(signerPubKey.toBuffer()),
+    )
+
+    if (signerIndex === -1) {
+      console.warn(
+        `[MuSig2] Public key not in signers list for session: ${payload.sessionId}`,
+      )
+      await this._sendJoinAck(fromPeerId, {
+        sessionId: payload.sessionId,
+        accepted: false,
+        reason: 'Public key not in signers list',
+        timestamp: Date.now(),
+      })
+      return
+    }
+
+    // Check if participant already joined
+    if (p2pSession.participants.has(fromPeerId)) {
+      console.warn(
+        `[MuSig2] Peer ${fromPeerId} already joined session: ${payload.sessionId}`,
+      )
+      await this._sendJoinAck(fromPeerId, {
+        sessionId: payload.sessionId,
+        accepted: false,
+        reason: 'Already joined',
+        timestamp: Date.now(),
+      })
+      return
+    }
+
+    // Accept the join request - add participant
+    const participant: SessionParticipant = {
+      peerId: fromPeerId,
+      signerIndex,
+      publicKey: signerPubKey,
+      hasNonce: false,
+      hasPartialSig: false,
+      lastSeen: Date.now(),
+    }
+
+    p2pSession.participants.set(fromPeerId, participant)
+    p2pSession.lastActivity = Date.now()
+
+    console.log(
+      `[MuSig2] Accepted join request from ${fromPeerId} for session ${payload.sessionId} (index ${signerIndex})`,
+    )
+
+    // Send acceptance
+    await this._sendJoinAck(fromPeerId, {
+      sessionId: payload.sessionId,
+      accepted: true,
+      signerIndex,
+      timestamp: Date.now(),
+    })
+
+    // Emit participant joined event
+    this.emit(MuSig2Event.PARTICIPANT_JOINED, payload.sessionId, participant)
+
+    // Check if all participants joined (excluding ourselves)
+    if (
+      p2pSession.participants.size ===
+      p2pSession.session.signers.length - 1
+    ) {
+      console.log(
+        `[MuSig2] All participants joined session ${payload.sessionId}`,
+      )
+      this.emit(MuSig2Event.SESSION_READY, payload.sessionId)
+    }
+  }
+
+  /**
+   * Handle session join acknowledgment from coordinator (participant receives this)
+   *
+   * ARCHITECTURE NOTE: Payload validation is performed by protocol.ts before
+   * this handler is called. No re-validation needed here.
+   */
+  private _handleSessionJoinAck = async (
+    payload: SessionJoinAckPayload,
+    fromPeerId: string,
+  ): Promise<void> => {
+    // NOTE: Payload already validated by protocol.ts via _validateAndRouteMessage()
+
+    const p2pSession = this.sessions.get(payload.sessionId)
+
+    if (!p2pSession) {
+      console.warn(
+        `[MuSig2] Received join ack for unknown session: ${payload.sessionId}`,
+      )
+      return
+    }
+
+    if (payload.accepted) {
+      console.log(
+        `[MuSig2] Join accepted for session ${payload.sessionId}, signer index: ${payload.signerIndex}`,
+      )
+
+      // Update our session state with the assigned signer index
+      if (payload.signerIndex !== undefined) {
+        p2pSession.session.myIndex = payload.signerIndex
+      }
+
+      // Mark coordinator as a participant (for tracking)
+      if (!p2pSession.participants.has(fromPeerId)) {
+        const coordinatorPubKey =
+          p2pSession.session.signers[p2pSession.session.coordinatorIndex ?? 0]
+        p2pSession.participants.set(fromPeerId, {
+          peerId: fromPeerId,
+          signerIndex: p2pSession.session.coordinatorIndex ?? 0,
+          publicKey: coordinatorPubKey,
+          hasNonce: false,
+          hasPartialSig: false,
+          lastSeen: Date.now(),
+        })
+      }
+
+      p2pSession.lastActivity = Date.now()
+
+      // Emit join accepted event
+      this.emit('session:join-accepted', {
+        sessionId: payload.sessionId,
+        signerIndex: payload.signerIndex,
+        coordinatorPeerId: fromPeerId,
+      })
+    } else {
+      console.warn(
+        `[MuSig2] Join rejected for session ${payload.sessionId}: ${payload.reason}`,
+      )
+
+      // Emit join rejected event
+      this.emit('session:join-rejected', {
+        sessionId: payload.sessionId,
+        reason: payload.reason,
+        coordinatorPeerId: fromPeerId,
+      })
+
+      // Remove the session since we couldn't join
+      this.sessions.delete(payload.sessionId)
+    }
+  }
+
+  /**
+   * Send join acknowledgment to a peer
+   */
+  private async _sendJoinAck(
+    peerId: string,
+    payload: SessionJoinAckPayload,
+  ): Promise<void> {
+    try {
+      // Validate payload before sending
+      validateSessionJoinAckPayload(payload)
+
+      const message = this.protocol.createMessage(
+        MuSig2MessageType.SESSION_JOIN_ACK,
+        JSON.stringify(payload),
+        this.peerId,
+        { protocol: 'musig2' },
+      )
+
+      await this.coordinator.sendTo(
+        peerId,
+        message,
+        this.protocolHandler.protocolId,
+      )
+    } catch (error) {
+      console.error(`[MuSig2] Failed to send join ack to ${peerId}:`, error)
+    }
   }
 
   /**
@@ -1292,9 +1737,9 @@ export class MuSig2P2PCoordinator extends EventEmitter {
    * Hash nonce for reuse prevention (supports ν ≥ 2 nonces)
    */
   private _hashNonce(publicNonces: Point[]): string {
-    // Concatenate all nonce points for hashing
+    // Concatenate all nonce points for hashing using serialization layer
     const allNonceBytes = publicNonces.map(nonce =>
-      Point.pointToCompressed(nonce),
+      Buffer.from(serializePoint(nonce), 'hex'),
     )
     return Hash.sha256(Buffer.concat(allNonceBytes)).toString('hex')
   }

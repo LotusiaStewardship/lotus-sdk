@@ -75,24 +75,25 @@ export interface SessionAnnouncement {
 // Direct P2P Message Payloads
 // ============================================================================
 
+export interface MuSig2Payload {
+  sessionId: string
+  timestamp: number
+}
+
 /**
  * Join request payload
  */
-export interface SessionJoinPayload {
-  sessionId: string
+export interface SessionJoinPayload extends MuSig2Payload {
   signerPublicKey: string
-  timestamp: number
 }
 
 /**
  * Join acknowledgment payload
  */
-export interface SessionJoinAckPayload {
-  sessionId: string
+export interface SessionJoinAckPayload extends MuSig2Payload {
   accepted: boolean
   signerIndex?: number
   reason?: string
-  timestamp: number
 }
 
 /**
@@ -100,45 +101,37 @@ export interface SessionJoinAckPayload {
  *
  * Each signer sends ν ≥ 2 nonces directly without commitment phase
  */
-export interface NonceSharePayload {
-  sessionId: string
+export interface NonceSharePayload extends MuSig2Payload {
   signerIndex: number
   publicNonces: {
     // ν nonces where ν ≥ 2 (default ν = 4 for security)
     [key: string]: string // "r1", "r2", "r3", "r4" etc.
   }
-  timestamp: number
 }
 
 /**
  * Partial signature share payload
  */
-export interface PartialSigSharePayload {
-  sessionId: string
+export interface PartialSigSharePayload extends MuSig2Payload {
   signerIndex: number
   partialSig: string // BN serialized to hex
-  timestamp: number
 }
 
 /**
  * Session abort payload
  */
-export interface SessionAbortPayload {
-  sessionId: string
+export interface SessionAbortPayload extends MuSig2Payload {
   reason: string
-  timestamp: number
 }
 
 /**
  * Session complete payload
  */
-export interface SessionCompletePayload {
-  sessionId: string
+export interface SessionCompletePayload extends MuSig2Payload {
   finalSignature?: {
     r: string
     s: string
   }
-  timestamp: number
 }
 
 // ============================================================================

@@ -1,7 +1,25 @@
 /**
  * MuSig2 Protocol Handler
  *
- * Handles MuSig2-specific P2P messages and routing
+ * Handles MuSig2-specific P2P messages and routing.
+ *
+ * ARCHITECTURE:
+ * This module is the SINGLE POINT OF INGRESS VALIDATION for MuSig2 messages.
+ *
+ * Validation Flow:
+ * 1. security.ts: validateMessage() - Security constraints only (DoS, blocking, timestamp)
+ * 2. protocol.ts: _validateAndRouteMessage() - Payload structure validation (THIS MODULE)
+ * 3. coordinator.ts: Event handlers - Business logic only (no re-validation)
+ *
+ * Egress Flow:
+ * 1. coordinator.ts: _validatePayloadForMessage() - Validates before sending
+ * 2. coordinator.ts: _broadcastToSessionParticipants() - Sends validated payload
+ *
+ * This separation ensures:
+ * - No double validation on ingress
+ * - Clear separation of concerns
+ * - Security checks happen before payload parsing
+ * - Business logic handlers receive pre-validated payloads
  */
 
 import type {
@@ -37,6 +55,14 @@ import {
   ErrorCode,
 } from './errors.js'
 import type { MuSig2SecurityValidator } from './security.js'
+
+type Message =
+  | SessionJoinPayload
+  | SessionJoinAckPayload
+  | NonceSharePayload
+  | PartialSigSharePayload
+  | SessionAbortPayload
+  | SessionCompletePayload
 
 /**
  * MuSig2 Protocol Handler
@@ -98,7 +124,7 @@ export class MuSig2ProtocolHandler
       validateMessageStructure(message)
 
       // Step 4: Route and validate payload based on message type
-      const validatedPayload = this._validateAndRouteMessage(message, from)
+      const validatedPayload = this._validateAndRouteMessage(message)
 
       // Step 5: Emit events with validated payloads
       this._emitValidatedMessage(
@@ -115,16 +141,7 @@ export class MuSig2ProtocolHandler
   /**
    * Validate message payload and route to appropriate handler
    */
-  private _validateAndRouteMessage(
-    message: P2PMessage,
-    from: PeerInfo,
-  ):
-    | SessionJoinPayload
-    | SessionJoinAckPayload
-    | NonceSharePayload
-    | PartialSigSharePayload
-    | SessionAbortPayload
-    | SessionCompletePayload {
+  private _validateAndRouteMessage(message: P2PMessage): Message {
     switch (message.type) {
       case MuSig2MessageType.SESSION_JOIN:
         validateSessionJoinPayload(message.payload)
@@ -163,13 +180,7 @@ export class MuSig2ProtocolHandler
    */
   private _emitValidatedMessage(
     type: MuSig2MessageType,
-    payload:
-      | SessionJoinPayload
-      | SessionJoinAckPayload
-      | NonceSharePayload
-      | PartialSigSharePayload
-      | SessionAbortPayload
-      | SessionCompletePayload,
+    payload: Message,
     from: PeerInfo,
   ): void {
     switch (type) {

@@ -1,25 +1,33 @@
 /**
- * MuSig2 Security and Validation
+ * MuSig2 Security Validator
  *
- * Protocol-specific security validation for MuSig2 sessions
- * Enhanced with validation layer integration (Phase 5)
+ * Protocol-specific SECURITY CONSTRAINTS for MuSig2 sessions.
+ *
+ * ARCHITECTURE:
+ * This module handles SECURITY POLICY ENFORCEMENT only:
+ * - Peer blocking (after too many violations)
+ * - DoS protection (message size limits)
+ * - Timestamp skew validation
+ * - Rate limiting (TODO)
+ * - Session announcement validation
+ *
+ * IMPORTANT: This module does NOT perform payload structure validation.
+ * Payload validation is handled by protocol.ts using validators from validation.ts.
+ * This separation prevents double validation and maintains clear concerns:
+ *
+ * - security.ts: Security constraints (this module)
+ * - protocol.ts: Ingress payload validation (single point)
+ * - validation.ts: Pure validator functions
+ * - coordinator.ts: Business logic + egress validation
  */
 
 import type { IProtocolValidator, P2PMessage, PeerInfo } from '../types.js'
-import type { SessionAnnouncement } from './types.js'
-import { MuSig2MessageType, DEFAULT_MUSIG2_P2P_CONFIG } from './types.js'
+import type { MuSig2Payload, SessionAnnouncement } from './types.js'
+import { DEFAULT_MUSIG2_P2P_CONFIG } from './types.js'
 import { PublicKey } from '../../bitcore/publickey.js'
-import {
-  validateMessageStructure,
-  validateSessionJoinPayload,
-  validateSessionJoinAckPayload,
-  validateNonceSharePayload,
-  validatePartialSigSharePayload,
-  validateSessionAbortPayload,
-  validateSessionCompletePayload,
-  validateSessionAnnouncementPayload,
-} from './validation.js'
-import { ValidationError, SecurityError, ErrorCode } from './errors.js'
+// NOTE: Validation imports removed - payload structure validation is now handled
+// exclusively by protocol.ts to avoid double validation. This module only handles
+// security constraints (DoS protection, peer blocking, rate limiting).
 
 /**
  * MuSig2 security configuration
@@ -198,8 +206,18 @@ export class MuSig2SecurityValidator implements IProtocolValidator {
   }
 
   /**
-   * Validate MuSig2 message before processing
-   * Enhanced with validation layer integration (Phase 5)
+   * Validate MuSig2 message security constraints before processing
+   *
+   * ARCHITECTURE NOTE:
+   * This method validates SECURITY CONSTRAINTS ONLY (DoS protection, peer blocking,
+   * timestamp skew). Payload structure validation is handled by protocol.ts to avoid
+   * double validation. The validation layer (validation.ts) provides the actual
+   * payload validators that protocol.ts uses.
+   *
+   * Flow:
+   * 1. security.ts: validateMessage() - Security constraints (this method)
+   * 2. protocol.ts: _validateAndRouteMessage() - Payload structure validation
+   * 3. coordinator.ts: Business logic (no re-validation needed)
    */
   async validateMessage(message: P2PMessage, from: PeerInfo): Promise<boolean> {
     // Check if peer is blocked due to too many violations
@@ -218,23 +236,23 @@ export class MuSig2SecurityValidator implements IProtocolValidator {
       return false
     }
 
-    // Basic validation
+    // Basic payload existence check (not structure validation)
     if (!message.payload || typeof message.payload !== 'object') {
       console.warn('[MuSig2Security] Invalid message payload')
       this._trackValidationViolation(from.peerId, 'invalid_payload')
       return false
     }
 
-    const payload = message.payload as Record<string, unknown>
+    const payload = message.payload as MuSig2Payload
 
-    // All MuSig2 messages must have sessionId and timestamp
+    // All MuSig2 messages must have sessionId and timestamp (security requirement)
     if (!payload.sessionId || !payload.timestamp) {
       console.warn('[MuSig2Security] Missing sessionId or timestamp')
       this._trackValidationViolation(from.peerId, 'missing_fields')
       return false
     }
 
-    // Validate timestamp with configurable skew
+    // Validate timestamp with configurable skew (security constraint)
     const maxTimestampSkew =
       this.config.maxTimestampSkew ?? DEFAULT_MUSIG2_SECURITY.maxTimestampSkew
     const now = Date.now()
@@ -245,80 +263,24 @@ export class MuSig2SecurityValidator implements IProtocolValidator {
       return false
     }
 
-    // Use validation layer for type-specific validation (Phase 5 integration)
-    const enableValidationSecurity =
-      this.config.enableValidationSecurity ??
-      DEFAULT_MUSIG2_SECURITY.enableValidationSecurity
-    if (enableValidationSecurity) {
-      try {
-        this._validatePayloadWithValidationLayer(message.type, payload)
-      } catch (error) {
-        if (error instanceof ValidationError) {
-          console.warn(
-            `[MuSig2Security] Validation failed for ${message.type}: ${error.message}`,
-          )
-          this._trackValidationViolation(
-            from.peerId,
-            `validation_${error.reason}`,
-          )
-          return false
-        }
-        throw error
-      }
-    }
+    // NOTE: Payload structure validation is intentionally NOT performed here.
+    // It is handled by protocol.ts via _validateAndRouteMessage() to avoid
+    // double validation. This method only checks security constraints.
 
-    // Legacy type-specific validation (fallback)
-    switch (message.type) {
-      case MuSig2MessageType.SESSION_JOIN:
-        return this.validateJoinMessage(payload)
+    // TODO: Add rate limiting per peer per message type
+    // TODO: Add session-specific security checks (e.g., verify sender is participant)
+    // TODO: Add cryptographic proof verification for critical messages
 
-      case MuSig2MessageType.NONCE_SHARE:
-        return this.validateNonceMessage(payload)
-
-      case MuSig2MessageType.PARTIAL_SIG_SHARE:
-        return this.validatePartialSigMessage(payload)
-
-      default:
-        // Other messages pass basic validation
-        return true
-    }
+    return true
   }
 
-  /**
-   * Validate payload using the new validation layer (Phase 5)
-   */
-  private _validatePayloadWithValidationLayer(
-    messageType: string,
-    payload: Record<string, unknown>,
-  ): void {
-    switch (messageType) {
-      case MuSig2MessageType.SESSION_JOIN:
-        validateSessionJoinPayload(payload)
-        break
-
-      case MuSig2MessageType.SESSION_JOIN_ACK:
-        validateSessionJoinAckPayload(payload)
-        break
-
-      case MuSig2MessageType.NONCE_SHARE:
-        validateNonceSharePayload(payload)
-        break
-
-      case MuSig2MessageType.PARTIAL_SIG_SHARE:
-        validatePartialSigSharePayload(payload)
-        break
-
-      case MuSig2MessageType.SESSION_ABORT:
-        validateSessionAbortPayload(payload)
-        break
-
-      case MuSig2MessageType.SESSION_COMPLETE:
-        validateSessionCompletePayload(payload)
-        break
-
-      // No validation for unknown types - let them pass
-    }
-  }
+  // NOTE: Payload structure validation methods have been removed from security.ts.
+  // They are now handled exclusively by protocol.ts via _validateAndRouteMessage().
+  // This prevents double validation and maintains clear separation of concerns:
+  // - security.ts: Security constraints (DoS, blocking, rate limiting)
+  // - protocol.ts: Payload structure validation (single point of ingress validation)
+  // - validation.ts: Pure validator functions (used by protocol.ts)
+  // - coordinator.ts: Business logic + egress validation
 
   /**
    * Check if message is too large (DoS protection)
@@ -366,105 +328,14 @@ export class MuSig2SecurityValidator implements IProtocolValidator {
     }
   }
 
-  /**
-   * Validate join message
-   */
-  private validateJoinMessage(payload: Record<string, unknown>): boolean {
-    if (!payload.signerPublicKey) {
-      console.warn('[MuSig2Security] Missing signerPublicKey in join message')
-      return false
-    }
-
-    // Validate public key format
-    try {
-      PublicKey.fromString(payload.signerPublicKey as string)
-    } catch (error) {
-      console.warn('[MuSig2Security] Invalid signerPublicKey format')
-      return false
-    }
-
-    return true
-  }
-
-  /**
-   * Validate nonce commitment message
-   */
-  private validateCommitmentMessage(payload: Record<string, unknown>): boolean {
-    if (typeof payload.signerIndex !== 'number') {
-      console.warn('[MuSig2Security] Invalid signerIndex')
-      return false
-    }
-
-    if (!payload.commitment || typeof payload.commitment !== 'string') {
-      console.warn('[MuSig2Security] Missing or invalid commitment')
-      return false
-    }
-
-    // Validate hex format (should be 64 characters for 32-byte hash)
-    if (!/^[0-9a-f]{64}$/i.test(payload.commitment)) {
-      console.warn('[MuSig2Security] Invalid commitment format')
-      return false
-    }
-
-    return true
-  }
-
-  /**
-   * Validate nonce message
-   */
-  private validateNonceMessage(payload: Record<string, unknown>): boolean {
-    if (typeof payload.signerIndex !== 'number') {
-      console.warn('[MuSig2Security] Invalid signerIndex')
-      return false
-    }
-
-    if (!payload.publicNonce || typeof payload.publicNonce !== 'object') {
-      console.warn('[MuSig2Security] Missing or invalid publicNonce')
-      return false
-    }
-
-    const nonce = payload.publicNonce as Record<string, unknown>
-    if (!nonce.r1 || !nonce.r2) {
-      console.warn('[MuSig2Security] Missing nonce components')
-      return false
-    }
-
-    // Validate hex format (should be 66 characters for compressed point)
-    if (
-      typeof nonce.r1 !== 'string' ||
-      typeof nonce.r2 !== 'string' ||
-      !/^[0-9a-f]{66}$/i.test(nonce.r1) ||
-      !/^[0-9a-f]{66}$/i.test(nonce.r2)
-    ) {
-      console.warn('[MuSig2Security] Invalid nonce format')
-      return false
-    }
-
-    return true
-  }
-
-  /**
-   * Validate partial signature message
-   */
-  private validatePartialSigMessage(payload: Record<string, unknown>): boolean {
-    if (typeof payload.signerIndex !== 'number') {
-      console.warn('[MuSig2Security] Invalid signerIndex')
-      return false
-    }
-
-    if (!payload.partialSig || typeof payload.partialSig !== 'string') {
-      console.warn('[MuSig2Security] Missing or invalid partialSig')
-      return false
-    }
-
-    // Validate hex format (should be 64 characters for 32-byte signature)
-    if (!/^[0-9a-f]{64}$/i.test(payload.partialSig)) {
-      console.warn('[MuSig2Security] Invalid partialSig format')
-      return false
-    }
-
-    return true
-  }
+  // Legacy validation methods (validateJoinMessage, validateNonceMessage,
+  // validatePartialSigMessage) have been removed. Payload structure validation
+  // is now handled exclusively by protocol.ts using validation.ts validators.
+  //
+  // TODO: Add semantic validation methods that check business logic constraints:
+  // - validateJoinAuthorization(): Verify sender is allowed to join session
+  // - validateNonceUniqueness(): Verify nonce hasn't been used before
+  // - validatePartialSigConsistency(): Verify partial sig matches session state
 
   /**
    * Check if peer can announce a session
