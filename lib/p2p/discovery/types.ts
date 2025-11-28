@@ -141,6 +141,23 @@ export interface DiscoverySubscription {
 
   /** Last activity timestamp */
   lastActivity: number
+
+  /** GossipSub topic for this subscription */
+  topic: string
+}
+
+/**
+ * Subscription options for GossipSub-based discovery
+ */
+export interface SubscriptionOptions {
+  /** Whether to fetch existing advertisements from DHT on subscribe */
+  fetchExisting?: boolean
+
+  /** Timeout for initial DHT fetch (ms) */
+  fetchTimeout?: number
+
+  /** Whether to deduplicate advertisements by ID */
+  deduplicate?: boolean
 }
 
 // ============================================================================
@@ -231,7 +248,7 @@ export interface IDiscoveryDiscoverer {
   ): Promise<DiscoveryAdvertisement[]>
 
   /**
-   * Subscribe to discovery updates
+   * Subscribe to discovery updates via GossipSub (event-driven)
    *
    * @param criteria - Discovery criteria
    * @param callback - Callback for new advertisements
@@ -241,7 +258,7 @@ export interface IDiscoveryDiscoverer {
   subscribe(
     criteria: DiscoveryCriteria,
     callback: (advertisement: DiscoveryAdvertisement) => void,
-    options?: DiscoveryOptions,
+    options?: SubscriptionOptions,
   ): Promise<DiscoverySubscription>
 
   /**

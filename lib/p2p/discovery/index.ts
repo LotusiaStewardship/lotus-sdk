@@ -10,6 +10,7 @@ export type {
   DiscoveryAdvertisement,
   DiscoveryOptions,
   DiscoverySubscription,
+  SubscriptionOptions,
   SecurityValidationResult,
   ReputationData,
   SecurityPolicy,

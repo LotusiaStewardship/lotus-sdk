@@ -1,7 +1,13 @@
 /**
  * DHT Discoverer Implementation
  *
- * Handles discovering peers based on criteria from DHT
+ * Handles discovering peers based on criteria from DHT.
+ * Uses GossipSub for real-time subscription notifications (event-driven).
+ * Uses DHT for one-time queries and initial state fetch.
+ *
+ * Architecture:
+ * - discover(): One-time DHT query for current state
+ * - subscribe(): GossipSub subscription for real-time updates
  */
 
 import type { P2PCoordinator } from '../coordinator.js'
@@ -12,12 +18,31 @@ import {
   type DiscoveryAdvertisement,
   type DiscoveryOptions,
   type DiscoverySubscription,
+  type SubscriptionOptions,
   type SecurityValidationResult,
   DiscoveryError,
   DiscoveryErrorType,
   DEFAULT_DISCOVERY_OPTIONS,
 } from './types.js'
 import { DiscoverySecurityValidator } from './security.js'
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+/**
+ * GossipSub topic prefix for discovery advertisements
+ */
+const DISCOVERY_TOPIC_PREFIX = 'lotus/discovery'
+
+/**
+ * Default subscription options
+ */
+const DEFAULT_SUBSCRIPTION_OPTIONS: Required<SubscriptionOptions> = {
+  fetchExisting: true,
+  fetchTimeout: 5000,
+  deduplicate: true,
+}
 
 // ============================================================================
 // Internal Types
@@ -44,11 +69,14 @@ interface CacheEntry {
  * Subscription record
  */
 interface SubscriptionRecord {
+  /** Subscription ID */
+  id: string
+
   /** Subscription criteria */
   criteria: DiscoveryCriteria
 
-  /** Subscription options */
-  options: Required<DiscoveryOptions>
+  /** GossipSub topic */
+  topic: string
 
   /** Event handler */
   handler: (advertisement: DiscoveryAdvertisement) => void
@@ -62,11 +90,11 @@ interface SubscriptionRecord {
   /** Last update timestamp */
   lastUpdate: number
 
-  /** Discovery timer ID */
-  discoveryTimer?: NodeJS.Timeout
-
-  /** Seen advertisements set */
+  /** Seen advertisements set (for deduplication) */
   seenAdvertisements: Set<string>
+
+  /** Subscription options */
+  options: Required<SubscriptionOptions>
 }
 
 /**
@@ -84,7 +112,11 @@ interface CacheStats {
 // ============================================================================
 
 /**
- * DHT-based discovery discoverer
+ * DHT-based discovery discoverer with GossipSub subscriptions
+ *
+ * This implementation follows the proper libp2p architecture:
+ * - DHT for persistent storage and one-time queries
+ * - GossipSub for real-time event-driven subscriptions
  */
 export class DHTDiscoverer implements IDiscoveryDiscoverer {
   private readonly coordinator: P2PCoordinator
@@ -112,7 +144,10 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
   // ========================================================================
 
   /**
-   * Discover peers based on criteria
+   * Discover peers based on criteria (one-time DHT query)
+   *
+   * This performs a point-in-time query of the DHT for matching advertisements.
+   * For real-time updates, use subscribe() instead.
    */
   async discover(
     criteria: DiscoveryCriteria,
@@ -196,12 +231,21 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
   }
 
   /**
-   * Subscribe to discovery updates
+   * Subscribe to discovery updates via GossipSub (event-driven)
+   *
+   * This creates a real-time subscription using GossipSub pub/sub.
+   * New advertisements matching the criteria will trigger the callback
+   * immediately when published, without polling.
+   *
+   * @param criteria - Discovery criteria to match
+   * @param callback - Callback invoked for each matching advertisement
+   * @param subscriptionOptions - Options for the subscription
+   * @returns Subscription handle
    */
   async subscribe(
     criteria: DiscoveryCriteria,
     callback: (advertisement: DiscoveryAdvertisement) => void,
-    options?: DiscoveryOptions,
+    subscriptionOptions?: SubscriptionOptions,
   ): Promise<DiscoverySubscription> {
     if (!this.started) {
       throw new DiscoveryError(
@@ -210,23 +254,68 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
       )
     }
 
-    const opts = { ...DEFAULT_DISCOVERY_OPTIONS, ...options }
+    const opts = { ...DEFAULT_SUBSCRIPTION_OPTIONS, ...subscriptionOptions }
     const subscriptionId = this.generateSubscriptionId(criteria)
+    const topic = this.criteriaToTopic(criteria)
 
+    // Create subscription record
     const subscription: SubscriptionRecord = {
+      id: subscriptionId,
       criteria,
-      options: opts,
+      topic,
       handler: callback,
       active: true,
       createdAt: Date.now(),
       lastUpdate: Date.now(),
       seenAdvertisements: new Set(),
+      options: opts,
     }
 
     this.subscriptions.set(subscriptionId, subscription)
 
-    // Start periodic discovery for this subscription
-    this.startPeriodicDiscovery(subscriptionId)
+    // Subscribe to GossipSub topic for real-time updates
+    await this.coordinator.subscribeToTopic(topic, (data: Uint8Array) => {
+      this.handleGossipSubMessage(subscriptionId, data)
+    })
+
+    console.log(
+      `[Discovery] Subscribed to GossipSub topic: ${topic} (subscription: ${subscriptionId})`,
+    )
+
+    // Optionally fetch existing advertisements from DHT
+    if (opts.fetchExisting) {
+      try {
+        const fetchCriteria = {
+          ...criteria,
+          timeout: opts.fetchTimeout,
+        }
+        const existing = await this.discover(fetchCriteria)
+
+        // Notify about existing advertisements
+        for (const advertisement of existing) {
+          if (
+            !opts.deduplicate ||
+            !subscription.seenAdvertisements.has(advertisement.id)
+          ) {
+            subscription.seenAdvertisements.add(advertisement.id)
+            subscription.lastUpdate = Date.now()
+
+            // Call handler asynchronously to avoid blocking
+            setImmediate(() => {
+              if (subscription.active) {
+                callback(advertisement)
+              }
+            })
+          }
+        }
+      } catch (error) {
+        console.warn(
+          `[Discovery] Failed to fetch existing advertisements for subscription ${subscriptionId}:`,
+          error,
+        )
+        // Continue anyway - subscription is still active for new advertisements
+      }
+    }
 
     // Return subscription object
     return {
@@ -236,6 +325,7 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
       active: true,
       createdAt: subscription.createdAt,
       lastActivity: subscription.lastUpdate,
+      topic,
     }
   }
 
@@ -248,13 +338,21 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
       return
     }
 
-    // Clear discovery timer
-    if (subscription.discoveryTimer) {
-      clearInterval(subscription.discoveryTimer)
-    }
-
-    // Mark as inactive
+    // Mark as inactive first
     subscription.active = false
+
+    // Unsubscribe from GossipSub topic
+    try {
+      await this.coordinator.unsubscribeFromTopic(subscription.topic)
+      console.log(
+        `[Discovery] Unsubscribed from GossipSub topic: ${subscription.topic}`,
+      )
+    } catch (error) {
+      console.warn(
+        `[Discovery] Failed to unsubscribe from topic ${subscription.topic}:`,
+        error,
+      )
+    }
 
     // Remove from subscriptions
     this.subscriptions.delete(subscriptionId)
@@ -337,13 +435,85 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
       this.cleanupTimer = undefined
     }
 
-    // Clear all subscriptions
+    // Unsubscribe from all GossipSub topics
     const subscriptionIds = Array.from(this.subscriptions.keys())
     await Promise.allSettled(subscriptionIds.map(id => this.unsubscribe(id)))
   }
 
   // ========================================================================
-  // Private Methods
+  // Private Methods - GossipSub Handling
+  // ========================================================================
+
+  /**
+   * Handle incoming GossipSub message
+   */
+  private handleGossipSubMessage(
+    subscriptionId: string,
+    data: Uint8Array,
+  ): void {
+    const subscription = this.subscriptions.get(subscriptionId)
+    if (!subscription || !subscription.active) {
+      return
+    }
+
+    try {
+      // Parse the advertisement from the message
+      const messageStr = new TextDecoder().decode(data)
+      const advertisement = JSON.parse(messageStr) as DiscoveryAdvertisement
+
+      // Validate advertisement structure
+      if (!this.isValidAdvertisement(advertisement, Date.now())) {
+        console.warn(
+          `[Discovery] Invalid advertisement received on topic ${subscription.topic}`,
+        )
+        return
+      }
+
+      // Check if it matches criteria
+      if (!this.matchesCriteria(advertisement, subscription.criteria)) {
+        // Doesn't match criteria - ignore
+        return
+      }
+
+      // Deduplicate if enabled
+      if (
+        subscription.options.deduplicate &&
+        subscription.seenAdvertisements.has(advertisement.id)
+      ) {
+        return
+      }
+
+      // Mark as seen
+      subscription.seenAdvertisements.add(advertisement.id)
+      subscription.lastUpdate = Date.now()
+
+      // Add to cache
+      this.addToCache(advertisement)
+
+      // Invoke callback
+      subscription.handler(advertisement)
+    } catch (error) {
+      console.error(
+        `[Discovery] Error processing GossipSub message for subscription ${subscriptionId}:`,
+        error,
+      )
+    }
+  }
+
+  /**
+   * Convert criteria to GossipSub topic
+   *
+   * Topic naming convention:
+   * - lotus/discovery/{protocol} - All advertisements for a protocol
+   * - lotus/discovery/{protocol}/{capability} - Capability-specific (future)
+   */
+  private criteriaToTopic(criteria: DiscoveryCriteria): string {
+    // Base topic is protocol-specific
+    return `${DISCOVERY_TOPIC_PREFIX}/${criteria.protocol}`
+  }
+
+  // ========================================================================
+  // Private Methods - DHT Operations
   // ========================================================================
 
   /**
@@ -535,6 +705,10 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
     return result
   }
 
+  // ========================================================================
+  // Private Methods - Cache Management
+  // ========================================================================
+
   /**
    * Add advertisement to cache
    */
@@ -592,41 +766,6 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
   }
 
   /**
-   * Start periodic discovery for subscription
-   */
-  private startPeriodicDiscovery(subscriptionId: string): void {
-    const subscription = this.subscriptions.get(subscriptionId)
-    if (!subscription) {
-      return
-    }
-
-    subscription.discoveryTimer = setInterval(async () => {
-      if (!subscription.active) {
-        return
-      }
-
-      try {
-        const results = await this.discover(
-          subscription.criteria,
-          subscription.options,
-        )
-
-        // Notify about new advertisements
-        for (const advertisement of results) {
-          if (!subscription.seenAdvertisements.has(advertisement.id)) {
-            subscription.seenAdvertisements.add(advertisement.id)
-            subscription.handler(advertisement)
-          }
-        }
-
-        subscription.lastUpdate = Date.now()
-      } catch (error) {
-        console.error(`Periodic discovery failed for ${subscriptionId}:`, error)
-      }
-    }, subscription.options.refreshInterval)
-  }
-
-  /**
    * Clean up expired cache entries
    */
   private cleanupCache(): void {
@@ -663,8 +802,12 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
     }
   }
 
+  // ========================================================================
+  // Private Methods - Utilities
+  // ========================================================================
+
   /**
-   * Calculate distance between two coordinates
+   * Calculate distance between two coordinates (Haversine formula)
    */
   private calculateDistance(
     lat1: number,
@@ -696,7 +839,7 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
    * Generate subscription ID
    */
   private generateSubscriptionId(criteria: DiscoveryCriteria): string {
-    const hash = this.simpleHash(JSON.stringify(criteria))
+    const hash = this.simpleHash(JSON.stringify(criteria) + Date.now())
     return `sub:${hash}`
   }
 

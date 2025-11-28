@@ -524,4 +524,92 @@ export class MuSig2Discovery extends EventEmitter {
       await this.withdrawSigningRequest(requestId)
     }
   }
+
+  // ============================================================================
+  // Real-Time Subscriptions (GossipSub-based)
+  // ============================================================================
+
+  /**
+   * Subscribe to real-time signer advertisements
+   *
+   * Uses GossipSub for event-driven notifications when new signers advertise.
+   * This is more efficient than polling with discoverSigners().
+   *
+   * @param criteria - Optional criteria to filter signers
+   * @param callback - Callback invoked for each matching signer
+   * @returns Subscription ID for unsubscribing
+   */
+  async subscribeToSigners(
+    criteria: Partial<MuSig2SignerCriteria> = {},
+    callback: (signer: MuSig2SignerAdvertisement) => void,
+  ): Promise<string> {
+    const fullCriteria: MuSig2SignerCriteria = {
+      protocol: 'musig2',
+      ...criteria,
+    }
+
+    const subscription = await this.discoverer.subscribe(
+      fullCriteria,
+      (ad: DiscoveryAdvertisement) => {
+        if (this.isSignerAdvertisement(ad)) {
+          if (this.matchesSignerCriteria(ad, fullCriteria)) {
+            this.emit(MuSig2Event.SIGNER_DISCOVERED, ad)
+            callback(ad as MuSig2SignerAdvertisement)
+          }
+        }
+      },
+      {
+        fetchExisting: true,
+        deduplicate: true,
+      },
+    )
+
+    return subscription.id
+  }
+
+  /**
+   * Subscribe to real-time signing request advertisements
+   *
+   * Uses GossipSub for event-driven notifications when new signing requests are created.
+   *
+   * @param criteria - Optional criteria to filter requests
+   * @param callback - Callback invoked for each matching request
+   * @returns Subscription ID for unsubscribing
+   */
+  async subscribeToSigningRequests(
+    criteria: Partial<MuSig2SigningRequestCriteria> = {},
+    callback: (request: MuSig2SigningRequestAdvertisement) => void,
+  ): Promise<string> {
+    const fullCriteria: MuSig2SigningRequestCriteria = {
+      protocol: 'musig2-request',
+      ...criteria,
+    }
+
+    const subscription = await this.discoverer.subscribe(
+      fullCriteria,
+      (ad: DiscoveryAdvertisement) => {
+        if (this.isSigningRequestAdvertisement(ad)) {
+          if (this.matchesRequestCriteria(ad, fullCriteria)) {
+            this.emit(MuSig2Event.SIGNING_REQUEST_RECEIVED, ad)
+            callback(ad as MuSig2SigningRequestAdvertisement)
+          }
+        }
+      },
+      {
+        fetchExisting: true,
+        deduplicate: true,
+      },
+    )
+
+    return subscription.id
+  }
+
+  /**
+   * Unsubscribe from signer or signing request updates
+   *
+   * @param subscriptionId - Subscription ID returned from subscribe methods
+   */
+  async unsubscribe(subscriptionId: string): Promise<void> {
+    await this.discoverer.unsubscribe(subscriptionId)
+  }
 }

@@ -495,22 +495,17 @@ export class DHTAdvertiser implements IDiscoveryAdvertiser {
   }
 
   /**
-   * Publish advertisement to DHT
+   * Publish advertisement to DHT and GossipSub
+   *
+   * This implements the hybrid approach:
+   * - DHT: Persistent storage for later lookup via discover()
+   * - GossipSub: Real-time notification for active subscribers
    */
   private async publishToDHT(
     advertisement: DiscoveryAdvertisement,
     options: Required<DiscoveryOptions>,
   ): Promise<void> {
-    const dhtKey = this.getDHTKey(advertisement)
-    const message: P2PMessage = {
-      type: 'discovery:advertisement',
-      from: this.coordinator.peerId,
-      payload: advertisement,
-      timestamp: Date.now(),
-      messageId: `adv-${advertisement.id}-${Date.now()}`,
-    }
-
-    // Use P2P coordinator's announce method
+    // 1. Store in DHT for persistence and one-time queries
     await this.coordinator.announceResource(
       'discovery:advertisement',
       advertisement.id,
@@ -520,6 +515,32 @@ export class DHTAdvertiser implements IDiscoveryAdvertiser {
         expiresAt: advertisement.expiresAt,
       },
     )
+
+    // 2. Publish to GossipSub for real-time notification to subscribers
+    const topic = this.getGossipSubTopic(advertisement)
+    try {
+      await this.coordinator.publishToTopic(topic, advertisement)
+      console.log(
+        `[Discovery] Published advertisement to GossipSub topic: ${topic}`,
+      )
+    } catch (error) {
+      // GossipSub publish failure is non-fatal - DHT storage succeeded
+      // Subscribers will still find it via DHT query
+      console.warn(
+        `[Discovery] Failed to publish to GossipSub topic ${topic}:`,
+        error,
+      )
+    }
+  }
+
+  /**
+   * Get GossipSub topic for advertisement
+   *
+   * Topic naming convention matches the discoverer:
+   * - lotus/discovery/{protocol}
+   */
+  private getGossipSubTopic(advertisement: DiscoveryAdvertisement): string {
+    return `lotus/discovery/${advertisement.protocol}`
   }
 
   /**
