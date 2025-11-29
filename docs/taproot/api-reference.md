@@ -1638,14 +1638,14 @@ interface MuSig2SignResult {
 Prepare for Taproot MuSig2 signing.
 
 ```typescript
-prepareTaproot(merkleRoot?: Buffer): MuSigTaprootKeyResult & {
+prepareTaproot(state?: Buffer): MuSigTaprootKeyResult & {
   keyAggContext: MuSigKeyAggContext
 }
 ```
 
 **Parameters:**
 
-- `merkleRoot` - Optional script tree merkle root (default: all zeros for key-only)
+- `state` - Optional 32-byte state data (e.g., NFT metadata hash). Note: This is passed as the Taproot state parameter, not as a script tree merkle root. For key-path-only MuSig2, the merkle root is always all zeros internally.
 
 **Returns:** Taproot-specific preparation result with commitment, script, tweak, etc.
 
@@ -3621,8 +3621,8 @@ TAPROOT_CONTROL_MAX_SIZE // 4129 bytes
 
 ---
 
-**Last Updated**: November 10, 2025  
-**Version**: 1.1.0  
+**Last Updated**: November 28, 2025  
+**Version**: 1.1.1  
 **Status**: Production Ready - Fully Compliant with lotusd
 
 **Critical Reminders**:
