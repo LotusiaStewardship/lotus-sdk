@@ -102,6 +102,7 @@
     "@libp2p/peer-id": "6.0.4",
     "@libp2p/ping": "3.0.7",
     "@libp2p/tcp": "11.0.7",
+    "@libp2p/webrtc": "5.0.15",
     "@libp2p/upnp-nat": "4.0.7",
     "@libp2p/websockets": "10.1.0",
     "@libp2p/yamux": "8.0.1",

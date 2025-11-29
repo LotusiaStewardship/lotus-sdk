@@ -8,7 +8,6 @@ import { EventEmitter } from 'events'
 import { createLibp2p, Libp2p } from 'libp2p'
 import { multiaddr, Multiaddr } from '@multiformats/multiaddr'
 import { isPrivate } from '@libp2p/utils'
-import { tcp } from '@libp2p/tcp'
 import { webSockets } from '@libp2p/websockets'
 import { noise } from '@chainsafe/libp2p-noise'
 import { yamux } from '@libp2p/yamux'
@@ -31,6 +30,7 @@ import { dcutr } from '@libp2p/dcutr'
 import { uPnPNAT } from '@libp2p/upnp-nat'
 import { bootstrap } from '@libp2p/bootstrap'
 import { peerIdFromString } from '@libp2p/peer-id'
+import { isBrowser } from '../../utils/functions.js'
 import type {
   Connection,
   Stream,
@@ -143,17 +143,42 @@ export class P2PCoordinator extends EventEmitter {
     // kad-dht requires identify and ping services
     // gossipsub requires identify
 
-    // Prepare transports array
+    // Prepare transports array based on environment
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const transports: any[] = []
 
-    // TCP (primary transport for Node.js peers)
-    transports.push(tcp())
+    if (isBrowser()) {
+      // Browser environment: Use WebSockets and WebRTC
+      // TCP is NOT available in browsers - attempting to use it throws:
+      // "Error: TCP connections are not possible in browsers"
 
-    // WebSockets (for browser compatibility and firewall traversal)
-    transports.push(webSockets())
+      // WebSockets for browser-to-server connections
+      transports.push(webSockets())
 
-    // Circuit Relay v2 (PRIMARY NAT traversal for Node.js)
+      // WebRTC for browser-to-browser P2P connections
+      // Dynamically import to avoid bundling issues in Node.js
+      // Note: WebRTC requires @libp2p/webrtc package
+      try {
+        const { createRequire } = await import('module')
+        const require = createRequire(import.meta.url)
+        const { webRTC } = require('@libp2p/webrtc')
+        transports.push(webRTC())
+      } catch {
+        console.warn(
+          'WebRTC transport not available. Install @libp2p/webrtc for browser-to-browser P2P.',
+        )
+      }
+    } else {
+      // Node.js environment: Use TCP and WebSockets
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { tcp } = require('@libp2p/tcp')
+      transports.push(tcp())
+
+      // WebSockets for connecting to browser peers and firewall traversal
+      transports.push(webSockets())
+    }
+
+    // Circuit Relay v2 (NAT traversal for all environments)
     // Enables peers behind NAT to connect via relay nodes
     // DCUTR will automatically upgrade relay connections to direct P2P
     // Relay discovery happens automatically via DHT and identify protocol
@@ -231,11 +256,40 @@ export class P2PCoordinator extends EventEmitter {
     // Bootstrap peer discovery (automatic connection to bootstrap nodes)
     // If bootstrapPeers are configured, automatically connect on startup
     if (this.config.bootstrapPeers && this.config.bootstrapPeers.length > 0) {
-      peerDiscovery.push(
-        bootstrap({
-          list: this.config.bootstrapPeers,
-        }),
-      )
+      let bootstrapList = this.config.bootstrapPeers
+
+      // In browser environment, filter out TCP-only addresses
+      // Browsers can only connect via WebSocket (ws/wss) or WebRTC
+      if (isBrowser()) {
+        bootstrapList = bootstrapList.filter(addr => {
+          // Keep addresses that contain /ws, /wss, or /webrtc
+          // Filter out pure TCP addresses
+          return (
+            addr.includes('/ws') ||
+            addr.includes('/wss') ||
+            addr.includes('/webrtc')
+          )
+        })
+
+        if (
+          bootstrapList.length === 0 &&
+          this.config.bootstrapPeers.length > 0
+        ) {
+          console.warn(
+            'No browser-compatible bootstrap peers found. ' +
+              'Browsers require WebSocket (ws/wss) or WebRTC addresses. ' +
+              'TCP addresses are not supported in browsers.',
+          )
+        }
+      }
+
+      if (bootstrapList.length > 0) {
+        peerDiscovery.push(
+          bootstrap({
+            list: bootstrapList,
+          }),
+        )
+      }
     }
 
     // Build listen addresses
@@ -243,7 +297,23 @@ export class P2PCoordinator extends EventEmitter {
     // This tells libp2p to listen for incoming connections via circuit relay
     // and automatically advertise relay addresses in getMultiaddrs()
     // See: https://github.com/libp2p/specs/blob/master/relay/circuit-v2.md
-    const listenAddrs = [...(this.config.listen || ['/ip4/0.0.0.0/tcp/0'])]
+    let listenAddrs: string[]
+
+    if (isBrowser()) {
+      // Browser environment: Can only listen via circuit relay
+      // Browsers cannot bind to TCP/UDP ports directly
+      // Use /p2p-circuit to accept incoming relay connections
+      listenAddrs = this.config.listen
+        ? [...this.config.listen]
+        : ['/p2p-circuit']
+    } else {
+      // Node.js environment: Can listen on TCP
+      listenAddrs = this.config.listen
+        ? [...this.config.listen]
+        : ['/ip4/0.0.0.0/tcp/0']
+    }
+
+    // Ensure /p2p-circuit is in listen addresses when relay is enabled
     if (
       this.config.enableRelay !== false &&
       !listenAddrs.includes('/p2p-circuit')
