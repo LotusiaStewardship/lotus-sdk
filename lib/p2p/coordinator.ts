@@ -170,7 +170,8 @@ export class P2PCoordinator extends EventEmitter {
       }
     } else {
       // Node.js environment: Use TCP and WebSockets
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { createRequire } = await import('module')
+      const require = createRequire(import.meta.url)
       const { tcp } = require('@libp2p/tcp')
       transports.push(tcp())
 
