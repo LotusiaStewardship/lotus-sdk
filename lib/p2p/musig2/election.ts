@@ -21,7 +21,8 @@
  */
 
 import { PublicKey } from '../../bitcore/publickey.js'
-import { createHash } from 'crypto'
+import { sha256 } from '@noble/hashes/sha256'
+import { bytesToHex } from '@noble/hashes/utils'
 
 /**
  * Election result containing coordinator information
@@ -173,7 +174,7 @@ function electByHash(signers: PublicKey[]): ElectionResult {
 
   // Compute hash of all SORTED public keys concatenated
   const concatenated = sortedSigners.map(pk => pk.toString()).join('')
-  const hash = createHash('sha256').update(concatenated).digest()
+  const hash = Buffer.from(sha256(new TextEncoder().encode(concatenated)))
 
   // Use hash to select index in SORTED array
   const hashValue = hash.readUInt32BE(0)
@@ -268,7 +269,7 @@ function computeElectionProof(signers: PublicKey[]): string {
     .map(pk => pk.toString())
     .sort()
     .join('')
-  return createHash('sha256').update(concatenated).digest('hex')
+  return bytesToHex(sha256(new TextEncoder().encode(concatenated)))
 }
 
 /**

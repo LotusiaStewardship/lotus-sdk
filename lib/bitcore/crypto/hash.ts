@@ -1,9 +1,14 @@
 /**
  * Cryptographic hash functions
  * Migrated from bitcore-lib-xpi with ESM support
+ *
+ * Uses @noble/hashes for browser compatibility
  */
 
-import { createHash } from 'crypto'
+import { sha1 } from '@noble/hashes/sha1'
+import { sha256 } from '@noble/hashes/sha256'
+import { sha512 } from '@noble/hashes/sha512'
+import { ripemd160 } from '@noble/hashes/ripemd160'
 
 export interface HashFunction {
   (buf: Buffer): Buffer
@@ -15,7 +20,7 @@ const sha1Func: HashFunction = (buf: Buffer): Buffer => {
   if (!Buffer.isBuffer(buf)) {
     throw new Error('Argument must be a Buffer')
   }
-  return createHash('sha1').update(buf).digest()
+  return Buffer.from(sha1(buf))
 }
 sha1Func.blocksize = 512
 
@@ -23,7 +28,7 @@ const sha256Func: HashFunction = (buf: Buffer): Buffer => {
   if (!Buffer.isBuffer(buf)) {
     throw new Error('Argument must be a Buffer')
   }
-  return createHash('sha256').update(buf).digest()
+  return Buffer.from(sha256(buf))
 }
 sha256Func.blocksize = 512
 
@@ -31,7 +36,7 @@ const sha512Func: HashFunction = (buf: Buffer): Buffer => {
   if (!Buffer.isBuffer(buf)) {
     throw new Error('Argument must be a Buffer')
   }
-  return createHash('sha512').update(buf).digest()
+  return Buffer.from(sha512(buf))
 }
 sha512Func.blocksize = 1024
 
@@ -51,7 +56,7 @@ export class Hash {
     if (!Buffer.isBuffer(buf)) {
       throw new Error('Argument must be a Buffer')
     }
-    return createHash('ripemd160').update(buf).digest()
+    return Buffer.from(ripemd160(buf))
   }
 
   static sha256ripemd160 = function (buf: Buffer): Buffer {

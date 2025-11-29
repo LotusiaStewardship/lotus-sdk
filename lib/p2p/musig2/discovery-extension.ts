@@ -29,7 +29,8 @@ import {
   publicKeyToHex,
 } from './discovery-types.js'
 import { MuSig2Event, type TransactionType } from './types.js'
-import { createHash, randomBytes } from 'crypto'
+import { sha256 } from '@noble/hashes/sha256'
+import { bytesToHex } from '@noble/hashes/utils'
 
 /**
  * MuSig2 Discovery Extension
@@ -353,11 +354,8 @@ export class MuSig2Discovery extends EventEmitter {
    * Generate deterministic signer advertisement ID
    */
   private generateSignerAdId(publicKeyHex: string): string {
-    const hash = createHash('sha256')
-      .update('musig2:signer:')
-      .update(publicKeyHex)
-      .update(Date.now().toString())
-      .digest('hex')
+    const data = `musig2:signer:${publicKeyHex}${Date.now().toString()}`
+    const hash = bytesToHex(sha256(new TextEncoder().encode(data)))
     return `${this.config.signerKeyPrefix}${hash.substring(0, 32)}`
   }
 
@@ -368,17 +366,12 @@ export class MuSig2Discovery extends EventEmitter {
     requiredPublicKeys: PublicKey[],
     messageHash: string,
   ): string {
-    const hash = createHash('sha256')
-      .update('musig2:request:')
-      .update(messageHash)
-      .update(
-        requiredPublicKeys
-          .map(pk => publicKeyToHex(pk))
-          .sort()
-          .join(':'),
-      )
-      .update(Date.now().toString())
-      .digest('hex')
+    const keysStr = requiredPublicKeys
+      .map(pk => publicKeyToHex(pk))
+      .sort()
+      .join(':')
+    const data = `musig2:request:${messageHash}${keysStr}${Date.now().toString()}`
+    const hash = bytesToHex(sha256(new TextEncoder().encode(data)))
     return `${this.config.requestKeyPrefix}${hash.substring(0, 32)}`
   }
 

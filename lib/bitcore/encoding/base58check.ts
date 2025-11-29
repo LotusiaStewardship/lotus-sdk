@@ -1,9 +1,11 @@
 /**
  * Base58Check encoding/decoding utilities
  * Migrated from bitcore-lib-xpi with ESM support
+ *
+ * Uses @noble/hashes for browser compatibility
  */
 
-import { createHash } from 'crypto'
+import { sha256 } from '@noble/hashes/sha256'
 
 // Base58 alphabet
 const ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
@@ -58,10 +60,9 @@ export class Base58Check {
    * Calculate checksum for data
    */
   static checksum(data: Buffer): Buffer {
-    return createHash('sha256')
-      .update(createHash('sha256').update(data).digest())
-      .digest()
-      .subarray(0, 4)
+    const hash1 = sha256(data)
+    const hash2 = sha256(hash1)
+    return Buffer.from(hash2).subarray(0, 4)
   }
 
   /**

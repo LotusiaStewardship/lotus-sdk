@@ -2,9 +2,12 @@
  * MuSig2 Discovery Security
  *
  * MuSig2-specific security validation for discovery advertisements
+ *
+ * Uses @noble/hashes for browser compatibility
  */
 
-import { createHash } from 'crypto'
+import { sha256 } from '@noble/hashes/sha256'
+import { bytesToHex } from '@noble/hashes/utils'
 import { PublicKey } from '../../bitcore/publickey.js'
 import { DiscoverySecurityValidator } from '../discovery/security.js'
 import type {
@@ -280,13 +283,8 @@ export class MuSig2DiscoverySecurityValidator extends DiscoverySecurityValidator
     transactionTypes: string[],
     timestamp: number,
   ): string {
-    return createHash('sha256')
-      .update('musig2-signer')
-      .update(id)
-      .update(publicKeyHex)
-      .update(transactionTypes.sort().join(','))
-      .update(timestamp.toString())
-      .digest('hex')
+    const data = `musig2-signer${id}${publicKeyHex}${transactionTypes.sort().join(',')}${timestamp.toString()}`
+    return bytesToHex(sha256(new TextEncoder().encode(data)))
   }
 
   /**
@@ -298,13 +296,8 @@ export class MuSig2DiscoverySecurityValidator extends DiscoverySecurityValidator
     messageHash: string,
     timestamp: number,
   ): string {
-    return createHash('sha256')
-      .update('musig2-request')
-      .update(requestId)
-      .update(requiredPublicKeys.sort().join(','))
-      .update(messageHash)
-      .update(timestamp.toString())
-      .digest('hex')
+    const data = `musig2-request${requestId}${requiredPublicKeys.sort().join(',')}${messageHash}${timestamp.toString()}`
+    return bytesToHex(sha256(new TextEncoder().encode(data)))
   }
 
   /**

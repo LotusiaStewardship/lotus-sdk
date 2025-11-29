@@ -1,49 +1,35 @@
 /**
  * Random number generation utilities
  * Migrated from bitcore-lib-xpi with ESM support
+ *
+ * Uses @noble/hashes for browser compatibility
  */
 
-import { randomBytes } from 'crypto'
+import { randomBytes as nobleRandomBytes } from '@noble/hashes/utils'
 
 export class Random {
   /**
-   * Secure random bytes that sometimes throws an error due to lack of entropy
+   * Secure random bytes - works in both Node.js and browser
+   * Uses @noble/hashes which automatically detects the environment
    */
   static getRandomBuffer(size: number): Buffer {
-    if (typeof globalThis !== 'undefined' && 'crypto' in globalThis) {
-      return Random.getRandomBufferBrowser(size)
-    } else {
-      return Random.getRandomBufferNode(size)
-    }
+    return Buffer.from(nobleRandomBytes(size))
   }
 
   /**
-   * Node.js implementation using crypto.randomBytes
+   * Node.js implementation - now uses @noble/hashes
+   * @deprecated Use getRandomBuffer instead
    */
   static getRandomBufferNode(size: number): Buffer {
-    return randomBytes(size)
+    return Random.getRandomBuffer(size)
   }
 
   /**
-   * Browser implementation using globalThis.crypto
+   * Browser implementation - now uses @noble/hashes
+   * @deprecated Use getRandomBuffer instead
    */
   static getRandomBufferBrowser(size: number): Buffer {
-    if (typeof globalThis === 'undefined' || !('crypto' in globalThis)) {
-      throw new Error('crypto object not available')
-    }
-
-    const crypto = globalThis.crypto
-    if (!crypto) {
-      throw new Error('crypto not available')
-    }
-
-    if (!crypto.getRandomValues) {
-      throw new Error('crypto.getRandomValues not available')
-    }
-
-    const bbuf = new Uint8Array(size)
-    crypto.getRandomValues(bbuf)
-    return Buffer.from(bbuf)
+    return Random.getRandomBuffer(size)
   }
 
   /**
