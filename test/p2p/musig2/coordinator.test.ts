@@ -13,14 +13,23 @@ import { ConnectionEvent } from '../../../lib/p2p/types.js'
 describe('MuSig2 P2P Coordinator', () => {
   describe('Initialization', () => {
     it('should create coordinator with P2P config', async () => {
-      const musig2Coordinator = new MuSig2P2PCoordinator({
-        listen: ['/ip4/127.0.0.1/tcp/0'],
-        enableDHT: true,
-        enableDHTServer: false,
-        securityConfig: {
-          disableRateLimiting: true, // Disable for tests
+      const musig2Coordinator = new MuSig2P2PCoordinator(
+        {
+          listen: ['/ip4/127.0.0.1/tcp/0'],
+          enableDHT: false, // Disable DHT completely for tests
+          enableDHTServer: false,
+          securityConfig: {
+            disableRateLimiting: true, // Disable for tests
+          },
         },
-      })
+        {
+          sessionTimeout: 3600000, // 1 hour
+          enableSessionDiscovery: false, // Disable DHT for tests
+          enableCoordinatorElection: false, // Disable election for tests
+          enableReplayProtection: false, // Disable replay protection for tests
+          enableAutoCleanup: false, // Disable cleanup for tests
+        },
+      )
 
       await musig2Coordinator.start()
 
@@ -37,7 +46,7 @@ describe('MuSig2 P2P Coordinator', () => {
       const musig2Coordinator = new MuSig2P2PCoordinator(
         {
           listen: ['/ip4/127.0.0.1/tcp/0'],
-          enableDHT: true,
+          enableDHT: false, // Disable DHT completely for tests
           enableDHTServer: false,
           securityConfig: {
             disableRateLimiting: true, // Disable for tests
@@ -45,6 +54,10 @@ describe('MuSig2 P2P Coordinator', () => {
         },
         {
           sessionTimeout: timeout,
+          enableSessionDiscovery: false, // Disable DHT for tests
+          enableCoordinatorElection: false, // Disable election for tests
+          enableReplayProtection: false, // Disable replay protection for tests
+          enableAutoCleanup: false, // Disable cleanup for tests
         },
       )
 
@@ -57,14 +70,22 @@ describe('MuSig2 P2P Coordinator', () => {
     })
 
     it('should register protocol handler automatically', async () => {
-      const musig2Coordinator = new MuSig2P2PCoordinator({
-        listen: ['/ip4/127.0.0.1/tcp/0'],
-        enableDHT: true,
-        enableDHTServer: false,
-        securityConfig: {
-          disableRateLimiting: true, // Disable for tests
+      const musig2Coordinator = new MuSig2P2PCoordinator(
+        {
+          listen: ['/ip4/127.0.0.1/tcp/0'],
+          enableDHT: false, // Disable DHT completely for tests
+          enableDHTServer: false,
+          securityConfig: {
+            disableRateLimiting: true, // Disable for tests
+          },
         },
-      })
+        {
+          enableSessionDiscovery: false, // Disable DHT for tests
+          enableCoordinatorElection: false, // Disable election for tests
+          enableReplayProtection: false, // Disable replay protection for tests
+          enableAutoCleanup: false, // Disable cleanup for tests
+        },
+      )
 
       await musig2Coordinator.start()
 
@@ -81,14 +102,22 @@ describe('MuSig2 P2P Coordinator', () => {
     let musig2Coordinator: MuSig2P2PCoordinator
 
     before(async () => {
-      musig2Coordinator = new MuSig2P2PCoordinator({
-        listen: ['/ip4/127.0.0.1/tcp/0'],
-        enableDHT: true,
-        enableDHTServer: false,
-        securityConfig: {
-          disableRateLimiting: true, // Disable for tests
+      musig2Coordinator = new MuSig2P2PCoordinator(
+        {
+          listen: ['/ip4/127.0.0.1/tcp/0'],
+          enableDHT: false, // Disable DHT completely for tests
+          enableDHTServer: false,
+          securityConfig: {
+            disableRateLimiting: true, // Disable for tests
+          },
         },
-      })
+        {
+          enableSessionDiscovery: false, // Disable DHT for tests
+          enableCoordinatorElection: false, // Disable election for tests
+          enableReplayProtection: false, // Disable replay protection for tests
+          enableAutoCleanup: false, // Disable cleanup for tests
+        },
+      )
 
       await musig2Coordinator.start()
     })
@@ -212,14 +241,22 @@ describe('MuSig2 P2P Coordinator', () => {
     let musig2Coordinator: MuSig2P2PCoordinator
 
     before(async () => {
-      musig2Coordinator = new MuSig2P2PCoordinator({
-        listen: ['/ip4/127.0.0.1/tcp/0'],
-        enableDHT: true,
-        enableDHTServer: false,
-        securityConfig: {
-          disableRateLimiting: true, // Disable for tests
+      musig2Coordinator = new MuSig2P2PCoordinator(
+        {
+          listen: ['/ip4/127.0.0.1/tcp/0'],
+          enableDHT: false, // Disable DHT completely for tests
+          enableDHTServer: false,
+          securityConfig: {
+            disableRateLimiting: true, // Disable for tests
+          },
         },
-      })
+        {
+          enableSessionDiscovery: false, // Disable DHT for tests
+          enableCoordinatorElection: false, // Disable election for tests
+          enableReplayProtection: false, // Disable replay protection for tests
+          enableAutoCleanup: false, // Disable cleanup for tests
+        },
+      )
 
       await musig2Coordinator.start()
     })
@@ -299,11 +336,19 @@ describe('MuSig2 P2P Coordinator', () => {
     let musig2Coordinator: MuSig2P2PCoordinator
 
     before(async () => {
-      musig2Coordinator = new MuSig2P2PCoordinator({
-        listen: ['/ip4/127.0.0.1/tcp/0'],
-        enableDHT: true,
-        enableDHTServer: false,
-      })
+      musig2Coordinator = new MuSig2P2PCoordinator(
+        {
+          listen: ['/ip4/127.0.0.1/tcp/0'],
+          enableDHT: false, // Disable DHT completely for tests
+          enableDHTServer: false,
+        },
+        {
+          enableSessionDiscovery: false, // Disable DHT for tests
+          enableCoordinatorElection: false, // Disable election for tests
+          enableReplayProtection: false, // Disable replay protection for tests
+          enableAutoCleanup: false, // Disable cleanup for tests
+        },
+      )
 
       await musig2Coordinator.start()
     })

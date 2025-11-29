@@ -71,6 +71,11 @@ export class P2PCoordinator extends EventEmitter {
   protected coreSecurityManager: CoreSecurityManager
   // Track last advertised relay addresses for change detection
   private lastAdvertisedMultiaddrs: string[] = []
+  // Track GossipSub topic handlers for proper cleanup
+  private topicHandlers: Map<
+    string,
+    (evt: CustomEvent<{ topic: string; data: Uint8Array }>) => void
+  > = new Map()
 
   constructor(protected readonly config: P2PConfig) {
     super()
@@ -221,7 +226,6 @@ export class P2PCoordinator extends EventEmitter {
     }
 
     // Peer discovery configuration
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const peerDiscovery: ReturnType<typeof bootstrap>[] = []
 
     // Bootstrap peer discovery (automatic connection to bootstrap nodes)
@@ -234,11 +238,23 @@ export class P2PCoordinator extends EventEmitter {
       )
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // Build listen addresses
+    // CRITICAL: Add /p2p-circuit to listen addresses when relay is enabled
+    // This tells libp2p to listen for incoming connections via circuit relay
+    // and automatically advertise relay addresses in getMultiaddrs()
+    // See: https://github.com/libp2p/specs/blob/master/relay/circuit-v2.md
+    const listenAddrs = [...(this.config.listen || ['/ip4/0.0.0.0/tcp/0'])]
+    if (
+      this.config.enableRelay !== false &&
+      !listenAddrs.includes('/p2p-circuit')
+    ) {
+      listenAddrs.push('/p2p-circuit')
+    }
+
     const config: Parameters<typeof createLibp2p>[0] = {
       privateKey: this.config.privateKey, // Use fixed privateKey if provided (for persistent identity)
       addresses: {
-        listen: this.config.listen || ['/ip4/0.0.0.0/tcp/0'],
+        listen: listenAddrs,
         announce: this.config.announce || [],
       },
       transports,
@@ -290,6 +306,7 @@ export class P2PCoordinator extends EventEmitter {
     this.seenMessages.clear()
     this.dhtValues.clear()
     this.peerInfo.clear()
+    this.topicHandlers.clear()
 
     // SECURITY: Clear core security manager listeners
     this.coreSecurityManager.removeAllListeners()
@@ -447,7 +464,7 @@ export class P2PCoordinator extends EventEmitter {
     const promises = targetPeers
       .filter(peer => {
         // Check if peer has any direct (non-relay) connections
-        const connections = this.node!.getConnections(peer)
+        const connections = this.libp2pNode.getConnections(peer)
         const hasDirectConnection = connections.some(conn => {
           // A connection is direct if it doesn't have /p2p-circuit in the multiaddr
           const addr = conn.remoteAddr?.toString() || ''
@@ -767,7 +784,7 @@ export class P2PCoordinator extends EventEmitter {
       }
 
       // Create basic peer info
-      const connections = this.node!.getConnections(peerId)
+      const connections = this.libp2pNode.getConnections(peerId)
       const multiaddrs = connections.flatMap(conn =>
         conn.remoteAddr ? [conn.remoteAddr.toString()] : [],
       )
@@ -873,36 +890,38 @@ export class P2PCoordinator extends EventEmitter {
         // Filter for PUBLIC addresses only (exclude private LAN ranges)
         const publicAddrs = observableAddrs.filter((addr: string) => {
           // Exclude localhost
-          if (addr.includes('/ip4/127.0.0.1/') || addr.includes('/ip6::1/')) {
+          if (addr.includes('/ip4/127.') || addr.includes('/ip6/::1/')) {
             return false
           }
           // Exclude wildcard
           if (addr.includes('/ip4/0.0.0.0/')) {
             return false
           }
-          // Exclude private LAN ranges (10.x, 172.16-31.x, 192.168.x)
-          if (
-            addr.includes('/ip4/10.') ||
-            addr.includes('/ip4/172.16.') ||
-            addr.includes('/ip4/172.17.') ||
-            addr.includes('/ip4/172.18.') ||
-            addr.includes('/ip4/172.19.') ||
-            addr.includes('/ip4/172.20.') ||
-            addr.includes('/ip4/172.21.') ||
-            addr.includes('/ip4/172.22.') ||
-            addr.includes('/ip4/172.23.') ||
-            addr.includes('/ip4/172.24.') ||
-            addr.includes('/ip4/172.25.') ||
-            addr.includes('/ip4/172.26.') ||
-            addr.includes('/ip4/172.27.') ||
-            addr.includes('/ip4/172.28.') ||
-            addr.includes('/ip4/172.29.') ||
-            addr.includes('/ip4/172.30.') ||
-            addr.includes('/ip4/172.31.') ||
-            addr.includes('/ip4/192.168.')
-          ) {
-            return false
+          // Exclude private LAN ranges using regex for accurate matching
+          // RFC 1918: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+          // Also exclude link-local: 169.254.0.0/16
+          const ipv4Match = addr.match(/\/ip4\/(\d+\.\d+\.\d+\.\d+)\//)
+          if (ipv4Match) {
+            const ip = ipv4Match[1]
+            const octets = ip.split('.').map(Number)
+
+            // 10.0.0.0/8
+            if (octets[0] === 10) return false
+
+            // 172.16.0.0/12 (172.16.x.x - 172.31.x.x)
+            if (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+              return false
+
+            // 192.168.0.0/16
+            if (octets[0] === 192 && octets[1] === 168) return false
+
+            // 169.254.0.0/16 (link-local)
+            if (octets[0] === 169 && octets[1] === 254) return false
+
+            // 127.0.0.0/8 (loopback - extra check)
+            if (octets[0] === 127) return false
           }
+
           // Include public addresses
           return true
         })
@@ -1160,6 +1179,7 @@ export class P2PCoordinator extends EventEmitter {
     this.seenMessages.clear()
     this.dhtValues.clear()
     this.peerInfo.clear()
+    this.topicHandlers.clear()
 
     // SECURITY: Clear core security manager
     this.coreSecurityManager.removeAllListeners()
@@ -1194,7 +1214,7 @@ export class P2PCoordinator extends EventEmitter {
       const existing = this.peerInfo.get(peerId)
 
       // Get fresh multiaddrs from active connections
-      const connections = this.node!.getConnections(event.detail)
+      const connections = this.libp2pNode.getConnections(event.detail)
       const multiaddrs = connections.flatMap(conn =>
         conn.remoteAddr ? [conn.remoteAddr.toString()] : [],
       )
@@ -1275,7 +1295,7 @@ export class P2PCoordinator extends EventEmitter {
       const existing = this.peerInfo.get(peerId)
 
       // Get fresh multiaddrs from active connections if available
-      const connections = this.node!.getConnections(peer.id)
+      const connections = this.libp2pNode.getConnections(peer.id)
       const multiaddrs = connections.flatMap(conn =>
         conn.remoteAddr ? [conn.remoteAddr.toString()] : [],
       )
@@ -1518,19 +1538,27 @@ export class P2PCoordinator extends EventEmitter {
       throw new Error('GossipSub not enabled in config')
     }
 
+    // Remove existing handler if re-subscribing to same topic
+    if (this.topicHandlers.has(topic)) {
+      const existingHandler = this.topicHandlers.get(topic)!
+      pubsub.removeEventListener('message', existingHandler as EventListener)
+      this.topicHandlers.delete(topic)
+    }
+
     // Subscribe to topic
     pubsub.subscribe(topic)
 
-    // Setup message handler
+    // Create and store message handler for proper cleanup
     // Event detail has: { topic: string, data: Uint8Array }
-    pubsub.addEventListener(
-      'message',
-      (evt: CustomEvent<{ topic: string; data: Uint8Array }>) => {
-        if (evt.detail.topic === topic) {
-          handler(evt.detail.data)
-        }
-      },
-    )
+    const messageHandler = (
+      evt: CustomEvent<{ topic: string; data: Uint8Array }>,
+    ) => {
+      if (evt.detail.topic === topic) {
+        handler(evt.detail.data)
+      }
+    }
+    this.topicHandlers.set(topic, messageHandler)
+    pubsub.addEventListener('message', messageHandler as EventListener)
 
     console.log(`[P2P] Subscribed to topic: ${topic}`)
   }
@@ -1548,6 +1576,13 @@ export class P2PCoordinator extends EventEmitter {
     const pubsub = this.node.services.pubsub as GossipSub | undefined
     if (!pubsub) {
       return
+    }
+
+    // Remove event listener to prevent memory leak
+    const handler = this.topicHandlers.get(topic)
+    if (handler) {
+      pubsub.removeEventListener('message', handler as EventListener)
+      this.topicHandlers.delete(topic)
     }
 
     pubsub.unsubscribe(topic)

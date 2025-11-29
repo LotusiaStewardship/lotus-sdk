@@ -41,24 +41,40 @@ describe('MuSig2 P2P Integration', () => {
     let message: Buffer
 
     before(async () => {
-      // Create MuSig2 coordinators
-      aliceMuSig = new MuSig2P2PCoordinator({
-        listen: ['/ip4/127.0.0.1/tcp/0'],
-        enableDHT: true,
-        enableDHTServer: false,
-        securityConfig: {
-          disableRateLimiting: true,
+      // Create MuSig2 coordinators with minimal config
+      aliceMuSig = new MuSig2P2PCoordinator(
+        {
+          listen: ['/ip4/127.0.0.1/tcp/0'],
+          enableDHT: false, // Disable DHT to avoid Promise.withResolvers issues
+          enableDHTServer: false,
+          securityConfig: {
+            disableRateLimiting: true,
+          },
         },
-      })
+        {
+          enableSessionDiscovery: false,
+          enableCoordinatorElection: false,
+          enableReplayProtection: false,
+          enableAutoCleanup: false,
+        },
+      )
 
-      bobMuSig = new MuSig2P2PCoordinator({
-        listen: ['/ip4/127.0.0.1/tcp/0'],
-        enableDHT: true,
-        enableDHTServer: false,
-        securityConfig: {
-          disableRateLimiting: true,
+      bobMuSig = new MuSig2P2PCoordinator(
+        {
+          listen: ['/ip4/127.0.0.1/tcp/0'],
+          enableDHT: false, // Disable DHT to avoid Promise.withResolvers issues
+          enableDHTServer: false,
+          securityConfig: {
+            disableRateLimiting: true,
+          },
         },
-      })
+        {
+          enableSessionDiscovery: false,
+          enableCoordinatorElection: false,
+          enableReplayProtection: false,
+          enableAutoCleanup: false,
+        },
+      )
 
       await aliceMuSig.start()
       await bobMuSig.start()
@@ -192,33 +208,57 @@ describe('MuSig2 P2P Integration', () => {
     let message: Buffer
 
     before(async () => {
-      // Create MuSig2 coordinators (which extend P2PCoordinator)
-      aliceMuSig = new MuSig2P2PCoordinator({
-        listen: ['/ip4/127.0.0.1/tcp/0'],
-        enableDHT: true,
-        enableDHTServer: false,
-        securityConfig: {
-          disableRateLimiting: true,
+      // Create MuSig2 coordinators with minimal config
+      aliceMuSig = new MuSig2P2PCoordinator(
+        {
+          listen: ['/ip4/127.0.0.1/tcp/0'],
+          enableDHT: false, // Disable DHT to avoid Promise.withResolvers issues
+          enableDHTServer: false,
+          securityConfig: {
+            disableRateLimiting: true,
+          },
         },
-      })
+        {
+          enableSessionDiscovery: false,
+          enableCoordinatorElection: false,
+          enableReplayProtection: false,
+          enableAutoCleanup: false,
+        },
+      )
 
-      bobMuSig = new MuSig2P2PCoordinator({
-        listen: ['/ip4/127.0.0.1/tcp/0'],
-        enableDHT: true,
-        enableDHTServer: false,
-        securityConfig: {
-          disableRateLimiting: true,
+      bobMuSig = new MuSig2P2PCoordinator(
+        {
+          listen: ['/ip4/127.0.0.1/tcp/0'],
+          enableDHT: false, // Disable DHT to avoid Promise.withResolvers issues
+          enableDHTServer: false,
+          securityConfig: {
+            disableRateLimiting: true,
+          },
         },
-      })
+        {
+          enableSessionDiscovery: false,
+          enableCoordinatorElection: false,
+          enableReplayProtection: false,
+          enableAutoCleanup: false,
+        },
+      )
 
-      carolMuSig = new MuSig2P2PCoordinator({
-        listen: ['/ip4/127.0.0.1/tcp/0'],
-        enableDHT: true,
-        enableDHTServer: false,
-        securityConfig: {
-          disableRateLimiting: true,
+      carolMuSig = new MuSig2P2PCoordinator(
+        {
+          listen: ['/ip4/127.0.0.1/tcp/0'],
+          enableDHT: false, // Disable DHT to avoid Promise.withResolvers issues
+          enableDHTServer: false,
+          securityConfig: {
+            disableRateLimiting: true,
+          },
         },
-      })
+        {
+          enableSessionDiscovery: false,
+          enableCoordinatorElection: false,
+          enableReplayProtection: false,
+          enableAutoCleanup: false,
+        },
+      )
 
       await aliceMuSig.start()
       await bobMuSig.start()
@@ -297,14 +337,22 @@ describe('MuSig2 P2P Integration', () => {
     let bob: PrivateKey
 
     before(async () => {
-      aliceMuSig = new MuSig2P2PCoordinator({
-        listen: ['/ip4/127.0.0.1/tcp/0'],
-        enableDHT: true,
-        enableDHTServer: false,
-        securityConfig: {
-          disableRateLimiting: true,
+      aliceMuSig = new MuSig2P2PCoordinator(
+        {
+          listen: ['/ip4/127.0.0.1/tcp/0'],
+          enableDHT: false, // Disable DHT to avoid Promise.withResolvers issues
+          enableDHTServer: false,
+          securityConfig: {
+            disableRateLimiting: true,
+          },
         },
-      })
+        {
+          enableSessionDiscovery: false,
+          enableCoordinatorElection: false,
+          enableReplayProtection: false,
+          enableAutoCleanup: false,
+        },
+      )
 
       await aliceMuSig.start()
 
@@ -325,14 +373,22 @@ describe('MuSig2 P2P Integration', () => {
       })
 
       // Create a second peer and connect
-      const bobMuSig = new MuSig2P2PCoordinator({
-        listen: ['/ip4/127.0.0.1/tcp/0'],
-        enableDHT: true,
-        enableDHTServer: false,
-        securityConfig: {
-          disableRateLimiting: true,
+      const bobMuSig = new MuSig2P2PCoordinator(
+        {
+          listen: ['/ip4/127.0.0.1/tcp/0'],
+          enableDHT: false, // Disable DHT to avoid Promise.withResolvers issues
+          enableDHTServer: false,
+          securityConfig: {
+            disableRateLimiting: true,
+          },
         },
-      })
+        {
+          enableSessionDiscovery: false,
+          enableCoordinatorElection: false,
+          enableReplayProtection: false,
+          enableAutoCleanup: false,
+        },
+      )
 
       await bobMuSig.start()
 

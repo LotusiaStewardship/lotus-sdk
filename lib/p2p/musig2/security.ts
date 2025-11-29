@@ -1,709 +1,434 @@
 /**
- * Copyright 2025 The Lotusia Stewardship
- * Github: https://github.com/LotusiaStewardship
- * License: MIT
- */
-
-/**
- * MuSig2 Security Utilities
+ * MuSig2 Security Validator
  *
- * Provides security mechanisms for MuSig2 P2P coordination:
- * - Rate limiting for advertisements
- * - Public key limits per peer
- * - Invalid signature tracking
- * - Peer reputation management
- * - Blacklist/graylist functionality
+ * Protocol-specific SECURITY CONSTRAINTS for MuSig2 sessions.
+ *
+ * ARCHITECTURE:
+ * This module handles SECURITY POLICY ENFORCEMENT only:
+ * - Peer blocking (after too many violations)
+ * - DoS protection (message size limits)
+ * - Timestamp skew validation
+ * - Rate limiting (TODO)
+ * - Session announcement validation
+ *
+ * IMPORTANT: This module does NOT perform payload structure validation.
+ * Payload validation is handled by protocol.ts using validators from validation.ts.
+ * This separation prevents double validation and maintains clear concerns:
+ *
+ * - security.ts: Security constraints (this module)
+ * - protocol.ts: Ingress payload validation (single point)
+ * - validation.ts: Pure validator functions
+ * - coordinator.ts: Business logic + egress validation
  */
 
-import { EventEmitter } from 'events'
+import type { IProtocolValidator, P2PMessage, PeerInfo } from '../types.js'
+import type { MuSig2Payload, SessionAnnouncement } from './types.js'
+import { DEFAULT_MUSIG2_P2P_CONFIG } from './types.js'
 import { PublicKey } from '../../bitcore/publickey.js'
-import { MUSIG2_SECURITY_LIMITS } from './types.js'
-
-// ============================================================================
-// Rate Limiting
-// ============================================================================
+// NOTE: Validation imports removed - payload structure validation is now handled
+// exclusively by protocol.ts to avoid double validation. This module only handles
+// security constraints (DoS protection, peer blocking, rate limiting).
 
 /**
- * Rate limiter for signing requests
- * Prevents spam attacks by limiting signing request frequency per peer
+ * MuSig2 security configuration
  */
-export class SigningRequestRateLimiter {
-  private lastRequest: Map<string, number> = new Map()
-  private violationCount: Map<string, number> = new Map()
-  private emitter: EventEmitter
+export interface MuSig2SecurityConfig {
+  /** Minimum signers per session */
+  minSigners?: number
 
-  constructor(emitter: EventEmitter) {
-    this.emitter = emitter
-  }
+  /** Maximum signers per session */
+  maxSigners?: number
 
-  /**
-   * Check if peer can create a signing request
-   * @param peerId - Peer ID
-   * @param minInterval - Minimum interval in milliseconds (default: 30 seconds)
-   * @returns true if allowed, false if rate limited
-   */
-  canCreateRequest(peerId: string, minInterval: number = 30_000): boolean {
-    const now = Date.now()
-    const lastTime = this.lastRequest.get(peerId)
+  /** Maximum session duration in milliseconds */
+  maxSessionDuration?: number
 
-    if (!lastTime) {
-      this.lastRequest.set(peerId, now)
-      return true
-    }
+  /** Require valid public keys in announcements */
+  requireValidPublicKeys?: boolean
 
-    const elapsed = now - lastTime
-    if (elapsed < minInterval) {
-      // Rate limit violation
-      this.recordViolation(peerId)
-      return false
-    }
+  // ============================================================================
+  // Validation Security (Phase 5)
+  // ============================================================================
 
-    this.lastRequest.set(peerId, now)
-    return true
-  }
+  /** Maximum message size in bytes (DoS protection) */
+  maxMessageSize?: number
 
-  /**
-   * Record rate limit violation
-   */
-  private recordViolation(peerId: string): void {
-    const count = (this.violationCount.get(peerId) || 0) + 1
-    this.violationCount.set(peerId, count)
+  /** Maximum timestamp skew in milliseconds */
+  maxTimestampSkew?: number
 
-    // Auto-ban after 10 violations
-    if (count >= 10) {
-      this.emitter.emit(
-        'peer:should-ban',
-        peerId,
-        'signing-request-rate-limit-violations',
-      )
-    }
-  }
+  /** Maximum invalid messages per peer before blocking */
+  maxInvalidMessagesPerPeer?: number
 
-  /**
-   * Clean up old entries (run periodically)
-   */
-  cleanup(): void {
-    const now = Date.now()
-    const maxAge = 24 * 60 * 60 * 1000 // 24 hours
+  /** Enable validation-based security checks */
+  enableValidationSecurity?: boolean
 
-    for (const [peerId, timestamp] of this.lastRequest) {
-      if (now - timestamp > maxAge) {
-        this.lastRequest.delete(peerId)
-        this.violationCount.delete(peerId)
-      }
-    }
-  }
-
-  /**
-   * Reset rate limiter for a peer (e.g., after successful completion)
-   */
-  reset(peerId: string): void {
-    this.lastRequest.delete(peerId)
-    this.violationCount.delete(peerId)
-  }
-
-  /**
-   * Get total violations across all peers
-   */
-  getTotalViolations(): number {
-    let total = 0
-    for (const count of this.violationCount.values()) {
-      total += count
-    }
-    return total
-  }
+  /** Track validation violations for reputation */
+  trackValidationViolations?: boolean
 }
 
 /**
- * Rate limiter for peer advertisements
- * Prevents spam attacks by limiting advertisement frequency per peer
+ * Default security configuration
  */
-export class AdvertisementRateLimiter {
-  private lastAdvertisement: Map<string, number> = new Map()
-  private violationCount: Map<string, number> = new Map()
-  private emitter: EventEmitter
+export const DEFAULT_MUSIG2_SECURITY: Required<MuSig2SecurityConfig> = {
+  minSigners: 2,
+  maxSigners: 15,
+  maxSessionDuration: 10 * 60 * 1000, // 10 minutes
+  requireValidPublicKeys: true,
 
-  constructor(emitter: EventEmitter) {
-    this.emitter = emitter
-  }
-
-  /**
-   * Check if peer can advertise
-   * @param peerId - Peer ID
-   * @param minInterval - Minimum interval in milliseconds (default: 60 seconds)
-   * @returns true if allowed, false if rate limited
-   */
-  canAdvertise(peerId: string, minInterval: number = 60_000): boolean {
-    const now = Date.now()
-    const lastTime = this.lastAdvertisement.get(peerId)
-
-    if (!lastTime) {
-      this.lastAdvertisement.set(peerId, now)
-      return true
-    }
-
-    const elapsed = now - lastTime
-    if (elapsed < minInterval) {
-      // Rate limit violation
-      this.recordViolation(peerId)
-      return false
-    }
-
-    this.lastAdvertisement.set(peerId, now)
-    return true
-  }
-
-  /**
-   * Record rate limit violation
-   */
-  private recordViolation(peerId: string): void {
-    const count = (this.violationCount.get(peerId) || 0) + 1
-    this.violationCount.set(peerId, count)
-
-    // Auto-ban after 10 violations
-    if (count >= 10) {
-      this.emitter.emit('peer:should-ban', peerId, 'rate-limit-violations')
-    }
-  }
-
-  /**
-   * Clean up old entries (run periodically)
-   */
-  cleanup(): void {
-    const now = Date.now()
-    const maxAge = 24 * 60 * 60 * 1000 // 24 hours
-
-    for (const [peerId, timestamp] of this.lastAdvertisement) {
-      if (now - timestamp > maxAge) {
-        this.lastAdvertisement.delete(peerId)
-        this.violationCount.delete(peerId)
-      }
-    }
-  }
-
-  /**
-   * Get total violations across all peers
-   */
-  getTotalViolations(): number {
-    let total = 0
-    for (const count of this.violationCount.values()) {
-      total += count
-    }
-    return total
-  }
+  // Validation Security (Phase 5)
+  maxMessageSize: 100_000, // 100KB - DoS protection
+  maxTimestampSkew: 5 * 60 * 1000, // 5 minutes
+  maxInvalidMessagesPerPeer: 10, // Block peer after 10 invalid messages
+  enableValidationSecurity: true,
+  trackValidationViolations: true,
 }
 
-// ============================================================================
-// Public Key Tracking
-// ============================================================================
-
 /**
- * Track and limit public keys per peer
- * Prevents Sybil attacks by limiting how many keys a single peer can advertise
+ * MuSig2 Protocol Validator
+ *
+ * Implements protocol-specific validation for MuSig2 sessions
+ * Enhanced with validation layer integration (Phase 5)
  */
-export class PeerKeyTracker {
-  private peerKeys: Map<string, Set<string>> = new Map()
-  private keyToPeer: Map<string, string> = new Map()
+export class MuSig2SecurityValidator implements IProtocolValidator {
+  // Validation violation tracking (Phase 5)
+  private validationViolations: Map<string, number> = new Map()
+  private blockedPeers: Set<string> = new Set()
+
+  constructor(
+    private readonly config: MuSig2SecurityConfig = DEFAULT_MUSIG2_SECURITY,
+  ) {}
 
   /**
-   * Check if peer can advertise another key
-   * @param peerId - Peer ID
-   * @param publicKey - Public key to advertise
-   * @param maxKeysPerPeer - Maximum keys per peer (default: 10)
-   * @returns true if allowed, false if limit exceeded
+   * Validate session announcement before accepting
    */
-  canAdvertiseKey(
+  async validateResourceAnnouncement(
+    resourceType: string,
+    resourceId: string,
+    data: unknown,
     peerId: string,
-    publicKey: PublicKey,
-    maxKeysPerPeer: number = 10,
-  ): boolean {
-    const pubKeyStr = publicKey.toString()
-
-    // Check if key already registered to different peer
-    // 11/6/25: Disable this, because peers generate new peerIds at every startup
-    // More important is that the signature is valid for the advertisement, which
-    // is already done in the MuSig2 protocol handler
-    /* const existingPeer = this.keyToPeer.get(pubKeyStr)
-    if (existingPeer && existingPeer !== peerId) {
-      console.warn(
-        `[Security] Key ${pubKeyStr.slice(0, 20)}... already owned by ${existingPeer}`,
-      )
-      return false
-    } */
-
-    // Get peer's current keys
-    let peerKeySet = this.peerKeys.get(peerId)
-    if (!peerKeySet) {
-      peerKeySet = new Set()
-      this.peerKeys.set(peerId, peerKeySet)
+  ): Promise<boolean> {
+    // Only validate musig2-session announcements
+    if (!resourceType.startsWith('musig2-session')) {
+      return true
     }
 
-    // Check limit (allow if key is already in set - re-advertisement)
-    if (peerKeySet.size >= maxKeysPerPeer && !peerKeySet.has(pubKeyStr)) {
-      console.warn(
-        `[Security] Peer ${peerId} exceeded key limit (${maxKeysPerPeer})`,
-      )
+    if (!data || typeof data !== 'object') {
+      console.warn('[MuSig2Security] Invalid announcement data type')
       return false
     }
 
-    // Add key
-    peerKeySet.add(pubKeyStr)
-    this.keyToPeer.set(pubKeyStr, peerId)
+    const announcement = data as SessionAnnouncement
+
+    // Validate required fields
+    if (!announcement.sessionId || !announcement.coordinatorPeerId) {
+      console.warn('[MuSig2Security] Missing required announcement fields')
+      return false
+    }
+
+    // Validate session ID format
+    if (announcement.sessionId !== resourceId) {
+      console.warn('[MuSig2Security] Session ID mismatch')
+      return false
+    }
+
+    // Validate signer count
+    const minSigners =
+      this.config.minSigners ?? DEFAULT_MUSIG2_SECURITY.minSigners
+    const maxSigners =
+      this.config.maxSigners ?? DEFAULT_MUSIG2_SECURITY.maxSigners
+
+    if (announcement.requiredSigners < minSigners) {
+      console.warn(
+        `[MuSig2Security] Too few signers: ${announcement.requiredSigners} < ${minSigners}`,
+      )
+      return false
+    }
+
+    if (announcement.requiredSigners > maxSigners) {
+      console.warn(
+        `[MuSig2Security] Too many signers: ${announcement.requiredSigners} > ${maxSigners}`,
+      )
+      return false
+    }
+
+    // Validate signers array if provided
+    if (announcement.signers) {
+      if (announcement.signers.length !== announcement.requiredSigners) {
+        console.warn('[MuSig2Security] Signer count mismatch')
+        return false
+      }
+
+      // Validate public keys if required
+      if (
+        this.config.requireValidPublicKeys ??
+        DEFAULT_MUSIG2_SECURITY.requireValidPublicKeys
+      ) {
+        for (const signerPubKey of announcement.signers) {
+          try {
+            PublicKey.fromString(signerPubKey)
+          } catch (error) {
+            console.warn(
+              `[MuSig2Security] Invalid signer public key: ${signerPubKey}`,
+            )
+            return false
+          }
+        }
+      }
+    }
+
+    // Validate timestamps
+    const now = Date.now()
+    if (announcement.createdAt > now + 60000) {
+      // Allow 1 minute clock skew
+      console.warn('[MuSig2Security] Announcement timestamp in future')
+      return false
+    }
+
+    if (announcement.expiresAt < now) {
+      console.warn('[MuSig2Security] Announcement expired')
+      return false
+    }
+
+    const maxDuration =
+      this.config.maxSessionDuration ??
+      DEFAULT_MUSIG2_SECURITY.maxSessionDuration
+    if (announcement.expiresAt - announcement.createdAt > maxDuration) {
+      console.warn('[MuSig2Security] Announcement duration too long')
+      return false
+    }
+
+    // Validate message hash format (should be 64 hex characters)
+    if (!/^[0-9a-f]{64}$/i.test(announcement.messageHash)) {
+      console.warn('[MuSig2Security] Invalid message hash format')
+      return false
+    }
+
     return true
   }
 
   /**
-   * Remove key (when advertisement expires)
+   * Validate MuSig2 message security constraints before processing
+   *
+   * ARCHITECTURE NOTE:
+   * This method validates SECURITY CONSTRAINTS ONLY (DoS protection, peer blocking,
+   * timestamp skew). Payload structure validation is handled by protocol.ts to avoid
+   * double validation. The validation layer (validation.ts) provides the actual
+   * payload validators that protocol.ts uses.
+   *
+   * Flow:
+   * 1. security.ts: validateMessage() - Security constraints (this method)
+   * 2. protocol.ts: _validateAndRouteMessage() - Payload structure validation
+   * 3. coordinator.ts: Business logic (no re-validation needed)
    */
-  removeKey(publicKey: PublicKey): void {
-    const pubKeyStr = publicKey.toString()
-    const peerId = this.keyToPeer.get(pubKeyStr)
+  async validateMessage(message: P2PMessage, from: PeerInfo): Promise<boolean> {
+    // Check if peer is blocked due to too many violations
+    if (this.blockedPeers.has(from.peerId)) {
+      console.warn(
+        `[MuSig2Security] Blocked peer attempted message: ${from.peerId}`,
+      )
+      return false
+    }
 
-    if (peerId) {
-      const peerKeySet = this.peerKeys.get(peerId)
-      peerKeySet?.delete(pubKeyStr)
-      this.keyToPeer.delete(pubKeyStr)
+    // Check message size (DoS protection)
+    const maxMessageSize =
+      this.config.maxMessageSize ?? DEFAULT_MUSIG2_SECURITY.maxMessageSize
+    if (this._isMessageTooLarge(message, maxMessageSize)) {
+      this._trackValidationViolation(from.peerId, 'message_too_large')
+      return false
+    }
 
-      // Clean up empty set
-      if (peerKeySet && peerKeySet.size === 0) {
-        this.peerKeys.delete(peerId)
-      }
+    // Basic payload existence check (not structure validation)
+    if (!message.payload || typeof message.payload !== 'object') {
+      console.warn('[MuSig2Security] Invalid message payload')
+      this._trackValidationViolation(from.peerId, 'invalid_payload')
+      return false
+    }
+
+    const payload = message.payload as MuSig2Payload
+
+    // All MuSig2 messages must have sessionId and timestamp (security requirement)
+    if (!payload.sessionId || !payload.timestamp) {
+      console.warn('[MuSig2Security] Missing sessionId or timestamp')
+      this._trackValidationViolation(from.peerId, 'missing_fields')
+      return false
+    }
+
+    // Validate timestamp with configurable skew (security constraint)
+    const maxTimestampSkew =
+      this.config.maxTimestampSkew ?? DEFAULT_MUSIG2_SECURITY.maxTimestampSkew
+    const now = Date.now()
+    const messageTime = payload.timestamp as number
+    if (Math.abs(now - messageTime) > maxTimestampSkew) {
+      console.warn('[MuSig2Security] Message timestamp too old or in future')
+      this._trackValidationViolation(from.peerId, 'timestamp_skew')
+      return false
+    }
+
+    // NOTE: Payload structure validation is intentionally NOT performed here.
+    // It is handled by protocol.ts via _validateAndRouteMessage() to avoid
+    // double validation. This method only checks security constraints.
+
+    // TODO: Add rate limiting per peer per message type
+    // TODO: Add session-specific security checks (e.g., verify sender is participant)
+    // TODO: Add cryptographic proof verification for critical messages
+
+    return true
+  }
+
+  // NOTE: Payload structure validation methods have been removed from security.ts.
+  // They are now handled exclusively by protocol.ts via _validateAndRouteMessage().
+  // This prevents double validation and maintains clear separation of concerns:
+  // - security.ts: Security constraints (DoS, blocking, rate limiting)
+  // - protocol.ts: Payload structure validation (single point of ingress validation)
+  // - validation.ts: Pure validator functions (used by protocol.ts)
+  // - coordinator.ts: Business logic + egress validation
+
+  /**
+   * Check if message is too large (DoS protection)
+   */
+  private _isMessageTooLarge(message: P2PMessage, maxSize: number): boolean {
+    try {
+      const serialized = JSON.stringify(message)
+      return serialized.length > maxSize
+    } catch {
+      return true // If we can't serialize, consider it too large
     }
   }
 
   /**
-   * Get key count for peer
+   * Track validation violations for reputation (Phase 5)
    */
-  getKeyCount(peerId: string): number {
-    return this.peerKeys.get(peerId)?.size || 0
-  }
-
-  /**
-   * Get all keys for peer
-   */
-  getPeerKeys(peerId: string): string[] {
-    const keySet = this.peerKeys.get(peerId)
-    return keySet ? Array.from(keySet) : []
-  }
-}
-
-// ============================================================================
-// Invalid Signature Tracking
-// ============================================================================
-
-/**
- * Track invalid signatures per peer
- * Identifies and penalizes peers sending invalid cryptographic data
- */
-export class InvalidSignatureTracker {
-  private invalidCounts: Map<string, number> = new Map()
-  private firstViolation: Map<string, number> = new Map()
-  private emitter: EventEmitter
-
-  constructor(emitter: EventEmitter) {
-    this.emitter = emitter
-  }
-
-  /**
-   * Record invalid signature from peer
-   */
-  recordInvalidSignature(peerId: string): void {
-    const count = (this.invalidCounts.get(peerId) || 0) + 1
-    this.invalidCounts.set(peerId, count)
-
-    if (!this.firstViolation.has(peerId)) {
-      this.firstViolation.set(peerId, Date.now())
+  private _trackValidationViolation(
+    peerId: string,
+    violationType: string,
+  ): void {
+    const trackViolations =
+      this.config.trackValidationViolations ??
+      DEFAULT_MUSIG2_SECURITY.trackValidationViolations
+    if (!trackViolations) {
+      return
     }
 
-    // Ban after threshold
-    if (count >= MUSIG2_SECURITY_LIMITS.MAX_INVALID_SIGNATURES_PER_PEER) {
-      this.emitter.emit('peer:should-ban', peerId, 'invalid-signatures')
-    }
-  }
+    const currentCount = this.validationViolations.get(peerId) ?? 0
+    const newCount = currentCount + 1
+    this.validationViolations.set(peerId, newCount)
 
-  /**
-   * Get invalid signature count
-   */
-  getCount(peerId: string): number {
-    return this.invalidCounts.get(peerId) || 0
-  }
-
-  /**
-   * Reset count (e.g., after 24 hours)
-   */
-  resetIfExpired(peerId: string, expiryMs: number = 24 * 60 * 60 * 1000): void {
-    const firstTime = this.firstViolation.get(peerId)
-    if (firstTime && Date.now() - firstTime > expiryMs) {
-      this.invalidCounts.delete(peerId)
-      this.firstViolation.delete(peerId)
-    }
-  }
-
-  /**
-   * Get total invalid signatures across all peers
-   */
-  getTotalInvalidSignatures(): number {
-    let total = 0
-    for (const count of this.invalidCounts.values()) {
-      total += count
-    }
-    return total
-  }
-}
-
-// ============================================================================
-// Peer Reputation Management
-// ============================================================================
-
-/**
- * Peer score tracking
- */
-export interface PeerScore {
-  invalidSignatures: number
-  spamCount: number
-  rateLimitViolations: number
-  lastViolation: number
-  joinedSessions: number
-  completedSessions: number
-  advertisementCount: number
-  publicKeysAdvertised: Set<string>
-}
-
-/**
- * Comprehensive peer reputation system
- * Tracks peer behavior and manages blacklist/graylist
- */
-export class PeerReputationManager extends EventEmitter {
-  private peerScores: Map<string, PeerScore> = new Map()
-  private blacklist: Set<string> = new Set()
-  private graylist: Map<string, number> = new Map() // peerId -> until timestamp
-
-  /**
-   * Record invalid signature
-   */
-  recordInvalidSignature(peerId: string): void {
-    const score = this._getOrCreateScore(peerId)
-    score.invalidSignatures++
-    score.lastViolation = Date.now()
-
-    if (
-      score.invalidSignatures >=
-      MUSIG2_SECURITY_LIMITS.MAX_INVALID_SIGNATURES_PER_PEER
-    ) {
-      this.blacklistPeer(peerId, 'invalid-signatures')
-    }
-  }
-
-  /**
-   * Record spam violation
-   */
-  recordSpam(peerId: string): void {
-    const score = this._getOrCreateScore(peerId)
-    score.spamCount++
-    score.lastViolation = Date.now()
-
-    if (score.spamCount >= 50) {
-      this.blacklistPeer(peerId, 'spam')
-    }
-  }
-
-  /**
-   * Record rate limit violation
-   */
-  recordRateLimitViolation(peerId: string): void {
-    const score = this._getOrCreateScore(peerId)
-    score.rateLimitViolations++
-
-    if (score.rateLimitViolations >= 10) {
-      this.graylistPeer(peerId, 60 * 60 * 1000) // 1 hour
-    }
-  }
-
-  /**
-   * Blacklist peer permanently
-   */
-  blacklistPeer(peerId: string, reason: string): void {
-    this.blacklist.add(peerId)
-    console.warn(`[P2P] ⛔ Blacklisted peer: ${peerId} (${reason})`)
-    this.emit('peer:blacklisted', peerId, reason)
-  }
-
-  /**
-   * Graylist peer temporarily
-   */
-  graylistPeer(peerId: string, durationMs: number): void {
-    const until = Date.now() + durationMs
-    this.graylist.set(peerId, until)
     console.warn(
-      `[P2P] ⚠️  Graylisted peer: ${peerId} (${Math.round(durationMs / 1000)}s)`,
+      `[MuSig2Security] Validation violation from ${peerId}: ${violationType} (count: ${newCount})`,
     )
-    this.emit('peer:graylisted', peerId, durationMs)
-  }
 
-  /**
-   * Check if peer is allowed
-   */
-  isAllowed(peerId: string): boolean {
-    // Check blacklist
-    if (this.blacklist.has(peerId)) {
-      return false
-    }
-
-    // Check graylist
-    const graylistUntil = this.graylist.get(peerId)
-    if (graylistUntil && Date.now() < graylistUntil) {
-      return false
-    }
-
-    // Remove expired graylist
-    if (graylistUntil && Date.now() >= graylistUntil) {
-      this.graylist.delete(peerId)
-    }
-
-    return true
-  }
-
-  /**
-   * Get peer reputation score
-   */
-  getScore(peerId: string): PeerScore {
-    return this._getOrCreateScore(peerId)
-  }
-
-  /**
-   * Get or create peer score
-   */
-  private _getOrCreateScore(peerId: string): PeerScore {
-    let score = this.peerScores.get(peerId)
-    if (!score) {
-      score = {
-        invalidSignatures: 0,
-        spamCount: 0,
-        rateLimitViolations: 0,
-        lastViolation: 0,
-        joinedSessions: 0,
-        completedSessions: 0,
-        advertisementCount: 0,
-        publicKeysAdvertised: new Set(),
-      }
-      this.peerScores.set(peerId, score)
-    }
-    return score
-  }
-
-  /**
-   * Get blacklist size
-   */
-  getBlacklistSize(): number {
-    return this.blacklist.size
-  }
-
-  /**
-   * Get graylist size
-   */
-  getGraylistSize(): number {
-    // Count only active graylists
-    const now = Date.now()
-    let count = 0
-    for (const until of this.graylist.values()) {
-      if (until > now) {
-        count++
-      }
-    }
-    return count
-  }
-
-  /**
-   * Check if peer is blacklisted
-   */
-  isBlacklisted(peerId: string): boolean {
-    return this.blacklist.has(peerId)
-  }
-
-  /**
-   * Check if peer is graylisted
-   */
-  isGraylisted(peerId: string): boolean {
-    const until = this.graylist.get(peerId)
-    return until ? Date.now() < until : false
-  }
-
-  /**
-   * Remove peer from blacklist (admin override)
-   */
-  unblacklistPeer(peerId: string): void {
-    this.blacklist.delete(peerId)
-    console.log(`[P2P] Removed peer from blacklist: ${peerId}`)
-    this.emit('peer:unblacklisted', peerId)
-  }
-
-  /**
-   * Get all blacklisted peers
-   */
-  getBlacklistedPeers(): string[] {
-    return Array.from(this.blacklist)
-  }
-
-  /**
-   * Get all graylisted peers with expiry times
-   */
-  getGraylistedPeers(): Array<{ peerId: string; until: number }> {
-    const now = Date.now()
-    const result: Array<{ peerId: string; until: number }> = []
-
-    for (const [peerId, until] of this.graylist) {
-      if (until > now) {
-        result.push({ peerId, until })
-      }
-    }
-
-    return result
-  }
-}
-
-// ============================================================================
-// Peer Key Limits Configuration
-// ============================================================================
-
-/**
- * Configuration for key limits per peer tier
- */
-export const PEER_KEY_LIMITS = {
-  DEFAULT: 10, // 10 keys per peer (default)
-  VERIFIED: 50, // 50 keys if identity verified
-  INSTITUTIONAL: 100, // 100 keys for institutional users
-} as const
-
-// ============================================================================
-// Security Manager (Facade)
-// ============================================================================
-
-/**
- * Security manager that coordinates all security mechanisms
- * Provides a single interface for security checks and enforcement
- */
-export class SecurityManager extends EventEmitter {
-  public rateLimiter: AdvertisementRateLimiter
-  public signingRequestRateLimiter: SigningRequestRateLimiter
-  public keyTracker: PeerKeyTracker
-  public invalidSigTracker: InvalidSignatureTracker
-  public peerReputation: PeerReputationManager
-  private disableRateLimiting: boolean
-
-  constructor(config?: { disableRateLimiting?: boolean }) {
-    super()
-
-    this.disableRateLimiting = config?.disableRateLimiting ?? false
-
-    // Initialize security components
-    this.rateLimiter = new AdvertisementRateLimiter(this)
-    this.signingRequestRateLimiter = new SigningRequestRateLimiter(this)
-    this.keyTracker = new PeerKeyTracker()
-    this.invalidSigTracker = new InvalidSignatureTracker(this)
-    this.peerReputation = new PeerReputationManager()
-
-    // Forward ban events to peer reputation
-    this.on('peer:should-ban', (peerId: string, reason: string) => {
-      this.peerReputation.blacklistPeer(peerId, reason)
-    })
-
-    if (this.disableRateLimiting) {
+    // Block peer if too many violations
+    const maxInvalidMessages =
+      this.config.maxInvalidMessagesPerPeer ??
+      DEFAULT_MUSIG2_SECURITY.maxInvalidMessagesPerPeer
+    if (newCount >= maxInvalidMessages) {
+      this.blockedPeers.add(peerId)
       console.warn(
-        '[MuSig2 Security] ⚠️  RATE LIMITING DISABLED (testing mode)',
+        `[MuSig2Security] Blocked peer ${peerId} due to ${newCount} validation violations`,
       )
     }
   }
 
+  // Legacy validation methods (validateJoinMessage, validateNonceMessage,
+  // validatePartialSigMessage) have been removed. Payload structure validation
+  // is now handled exclusively by protocol.ts using validation.ts validators.
+  //
+  // TODO: Add semantic validation methods that check business logic constraints:
+  // - validateJoinAuthorization(): Verify sender is allowed to join session
+  // - validateNonceUniqueness(): Verify nonce hasn't been used before
+  // - validatePartialSigConsistency(): Verify partial sig matches session state
+
   /**
-   * Check if peer can advertise a key
-   * Combines rate limiting and key count checks
+   * Check if peer can announce a session
    */
-  canAdvertiseKey(peerId: string, publicKey: PublicKey): boolean {
-    // Skip all security checks if disabled (testing only)
-    if (this.disableRateLimiting) {
+  async canAnnounceResource(
+    resourceType: string,
+    peerId: string,
+  ): Promise<boolean> {
+    // Check if peer is blocked
+    if (this.blockedPeers.has(peerId)) {
+      console.warn(
+        `[MuSig2Security] Blocked peer ${peerId} attempted to announce resource`,
+      )
+      return false
+    }
+
+    // Basic check - can be extended with reputation system
+    if (!resourceType.startsWith('musig2-session')) {
       return true
     }
 
-    // Check if peer is allowed at all
-    if (!this.peerReputation.isAllowed(peerId)) {
-      console.warn(`[Security] Peer ${peerId} is blacklisted/graylisted`)
-      return false
-    }
-
-    // Check rate limit
-    if (!this.rateLimiter.canAdvertise(peerId)) {
-      console.warn(`[Security] Peer ${peerId} rate limited`)
-      this.peerReputation.recordRateLimitViolation(peerId)
-      return false
-    }
-
-    // Check key count limit
-    if (!this.keyTracker.canAdvertiseKey(peerId, publicKey)) {
-      console.warn(`[Security] Peer ${peerId} exceeded key limit`)
-      this.peerReputation.recordSpam(peerId)
-      return false
-    }
-
+    // For now, allow all non-blocked peers to announce
+    // In production, could check reputation, rate limits, etc.
     return true
   }
 
-  /**
-   * Check if peer can create a signing request
-   * Combines reputation and rate limiting checks
-   */
-  canCreateSigningRequest(peerId: string): boolean {
-    // Skip all security checks if disabled (testing only)
-    if (this.disableRateLimiting) {
-      return true
-    }
-
-    // Check if peer is allowed at all
-    if (!this.peerReputation.isAllowed(peerId)) {
-      console.warn(
-        `[Security] Signing request from blacklisted/graylisted peer: ${peerId}`,
-      )
-      return false
-    }
-
-    // Check rate limit
-    if (!this.signingRequestRateLimiter.canCreateRequest(peerId)) {
-      console.warn(
-        `[Security] Peer ${peerId} exceeded signing request rate limit`,
-      )
-      this.peerReputation.recordRateLimitViolation(peerId)
-      return false
-    }
-
-    return true
-  }
+  // ============================================================================
+  // Security Status Methods (Phase 5)
+  // ============================================================================
 
   /**
-   * Record invalid signature from peer
+   * Get security status for monitoring
    */
-  recordInvalidSignature(peerId: string): void {
-    this.invalidSigTracker.recordInvalidSignature(peerId)
-    this.peerReputation.recordInvalidSignature(peerId)
-  }
-
-  /**
-   * Cleanup old security data
-   */
-  cleanup(): void {
-    this.rateLimiter.cleanup()
-    this.signingRequestRateLimiter.cleanup()
-  }
-
-  /**
-   * Get security metrics
-   */
-  getMetrics() {
+  getSecurityStatus() {
     return {
-      advertisementRateLimitViolations: this.rateLimiter.getTotalViolations(),
-      signingRequestRateLimitViolations:
-        this.signingRequestRateLimiter.getTotalViolations(),
-      invalidSignatures: this.invalidSigTracker.getTotalInvalidSignatures(),
-      blacklistedPeers: this.peerReputation.getBlacklistSize(),
-      graylistedPeers: this.peerReputation.getGraylistSize(),
+      blockedPeers: Array.from(this.blockedPeers),
+      blockedPeerCount: this.blockedPeers.size,
+      validationViolations: Object.fromEntries(this.validationViolations),
+      totalViolations: Array.from(this.validationViolations.values()).reduce(
+        (a, b) => a + b,
+        0,
+      ),
+      config: {
+        maxMessageSize:
+          this.config.maxMessageSize ?? DEFAULT_MUSIG2_SECURITY.maxMessageSize,
+        maxTimestampSkew:
+          this.config.maxTimestampSkew ??
+          DEFAULT_MUSIG2_SECURITY.maxTimestampSkew,
+        maxInvalidMessagesPerPeer:
+          this.config.maxInvalidMessagesPerPeer ??
+          DEFAULT_MUSIG2_SECURITY.maxInvalidMessagesPerPeer,
+        enableValidationSecurity:
+          this.config.enableValidationSecurity ??
+          DEFAULT_MUSIG2_SECURITY.enableValidationSecurity,
+        trackValidationViolations:
+          this.config.trackValidationViolations ??
+          DEFAULT_MUSIG2_SECURITY.trackValidationViolations,
+      },
     }
+  }
+
+  /**
+   * Check if a peer is blocked
+   */
+  isPeerBlocked(peerId: string): boolean {
+    return this.blockedPeers.has(peerId)
+  }
+
+  /**
+   * Get violation count for a peer
+   */
+  getViolationCount(peerId: string): number {
+    return this.validationViolations.get(peerId) ?? 0
+  }
+
+  /**
+   * Unblock a peer (for manual intervention)
+   */
+  unblockPeer(peerId: string): boolean {
+    const wasBlocked = this.blockedPeers.delete(peerId)
+    if (wasBlocked) {
+      this.validationViolations.delete(peerId)
+      console.log(`[MuSig2Security] Unblocked peer: ${peerId}`)
+    }
+    return wasBlocked
+  }
+
+  /**
+   * Clear all violations (for testing or reset)
+   */
+  clearViolations(): void {
+    this.validationViolations.clear()
+    this.blockedPeers.clear()
+    console.log('[MuSig2Security] Cleared all violations and blocked peers')
   }
 }

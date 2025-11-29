@@ -395,13 +395,13 @@ export class MuSig2Signer {
    * Creates a MuSig2 aggregated key and applies Taproot tweaking.
    * Use this when creating Taproot outputs that will be spent via MuSig2.
    *
-   * @param merkleRoot - Optional: Script tree merkle root for script path spending
+   * @param state - Optional 32-byte state data (e.g., NFT metadata hash)
    * @returns Taproot-specific preparation result
    */
   prepareTaproot(
-    merkleRoot?: Buffer,
+    state?: Buffer,
   ): MuSigTaprootKeyResult & { keyAggContext: MuSigKeyAggContext } {
-    const result = buildMuSigTaprootKey(this.config.signers, merkleRoot)
+    const result = buildMuSigTaprootKey(this.config.signers, state)
 
     // Get key aggregation context
     const keyAggContext = musigKeyAgg(this.config.signers)

@@ -1,21 +1,91 @@
 /**
- * Copyright 2025 The Lotusia Stewardship
- * Github: https://github.com/LotusiaStewardship
- * License: MIT
- */
-
-/**
- * MuSig2 P2P Coordination
+ * MuSig2 P2P Coordination Module
  *
- * P2P coordination layer for MuSig2 multi-signature sessions
+ * Exports all components for MuSig2 multi-signature coordination over P2P networks
  */
 
 export { MuSig2P2PCoordinator } from './coordinator.js'
-export { MuSig2ProtocolHandler } from './protocol-handler.js'
+export { MuSig2ProtocolHandler } from './protocol.js'
+export { MuSig2SecurityValidator, DEFAULT_MUSIG2_SECURITY } from './security.js'
+export type { MuSig2SecurityConfig } from './security.js'
 export * from './types.js'
-export * from './serialization.js'
-export * from './election.js'
-export * from './security.js'
-export * from './identity-manager.js'
-export * from './errors.js'
-export * from './validation.js'
+
+// Serialization Layer
+export {
+  serializePoint,
+  deserializePoint,
+  serializePublicNonces,
+  deserializePublicNonces,
+  serializeBN,
+  deserializeBN,
+  serializePublicKey,
+  deserializePublicKey,
+  serializePublicKeys,
+  deserializePublicKeys,
+  serializeMessage,
+  deserializeMessage,
+  serializeSignature,
+  deserializeSignature,
+  validateHexString,
+  getSerializationInfo,
+  type SerializedSignature,
+} from './serialization.js'
+
+// Validation Layer
+export {
+  validateMessageStructure,
+  validateSessionJoinPayload,
+  validateSessionJoinAckPayload,
+  validateNonceSharePayload,
+  validatePartialSigSharePayload,
+  validateSessionAbortPayload,
+  validateSessionCompletePayload,
+  validateSessionAnnouncementPayload,
+} from './validation.js'
+
+// Error Classes
+export {
+  MuSig2P2PError,
+  ValidationError,
+  DeserializationError,
+  SerializationError,
+  SecurityError,
+  ProtocolError,
+  ErrorCode,
+  createValidationError,
+  createDeserializationError,
+  createSecurityError,
+} from './errors.js'
+
+// Coordinator Election
+export {
+  electCoordinator,
+  verifyElectionResult,
+  isCoordinator,
+  getCoordinatorPublicKey,
+  getBackupCoordinator,
+  getCoordinatorPriorityList,
+  ElectionMethod,
+  type ElectionResult,
+} from './election.js'
+
+// Discovery System
+export {
+  MuSig2Discovery,
+  MuSig2DiscoverySecurityValidator,
+  createMuSig2SecurityPolicy,
+  DEFAULT_MUSIG2_DISCOVERY_CONFIG,
+  isValidSignerAdvertisement,
+  isValidSigningRequestAdvertisement,
+  isValidSignerCriteria,
+  isValidSigningRequestCriteria,
+  publicKeyToHex,
+  hexToPublicKey,
+} from './discovery-index.js'
+export type {
+  MuSig2SignerCriteria,
+  MuSig2SigningRequestCriteria,
+  MuSig2SignerAdvertisement,
+  MuSig2SigningRequestAdvertisement,
+  MuSig2DiscoveryConfig,
+} from './discovery-types.js'

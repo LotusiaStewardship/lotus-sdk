@@ -32,7 +32,6 @@ import {
 } from '../crypto/musig2.js'
 import { verifyTaprootKeyPathMuSigPartial } from '../taproot/musig2.js'
 import { calculateTapTweak, tweakPublicKey } from '../taproot.js'
-import { MuSig2MessageType } from '../../p2p/musig2/types.js'
 
 /**
  * Session phases in the MuSig2 protocol
@@ -105,9 +104,6 @@ export interface MuSigSession {
 
   /** This signer's public nonce */
   myPublicNonce?: [Point, Point]
-
-  /** Received nonce commitments from other signers (index -> commitment) */
-  nonceCommitments?: Map<number, Buffer>
 
   /** Received public nonces from other signers (index -> nonce) */
   receivedPublicNonces: Map<number, [Point, Point]>
@@ -297,10 +293,7 @@ export class MuSigSessionManager {
     // Store in session
     session.mySecretNonce = nonce
     session.myPublicNonce = nonce.publicNonces
-    // ARCHITECTURE FIX (2025-11-21): Do NOT transition phase here
-    // Phase will be transitioned by P2P coordinator after ALL nonce commitments received
-    // This prevents race condition where peers reject each other's NONCE_COMMIT messages
-    // session.phase = MuSigSessionPhase.NONCE_EXCHANGE // REMOVED
+    session.phase = MuSigSessionPhase.NONCE_EXCHANGE
     session.updatedAt = Date.now()
 
     // RACE CONDITION FIX: If we already have all other nonces (received before we generated ours),
@@ -320,10 +313,10 @@ export class MuSigSessionManager {
    * @param publicNonce - The public nonce to receive
    * @throws Error if validation fails or duplicate nonce received
    */
-  receiveNonce(
+  receiveNonces(
     session: MuSigSession,
     signerIndex: number,
-    publicNonce: [Point, Point],
+    publicNonces: [Point, Point],
   ): void {
     // Validate session phase
     if (
@@ -354,8 +347,8 @@ export class MuSigSessionManager {
 
     // Validate nonce points
     try {
-      publicNonce[0].validate()
-      publicNonce[1].validate()
+      publicNonces[0].validate()
+      publicNonces[1].validate()
     } catch (error) {
       throw new Error(
         `Invalid public nonce from signer ${signerIndex}: ${error}`,
@@ -363,7 +356,7 @@ export class MuSigSessionManager {
     }
 
     // Store nonce
-    session.receivedPublicNonces.set(signerIndex, publicNonce)
+    session.receivedPublicNonces.set(signerIndex, publicNonces)
     session.updatedAt = Date.now()
 
     // If we have all nonces, aggregate them
@@ -371,8 +364,6 @@ export class MuSigSessionManager {
       this._aggregateNonces(session)
     }
   }
-
-  // REMOVED: Duplicate hasAllNonces method - now using private version below
 
   /**
    * Create this signer's partial signature
@@ -617,6 +608,24 @@ export class MuSigSessionManager {
   }
 
   /**
+   * TESTING ONLY: Manually transition session phase
+   *
+   * This method is only for testing purposes to simulate phase transitions
+   * that would normally be handled by the P2P coordinator's state machine.
+   *
+   * @param session - The session to transition
+   * @param newPhase - The new phase to transition to
+   * @internal
+   */
+  _transitionPhaseForTesting(
+    session: MuSigSession,
+    newPhase: MuSigSessionPhase,
+  ): void {
+    session.phase = newPhase
+    session.updatedAt = Date.now()
+  }
+
+  /**
    * Aggregate all received nonces
    */
   private _aggregateNonces(session: MuSigSession): void {
@@ -728,123 +737,7 @@ export class MuSigSessionManager {
     this._clearSecretNonce(session)
   }
 
-  // ===== NEW PHASE 1 METHODS: Enhanced Session Management =====
-
-  /**
-   * Process nonce commitment (Round 1, Step 1)
-   * This handles the NONCE_COMMITMENTS phase with proper protocol validation
-   */
-  processNonceCommitment(
-    session: MuSigSession,
-    signerIndex: number,
-    commitment: Buffer,
-  ): SessionManagerResult {
-    try {
-      // Validate current state (should be in INIT or NONCE_EXCHANGE)
-      this.validateStateForMessage(
-        session.phase,
-        MuSig2MessageType.NONCE_COMMIT,
-      )
-
-      // Initialize nonce commitments map if needed
-      if (!session.nonceCommitments) {
-        session.nonceCommitments = new Map()
-      }
-
-      // Store commitment
-      session.nonceCommitments.set(signerIndex, commitment)
-      session.updatedAt = Date.now()
-
-      // Check if all commitments received to transition to NONCE_EXCHANGE
-      if (this.hasAllNonceCommitments(session)) {
-        // 🎯 CRITICAL: Actually transition the phase
-        session.phase = MuSigSessionPhase.NONCE_EXCHANGE
-        session.updatedAt = Date.now()
-
-        return {
-          shouldTransitionTo: MuSigSessionPhase.NONCE_EXCHANGE,
-          shouldRevealNonces: true,
-          broadcastNonces: session.myPublicNonce,
-        }
-      }
-
-      return { shouldTransitionTo: undefined }
-    } catch (error) {
-      return { error: (error as Error).message }
-    }
-  }
-
-  /**
-   * Process nonce share (Round 1, Step 2)
-   * This handles the NONCE_EXCHANGE phase
-   */
-  processNonceShare(
-    session: MuSigSession,
-    signerIndex: number,
-    publicNonce: [Point, Point],
-  ): SessionManagerResult {
-    try {
-      // Validate protocol phase
-      this.validateStateForMessage(session.phase, MuSig2MessageType.NONCE_SHARE)
-
-      // Use existing receiveNonce method
-      this.receiveNonce(session, signerIndex, publicNonce)
-
-      // Check if all nonces received to auto-advance to PARTIAL_SIG_EXCHANGE
-      if (this.hasAllNonces(session)) {
-        // 🎯 CRITICAL: Actually transition the phase
-        session.phase = MuSigSessionPhase.PARTIAL_SIG_EXCHANGE
-        session.updatedAt = Date.now()
-
-        return {
-          shouldTransitionTo: MuSigSessionPhase.PARTIAL_SIG_EXCHANGE,
-          shouldCreatePartialSig: true,
-        }
-      }
-
-      return { shouldTransitionTo: undefined }
-    } catch (error) {
-      return { error: (error as Error).message }
-    }
-  }
-
-  /**
-   * Process partial signature (Round 2)
-   * This handles the PARTIAL_SIG_EXCHANGE phase
-   */
-  processPartialSignature(
-    session: MuSigSession,
-    signerIndex: number,
-    partialSig: BN,
-  ): SessionManagerResult {
-    try {
-      // Validate protocol phase
-      this.validateStateForMessage(
-        session.phase,
-        MuSig2MessageType.PARTIAL_SIG_SHARE,
-      )
-
-      // Use existing receivePartialSignature method
-      this.receivePartialSignature(session, signerIndex, partialSig)
-
-      // Check if all partial signatures received to finalize
-      if (this.hasAllPartialSignatures(session)) {
-        // 🎯 CRITICAL: Actually transition the phase
-        session.phase = MuSigSessionPhase.COMPLETE
-        session.updatedAt = Date.now()
-
-        return {
-          shouldTransitionTo: MuSigSessionPhase.COMPLETE,
-          shouldFinalize: true,
-          finalSignature: session.finalSignature,
-        }
-      }
-
-      return { shouldTransitionTo: undefined }
-    } catch (error) {
-      return { error: (error as Error).message }
-    }
-  }
+  // ===== PUBLIC STATUS METHODS =====
 
   /**
    * Check if all nonces received from other signers (PUBLIC)
@@ -854,16 +747,6 @@ export class MuSigSessionManager {
     if (!session.receivedPublicNonces) return false
     // Expect nonces from all other signers (excluding self)
     return session.receivedPublicNonces.size === session.signers.length - 1
-  }
-
-  /**
-   * Check if all nonce commitments received (PUBLIC)
-   * Used by P2P coordinator to check completion status
-   */
-  hasAllNonceCommitments(session: MuSigSession): boolean {
-    if (!session.nonceCommitments) return false
-    // Expect commitments from all other signers (excluding self)
-    return session.nonceCommitments.size === session.signers.length - 1
   }
 
   /**
@@ -877,45 +760,6 @@ export class MuSigSessionManager {
   }
 
   /**
-   * Validate protocol phase for message type
-   * This implements the protocol phase enforcement currently in P2P
-   */
-  validateStateForMessage(
-    currentPhase: MuSigSessionPhase,
-    messageType: MuSig2MessageType,
-  ): boolean {
-    switch (messageType) {
-      case MuSig2MessageType.NONCE_COMMIT:
-        if (
-          currentPhase !== MuSigSessionPhase.INIT &&
-          currentPhase !== MuSigSessionPhase.NONCE_EXCHANGE
-        ) {
-          throw new Error(`NONCE_COMMIT not allowed in phase ${currentPhase}`)
-        }
-        return true
-      case MuSig2MessageType.NONCE_SHARE:
-        if (currentPhase !== MuSigSessionPhase.NONCE_EXCHANGE) {
-          throw new Error(`NONCE_SHARE not allowed in phase ${currentPhase}`)
-        }
-        return true
-      case MuSig2MessageType.PARTIAL_SIG_SHARE:
-        if (currentPhase !== MuSigSessionPhase.PARTIAL_SIG_EXCHANGE) {
-          throw new Error(
-            `PARTIAL_SIG_SHARE not allowed in phase ${currentPhase}`,
-          )
-        }
-        return true
-      case MuSig2MessageType.SESSION_JOIN:
-        if (currentPhase !== MuSigSessionPhase.INIT) {
-          throw new Error(`SESSION_JOIN not allowed in phase ${currentPhase}`)
-        }
-        return true
-      default:
-        throw new Error(`Unknown message type: ${messageType}`)
-    }
-  }
-
-  /**
    * Check if local participant is coordinator
    */
   isCoordinator(session: MuSigSession): boolean {
@@ -923,21 +767,144 @@ export class MuSigSessionManager {
     return session.myIndex === session.coordinatorIndex
   }
 
+  // ========================================================================
+  // BIP327 Protocol Compliance Validation (Phase 2)
+  // ========================================================================
+
   /**
-   * Get backup coordinator for failover
+   * Validate MuSig2 BIP327 compliance
+   * Ensures the session follows BIP327 specification requirements
+   *
+   * @param session - The signing session
+   * @throws Error if session violates BIP327 requirements
    */
-  getBackupCoordinator(
+  validateBIP327Compliance(session: MuSigSession): void {
+    // 1. Key aggregation uses sorted keys (BIP327 requirement)
+    if (!this.areKeysSorted(session.signers)) {
+      throw new Error(
+        'Signers must be sorted lexicographically (BIP327 requirement)',
+      )
+    }
+
+    // 2. Key aggregation context exists
+    if (!session.keyAggContext) {
+      throw new Error('Key aggregation context required (BIP327)')
+    }
+
+    // 3. Phase transitions follow MuSig2 rounds
+    this.validateMuSig2Rounds(session)
+  }
+
+  /**
+   * Check if keys are sorted lexicographically
+   * BIP327 requires deterministic key ordering
+   *
+   * @param signers - Array of public keys
+   * @returns True if keys are sorted
+   */
+  private areKeysSorted(signers: PublicKey[]): boolean {
+    if (signers.length <= 1) return true
+
+    for (let i = 0; i < signers.length - 1; i++) {
+      const current = signers[i].toBuffer()
+      const next = signers[i + 1].toBuffer()
+      if (current.compare(next) > 0) {
+        return false // Not sorted
+      }
+    }
+    return true
+  }
+
+  /**
+   * Validate MuSig2 round progression
+   * Ensures phase transitions follow BIP327 protocol
+   *
+   * @param session - The signing session
+   * @throws Error if phase transition is invalid
+   */
+  private validateMuSig2Rounds(session: MuSigSession): void {
+    // Validate phase is one of the allowed phases
+    const validPhases = [
+      MuSigSessionPhase.INIT,
+      MuSigSessionPhase.NONCE_EXCHANGE,
+      MuSigSessionPhase.PARTIAL_SIG_EXCHANGE,
+      MuSigSessionPhase.COMPLETE,
+      MuSigSessionPhase.ABORTED,
+    ]
+
+    if (!validPhases.includes(session.phase)) {
+      throw new Error(`Invalid session phase: ${session.phase}`)
+    }
+
+    // Validate phase progression makes sense
+    switch (session.phase) {
+      case MuSigSessionPhase.NONCE_EXCHANGE:
+        // Should have generated nonces
+        if (!session.myPublicNonce && !session.mySecretNonce) {
+          throw new Error(
+            'NONCE_EXCHANGE phase requires nonces to be generated',
+          )
+        }
+        break
+
+      case MuSigSessionPhase.PARTIAL_SIG_EXCHANGE:
+        // Should have aggregated nonce
+        if (!session.aggregatedNonce) {
+          throw new Error(
+            'PARTIAL_SIG_EXCHANGE phase requires aggregated nonce',
+          )
+        }
+        break
+
+      case MuSigSessionPhase.COMPLETE:
+        // Should have final signature
+        if (!session.finalSignature) {
+          throw new Error('COMPLETE phase requires final signature')
+        }
+        break
+
+      case MuSigSessionPhase.ABORTED:
+        // Should have abort reason
+        if (!session.abortReason) {
+          throw new Error('ABORTED phase requires abort reason')
+        }
+        break
+    }
+  }
+
+  /**
+   * Initiate Round 1 of MuSig2 protocol (DIRECT NONCE EXCHANGE)
+   * Validates protocol compliance and prepares for nonce exchange
+   *
+   * @param session - The signing session
+   * @param privateKey - This signer's private key
+   * @returns Session manager result with nonce generation instructions
+   */
+  initiateRound1(
     session: MuSigSession,
-    currentCoordinatorIndex: number,
-  ): number | null {
-    if (!session.backupCoordinators) return null
+    privateKey: PrivateKey,
+  ): SessionManagerResult {
+    try {
+      // Validate protocol compliance
+      this.validateBIP327Compliance(session)
 
-    const currentIndex = session.backupCoordinators.indexOf(
-      currentCoordinatorIndex,
-    )
-    if (currentIndex === -1) return null
+      // Validate phase
+      if (session.phase !== MuSigSessionPhase.INIT) {
+        return {
+          error: `Cannot start Round 1 in phase ${session.phase}. Must be in INIT phase.`,
+        }
+      }
 
-    // Return next in priority list
-    return session.backupCoordinators[currentIndex + 1] || null
+      // Generate nonces (existing method)
+      const publicNonces = this.generateNonces(session, privateKey)
+
+      return {
+        shouldTransitionTo: MuSigSessionPhase.NONCE_EXCHANGE,
+        shouldRevealNonces: true, // Direct nonce exchange (no commitments)
+        broadcastNonces: publicNonces,
+      }
+    } catch (error) {
+      return { error: (error as Error).message }
+    }
   }
 }

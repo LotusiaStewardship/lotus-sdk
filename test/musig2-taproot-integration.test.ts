@@ -210,12 +210,20 @@ describe('MuSig2 + Taproot Integration', () => {
         bobNonce.publicNonces,
       ])
 
+      // Find correct signer indices from the key aggregation context
+      const aliceIndex = result.keyAggContext.pubkeys.findIndex(
+        key => key.toString() === alice.publicKey.toString(),
+      )
+      const bobIndex = result.keyAggContext.pubkeys.findIndex(
+        key => key.toString() === bob.publicKey.toString(),
+      )
+
       // 4. Round 2: Partial signatures (with Taproot tweak)
       const alicePartial = signTaprootKeyPathWithMuSig2(
         aliceNonce,
         alice,
         result.keyAggContext,
-        0,
+        aliceIndex,
         aggNonce,
         message,
         result.tweak,
@@ -224,7 +232,7 @@ describe('MuSig2 + Taproot Integration', () => {
         bobNonce,
         bob,
         result.keyAggContext,
-        1,
+        bobIndex,
         aggNonce,
         message,
         result.tweak,
@@ -267,6 +275,17 @@ describe('MuSig2 + Taproot Integration', () => {
       const bobNonce = musigNonceGen(bob, result.aggregatedPubKey, message)
       const carolNonce = musigNonceGen(carol, result.aggregatedPubKey, message)
 
+      // Find correct signer indices from the key aggregation context
+      const aliceIndex = result.keyAggContext.pubkeys.findIndex(
+        key => key.toString() === alice.publicKey.toString(),
+      )
+      const bobIndex = result.keyAggContext.pubkeys.findIndex(
+        key => key.toString() === bob.publicKey.toString(),
+      )
+      const carolIndex = result.keyAggContext.pubkeys.findIndex(
+        key => key.toString() === carol.publicKey.toString(),
+      )
+
       const aggNonce = musigNonceAgg([
         aliceNonce.publicNonces,
         bobNonce.publicNonces,
@@ -277,7 +296,7 @@ describe('MuSig2 + Taproot Integration', () => {
         aliceNonce,
         alice,
         result.keyAggContext,
-        0,
+        aliceIndex,
         aggNonce,
         message,
         result.tweak,
@@ -286,7 +305,7 @@ describe('MuSig2 + Taproot Integration', () => {
         bobNonce,
         bob,
         result.keyAggContext,
-        1,
+        bobIndex,
         aggNonce,
         message,
         result.tweak,
@@ -295,7 +314,7 @@ describe('MuSig2 + Taproot Integration', () => {
         carolNonce,
         carol,
         result.keyAggContext,
-        2,
+        carolIndex,
         aggNonce,
         message,
         result.tweak,
@@ -333,11 +352,19 @@ describe('MuSig2 + Taproot Integration', () => {
         bobNonce.publicNonces,
       ])
 
+      // Find correct signer indices from the key aggregation context
+      const aliceIndex = result.keyAggContext.pubkeys.findIndex(
+        key => key.toString() === alice.publicKey.toString(),
+      )
+      const bobIndex = result.keyAggContext.pubkeys.findIndex(
+        key => key.toString() === bob.publicKey.toString(),
+      )
+
       const alicePartial = signTaprootKeyPathWithMuSig2(
         aliceNonce,
         alice,
         result.keyAggContext,
-        0,
+        aliceIndex,
         aggNonce,
         message,
         result.tweak,
@@ -346,7 +373,7 @@ describe('MuSig2 + Taproot Integration', () => {
         bobNonce,
         bob,
         result.keyAggContext,
-        1,
+        bobIndex,
         aggNonce,
         message,
         result.tweak,
@@ -454,11 +481,19 @@ describe('MuSig2 + Taproot Integration', () => {
         bobNonce.publicNonces,
       ])
 
+      // Find correct signer indices from the key aggregation context
+      const aliceIndex = result.keyAggContext.pubkeys.findIndex(
+        key => key.toString() === alice.publicKey.toString(),
+      )
+      const bobIndex = result.keyAggContext.pubkeys.findIndex(
+        key => key.toString() === bob.publicKey.toString(),
+      )
+
       const alicePartial = signTaprootKeyPathWithMuSig2(
         aliceNonce,
         alice,
         result.keyAggContext,
-        0,
+        aliceIndex,
         aggNonce,
         message,
         result.tweak,
@@ -467,7 +502,7 @@ describe('MuSig2 + Taproot Integration', () => {
         bobNonce,
         bob,
         result.keyAggContext,
-        1,
+        bobIndex,
         aggNonce,
         message,
         result.tweak,
@@ -572,12 +607,19 @@ describe('MuSig2 + Taproot Integration', () => {
       )
       const aggNonce = musigNonceAgg(nonces.map(n => n.publicNonces))
 
+      // Find correct signer indices from the key aggregation context
+      const signerIndices = keys.map(k =>
+        result.keyAggContext.pubkeys.findIndex(
+          key => key.toString() === k.publicKey.toString(),
+        ),
+      )
+
       const partialSigs = keys.map((k, i) =>
         signTaprootKeyPathWithMuSig2(
           nonces[i],
           k,
           result.keyAggContext,
-          i,
+          signerIndices[i],
           aggNonce,
           message,
           result.tweak,
