@@ -156,12 +156,10 @@ export class P2PCoordinator extends EventEmitter {
       transports.push(webSockets())
 
       // WebRTC for browser-to-browser P2P connections
-      // Dynamically import to avoid bundling issues in Node.js
+      // Dynamically import since it's an optional dependency
       // Note: WebRTC requires @libp2p/webrtc package
       try {
-        const { createRequire } = await import('module')
-        const require = createRequire(import.meta.url)
-        const { webRTC } = require('@libp2p/webrtc')
+        const { webRTC } = await import('@libp2p/webrtc')
         transports.push(webRTC())
       } catch {
         console.warn(
@@ -170,9 +168,7 @@ export class P2PCoordinator extends EventEmitter {
       }
     } else {
       // Node.js environment: Use TCP and WebSockets
-      const { createRequire } = await import('module')
-      const require = createRequire(import.meta.url)
-      const { tcp } = require('@libp2p/tcp')
+      const { tcp } = await import('@libp2p/tcp')
       transports.push(tcp())
 
       // WebSockets for connecting to browser peers and firewall traversal
