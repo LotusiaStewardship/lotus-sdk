@@ -125,6 +125,9 @@ export class XAddress {
       'guide/address.html',
     )
 
+    // Track if network was explicitly provided - if not, we'll accept any network from the address
+    const networkExplicitlyProvided = network !== undefined
+
     // default to mainnet if no network is provided
     network ||= Networks.defaultNetwork.name
 
@@ -145,7 +148,13 @@ export class XAddress {
       )
     }
 
-    const info = this._classifyArguments(data!, network, type, prefix)
+    const info = this._classifyArguments(
+      data!,
+      network,
+      type,
+      prefix,
+      networkExplicitlyProvided,
+    )
 
     // set defaults if not set
     info.network =
@@ -167,6 +176,7 @@ export class XAddress {
    * @param network - The network configuration (optional).
    * @param type - The address type (optional).
    * @param prefix - The address prefix (optional).
+   * @param networkExplicitlyProvided - Whether the network was explicitly provided by the caller.
    * @returns An object containing the address hash, network, type, and prefix.
    * @throws Throws a TypeError if the data format is unrecognized.
    */
@@ -175,10 +185,16 @@ export class XAddress {
     network?: Network | string,
     type?: string,
     prefix?: string,
+    networkExplicitlyProvided: boolean = true,
   ): XAddressData {
     // transform and validate input data
     if (typeof data === 'string') {
-      return XAddress._transformString(data, network, type)
+      // When network was not explicitly provided, pass undefined to allow any network from the address
+      return XAddress._transformString(
+        data,
+        networkExplicitlyProvided ? network : undefined,
+        type,
+      )
     } else if (Buffer.isBuffer(data) || data instanceof Uint8Array) {
       return XAddress._transformBuffer(data, network, type, prefix)
     } else if (typeof data === 'object' && data !== null) {

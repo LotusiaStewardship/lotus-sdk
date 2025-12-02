@@ -71,7 +71,10 @@ export class Address {
       )
     }
 
-    // if network is not provided, default to livenet
+    // Track if network was explicitly provided - if not, we'll accept any network from the address
+    const networkExplicitlyProvided = network !== undefined
+
+    // if network is not provided, default to livenet (but we'll override with address's network if parsing a string)
     network ||= defaultNetwork
 
     if (
@@ -85,7 +88,12 @@ export class Address {
       )
     }
 
-    const info = this._classifyArguments(data!, network, type)
+    const info = this._classifyArguments(
+      data!,
+      network,
+      type,
+      networkExplicitlyProvided,
+    )
 
     // set defaults if not set
     info.network = info.network || getNetwork(network!) || defaultNetwork
@@ -102,6 +110,7 @@ export class Address {
     data: AddressInput,
     network: Network | string,
     type?: string,
+    networkExplicitlyProvided: boolean = true,
   ): AddressData {
     if (typeof network === 'string') {
       const networkObj = getNetwork(network)
@@ -137,7 +146,11 @@ export class Address {
     } else if (data instanceof Script) {
       return Address._transformScript(data, network)
     } else if (typeof data === 'string') {
-      return Address._transformString(data, network, type)
+      return Address._transformString(
+        data,
+        networkExplicitlyProvided ? network : undefined,
+        type,
+      )
     } else if (Array.isArray(data)) {
       // This case is handled in constructor for multisig
       throw new Error(
