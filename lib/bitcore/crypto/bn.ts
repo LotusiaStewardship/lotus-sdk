@@ -284,10 +284,15 @@ class BNWrapper {
   }
 
   /**
-   * Modular exponentiation
+   * Modular exponentiation: computes (this^exponent) mod modulus
+   * Uses square-and-multiply algorithm for efficiency
    */
   modPow(exponent: BNWrapper, modulus: BNWrapper): BNWrapper {
-    return new BNWrapper(this._bn.pow(exponent._bn).mod(modulus._bn))
+    // BN.js doesn't have a built-in modPow, so we implement square-and-multiply
+    const red = BN.red(modulus._bn)
+    const base = this._bn.toRed(red)
+    const result = base.redPow(exponent._bn)
+    return new BNWrapper(result.fromRed())
   }
 
   /**

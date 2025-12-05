@@ -186,24 +186,45 @@ export class Point {
   /**
    * Check if point has square root (Y coordinate is quadratic residue)
    *
-   * In secp256k1, a point has a square root if its Y coordinate is a quadratic residue.
-   * For secp256k1, this is equivalent to checking if Y is even (not odd).
+   * In secp256k1, for any valid point on the curve, exactly one of Y or (p-Y)
+   * is a quadratic residue. The QR Y is the one computed by lift_x: c^((p+1)/4)
+   * where c = X³ + 7.
    *
-   * This is MUCH faster than using modular exponentiation.
+   * IMPORTANT: This is NOT the same as checking if Y is even!
+   * The relationship between Y parity and quadratic residue depends on the specific
+   * X value, not just Y's parity.
    *
-   * Reference: lotusd uses secp256k1_gej_has_quad_y_var which checks Jacobi symbol
-   * For affine coordinates, Y has quadratic residue <=> Y is even
+   * Efficient algorithm: Compute the canonical Y (lift_x result) and check if
+   * our Y matches it. If Y == canonical_Y, then Y is QR. If Y == p - canonical_Y,
+   * then Y is not QR.
+   *
+   * Reference: lotusd/src/secp256k1/src/field_impl.h secp256k1_fe_is_quad_var()
    */
   hasSquare(): boolean {
     if (this.isInfinity()) {
       return false
     }
 
-    // OPTIMIZATION: In secp256k1, Y has square root <=> Y is even
-    // This is MUCH faster than modPow((p-1)/2)
-    // CRITICAL: Must get Y from affine coordinates (normalized)
-    const y = this.getY() // This normalizes the point
-    return !y.isOdd()
+    const x = this.getX()
+    const y = this.getY()
+
+    // secp256k1 field prime p
+    const p = new BN(
+      'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F',
+      16,
+    )
+
+    // Compute c = x³ + 7 mod p
+    const x3 = x.mul(x).mod(p).mul(x).mod(p)
+    const c = x3.add(new BN(7)).mod(p)
+
+    // Compute canonical Y = c^((p+1)/4) mod p
+    // This is the Y that is always a quadratic residue
+    const exp = p.add(new BN(1)).div(new BN(4))
+    const canonicalY = c.modPow(exp, p)
+
+    // Y is a QR iff Y equals the canonical Y (not p - canonicalY)
+    return y.eq(canonicalY)
   }
 
   /**
