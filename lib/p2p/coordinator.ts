@@ -436,12 +436,18 @@ export class P2PCoordinator extends EventEmitter<P2PEventMap> {
     let listenAddrs: string[]
 
     if (isBrowser()) {
-      // Browser environment: Can only listen via circuit relay
+      // Browser environment: Listen via circuit relay AND WebRTC
       // Browsers cannot bind to TCP/UDP ports directly
-      // Use /p2p-circuit to accept incoming relay connections
+      // - /p2p-circuit: Accept incoming connections via relay
+      // - /webrtc: Accept incoming WebRTC connections (browser-to-browser)
+      //
+      // When a browser connects to a relay, it advertises addresses like:
+      //   /ip4/.../tcp/.../ws/p2p/RELAY_ID/p2p-circuit/webrtc/p2p/PEER_ID
+      // Other browsers can dial this address to establish a direct WebRTC connection
+      // using the relay for SDP signaling (webrtc-signaling protocol)
       listenAddrs = this.config.listen
         ? [...this.config.listen]
-        : ['/p2p-circuit']
+        : ['/p2p-circuit', '/webrtc']
     } else {
       // Node.js environment: Can listen on TCP
       listenAddrs = this.config.listen
@@ -455,6 +461,14 @@ export class P2PCoordinator extends EventEmitter<P2PEventMap> {
       !listenAddrs.includes('/p2p-circuit')
     ) {
       listenAddrs.push('/p2p-circuit')
+    }
+
+    // Ensure /webrtc is in listen addresses for browser-to-browser connections
+    // This is only relevant in browser environments where WebRTC transport is available
+    // The /webrtc listener enables other browsers to establish direct WebRTC connections
+    // after discovering this peer's relay address (e.g., /relay/p2p-circuit/webrtc/p2p/PEER_ID)
+    if (isBrowser() && !listenAddrs.includes('/webrtc')) {
+      listenAddrs.push('/webrtc')
     }
 
     console.log('[P2P] Listen addresses config:', listenAddrs)
