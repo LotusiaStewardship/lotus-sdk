@@ -1487,13 +1487,11 @@ export class TaprootInput extends Input {
       throw new Error('Taproot key spend signature must be Schnorr')
     }
 
-    // Tweak the private key if internal key is provided
-    let tweakedPrivateKey = privateKey
-    if (this.internalPubKey) {
-      // Import tweaking function
-      const merkleRoot = this.merkleRoot || Buffer.alloc(32)
-      tweakedPrivateKey = tweakPrivateKey(privateKey, merkleRoot)
-    }
+    // Taproot key path spending ALWAYS requires tweaking the private key
+    // The signature must verify against the commitment (tweaked pubkey) in the scriptPubKey
+    // Reference: lotusd/src/script/interpreter.cpp VerifyTaprootSpend()
+    const merkleRoot = this.merkleRoot || Buffer.alloc(32)
+    const tweakedPrivateKey = tweakPrivateKey(privateKey, merkleRoot)
 
     // Sign with tweaked key using SIGHASH_LOTUS
     const signature = sign(
