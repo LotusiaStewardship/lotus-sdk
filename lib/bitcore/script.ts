@@ -998,10 +998,17 @@ export class Script {
   }
 
   /**
-   * Get data from OP_RETURN script
-   * @returns The data buffer from OP_RETURN script
+   * Get the data part of a script, if it has one
+   *
+   * P2SH: The script hash
+   * P2PKH: The public key hash
+   * P2TR: The commitment
+   *
+   * @throws {Error} If the script type is not recognized
+   * @returns {Buffer} The data part of the script
    */
   getData(): Buffer {
+    // P2SH
     if (this.isScriptHashOut()) {
       if (this.chunks[1] === undefined) {
         return Buffer.alloc(0)
@@ -1009,9 +1016,15 @@ export class Script {
         return Buffer.from(this.chunks[1].buf!)
       }
     }
+    // P2PKH
     if (this.isPublicKeyHashOut()) {
       return Buffer.from(this.chunks[2].buf!)
     }
+    // P2TR
+    if (this.isPayToTaproot()) {
+      return Buffer.from(this.chunks[2].buf!)
+    }
+
     throw new Error('Unrecognized script type to get data from')
   }
 
