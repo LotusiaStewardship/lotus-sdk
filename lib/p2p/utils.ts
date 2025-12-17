@@ -3,8 +3,9 @@
  */
 
 import { peerIdFromString, peerIdFromPrivateKey } from '@libp2p/peer-id'
-import { generateKeyPair } from '@libp2p/crypto/keys'
+import { generateKeyPair, privateKeyFromRaw } from '@libp2p/crypto/keys'
 import type { PeerId } from '@libp2p/interface-peer-id'
+import type { PrivateKey as Libp2pPrivateKey } from '@libp2p/interface'
 import { PrivateKey } from '../bitcore/privatekey.js'
 
 /**
@@ -82,4 +83,39 @@ export function waitForEvent<T = unknown>(
       resolve(data)
     })
   })
+}
+
+// ============================================================================
+// P2P Identity Management
+// ============================================================================
+
+/**
+ * Generate a new Ed25519 private key for P2P identity
+ * This creates a random keypair suitable for libp2p peer identity
+ */
+export async function generateP2PPrivateKey(): Promise<Libp2pPrivateKey> {
+  return generateKeyPair('Ed25519')
+}
+
+/**
+ * Restore a P2P private key from raw bytes
+ * Use this to restore a previously saved identity
+ *
+ * @param rawBytes - The raw private key bytes (typically 32 bytes for Ed25519)
+ */
+export function restoreP2PPrivateKey(rawBytes: Uint8Array): Libp2pPrivateKey {
+  return privateKeyFromRaw(rawBytes)
+}
+
+/**
+ * Get the raw bytes from a P2P private key for storage
+ * Use this to save the identity for later restoration
+ *
+ * @param privateKey - The libp2p private key
+ * @returns Raw bytes that can be stored and later restored
+ */
+export function getP2PPrivateKeyBytes(
+  privateKey: Libp2pPrivateKey,
+): Uint8Array {
+  return privateKey.raw
 }

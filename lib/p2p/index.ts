@@ -10,6 +10,9 @@ export { P2PCoordinator } from './coordinator.js'
 // Core types (includes libp2p re-exports)
 export * from './types.js'
 
+// Event types for strongly-typed event handling
+export * from './events.js'
+
 // Protocol and messaging
 export { P2PProtocol } from './protocol.js'
 
@@ -27,6 +30,10 @@ export {
   serializePeerId,
   parseMultiaddrs,
   waitForEvent,
+  // P2P Identity Management
+  generateP2PPrivateKey,
+  restoreP2PPrivateKey,
+  getP2PPrivateKeyBytes,
 } from './utils.js'
 
 // Re-export DHT mapper functions for convenience

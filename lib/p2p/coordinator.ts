@@ -39,7 +39,7 @@ import type {
 } from '@libp2p/interface'
 import type { StreamHandler } from '@libp2p/interface'
 import type { PeerInfo as P2PPeerInfo } from '@libp2p/interface'
-
+import { P2PEventMap } from './events.js'
 import {
   P2PConfig,
   P2PMessage,
@@ -52,6 +52,8 @@ import {
   DHTStats,
   P2PStats,
   CORE_P2P_SECURITY_LIMITS,
+  P2PConnectionState,
+  ConnectionStateChangeData,
 } from './types.js'
 import { P2PProtocol } from './protocol.js'
 import { CoreSecurityManager } from './security.js'
@@ -59,7 +61,7 @@ import { CoreSecurityManager } from './security.js'
 /**
  * Main P2P Coordinator using libp2p
  */
-export class P2PCoordinator extends EventEmitter {
+export class P2PCoordinator extends EventEmitter<P2PEventMap> {
   protected node?: Libp2p
   private protocol: P2PProtocol
   private protocolHandlers: Map<string, IProtocolHandler> = new Map()
@@ -76,6 +78,11 @@ export class P2PCoordinator extends EventEmitter {
     string,
     (evt: CustomEvent<{ topic: string; data: Uint8Array }>) => void
   > = new Map()
+
+  // Connection state machine
+  private _connectionState: P2PConnectionState = P2PConnectionState.DISCONNECTED
+  private _connectionStateError?: string
+  private _connectionStateMonitorId?: NodeJS.Timeout
 
   constructor(protected readonly config: P2PConfig) {
     super()
@@ -99,6 +106,123 @@ export class P2PCoordinator extends EventEmitter {
     return this.coreSecurityManager
   }
 
+  // ========================================================================
+  // Connection State Machine
+  // ========================================================================
+
+  /**
+   * Get current connection state
+   */
+  get connectionState(): P2PConnectionState {
+    return this._connectionState
+  }
+
+  /**
+   * Get connection state error message (if in ERROR state)
+   */
+  get connectionStateError(): string | undefined {
+    return this._connectionStateError
+  }
+
+  /**
+   * Transition to a new connection state
+   * Emits 'connection:state-changed' event on state change
+   */
+  private _transitionState(newState: P2PConnectionState, error?: string): void {
+    const previousState = this._connectionState
+    if (previousState === newState) return
+
+    this._connectionState = newState
+    this._connectionStateError = error
+
+    const eventData: ConnectionStateChangeData = {
+      previousState,
+      currentState: newState,
+      timestamp: Date.now(),
+      error,
+    }
+
+    this.emit(ConnectionEvent.STATE_CHANGED, eventData)
+
+    console.log(
+      `[P2P] Connection state: ${previousState} → ${newState}${error ? ` (${error})` : ''}`,
+    )
+  }
+
+  /**
+   * Start monitoring connection state
+   * Periodically checks DHT readiness and peer count to update state
+   */
+  private _startConnectionStateMonitor(): void {
+    if (this._connectionStateMonitorId) {
+      clearInterval(this._connectionStateMonitorId)
+    }
+
+    // Check state every 2 seconds
+    this._connectionStateMonitorId = setInterval(() => {
+      this._updateConnectionState()
+    }, 2000)
+  }
+
+  /**
+   * Stop connection state monitor
+   */
+  private _stopConnectionStateMonitor(): void {
+    if (this._connectionStateMonitorId) {
+      clearInterval(this._connectionStateMonitorId)
+      this._connectionStateMonitorId = undefined
+    }
+  }
+
+  /**
+   * Update connection state based on current conditions
+   */
+  private _updateConnectionState(): void {
+    if (!this.node) {
+      if (this._connectionState !== P2PConnectionState.DISCONNECTED) {
+        this._transitionState(P2PConnectionState.DISCONNECTED)
+      }
+      return
+    }
+
+    const peers = this.node.getPeers()
+    const dhtStats = this.getDHTStats()
+
+    // Determine appropriate state based on conditions
+    if (peers.length === 0) {
+      // No peers connected
+      if (
+        this._connectionState !== P2PConnectionState.CONNECTED &&
+        this._connectionState !== P2PConnectionState.CONNECTING
+      ) {
+        this._transitionState(P2PConnectionState.CONNECTED)
+      }
+    } else if (!dhtStats.enabled || !dhtStats.isReady) {
+      // Have peers but DHT not ready
+      if (this._connectionState === P2PConnectionState.CONNECTING) {
+        this._transitionState(P2PConnectionState.CONNECTED)
+      } else if (
+        this._connectionState === P2PConnectionState.CONNECTED &&
+        dhtStats.enabled
+      ) {
+        this._transitionState(P2PConnectionState.DHT_INITIALIZING)
+      }
+    } else if (dhtStats.routingTableSize < 3) {
+      // DHT ready but not many peers in routing table
+      if (
+        this._connectionState !== P2PConnectionState.DHT_READY &&
+        this._connectionState !== P2PConnectionState.FULLY_OPERATIONAL
+      ) {
+        this._transitionState(P2PConnectionState.DHT_READY)
+      }
+    } else {
+      // Fully operational: connected, DHT ready, sufficient peers
+      if (this._connectionState !== P2PConnectionState.FULLY_OPERATIONAL) {
+        this._transitionState(P2PConnectionState.FULLY_OPERATIONAL)
+      }
+    }
+  }
+
   /**
    * Start periodic DHT cleanup task
    * Removes expired entries from local cache every 5 minutes
@@ -116,6 +240,9 @@ export class P2PCoordinator extends EventEmitter {
    * Start the P2P node
    */
   async start(): Promise<void> {
+    // Transition to CONNECTING state
+    this._transitionState(P2PConnectionState.CONNECTING)
+
     // Determine appropriate peerInfoMapper based on environment
     // If user provides custom mapper, use it
     // Otherwise, auto-detect based on listen addresses
@@ -367,7 +494,22 @@ export class P2PCoordinator extends EventEmitter {
     this._registerProtocolStreamHandlers()
 
     // Start node
-    await this.node.start()
+    try {
+      await this.node.start()
+
+      // Transition to CONNECTED state
+      this._transitionState(P2PConnectionState.CONNECTED)
+
+      // Start connection state monitor
+      this._startConnectionStateMonitor()
+    } catch (error) {
+      // Transition to ERROR state on failure
+      this._transitionState(
+        P2PConnectionState.ERROR,
+        error instanceof Error ? error.message : 'Failed to start P2P node',
+      )
+      throw error
+    }
 
     /*  console.log('[P2P] Node started')
     console.log('[P2P] Peer ID:', this.node.peerId.toString())
@@ -399,6 +541,9 @@ export class P2PCoordinator extends EventEmitter {
    * Stop the P2P node
    */
   async stop(): Promise<void> {
+    // Stop connection state monitor
+    this._stopConnectionStateMonitor()
+
     // SECURITY: Clear cleanup interval to allow process exit
     if (this.cleanupIntervalId) {
       clearInterval(this.cleanupIntervalId)
@@ -419,6 +564,9 @@ export class P2PCoordinator extends EventEmitter {
 
     // SECURITY: Clear core security manager listeners
     this.coreSecurityManager.removeAllListeners()
+
+    // Transition to DISCONNECTED state
+    this._transitionState(P2PConnectionState.DISCONNECTED)
 
     // Clear event listeners to prevent event loop from hanging
     this.removeAllListeners()
@@ -1273,6 +1421,9 @@ export class P2PCoordinator extends EventEmitter {
    * Shutdown coordinator
    */
   async shutdown(): Promise<void> {
+    // Stop connection state monitor
+    this._stopConnectionStateMonitor()
+
     // SECURITY: Stop cleanup interval before shutdown
     if (this.cleanupIntervalId) {
       clearInterval(this.cleanupIntervalId)
@@ -1292,6 +1443,9 @@ export class P2PCoordinator extends EventEmitter {
 
     // SECURITY: Clear core security manager
     this.coreSecurityManager.removeAllListeners()
+
+    // Transition to DISCONNECTED state
+    this._transitionState(P2PConnectionState.DISCONNECTED)
 
     this.removeAllListeners()
   }
@@ -1339,7 +1493,11 @@ export class P2PCoordinator extends EventEmitter {
       }
       this.peerInfo.set(peerId, peerInfo)
 
-      this.emit(ConnectionEvent.CONNECTED, peerInfo)
+      this.emit(ConnectionEvent.CONNECTED, {
+        peerId,
+        multiaddrs: peerInfo.multiaddrs ?? [],
+        timestamp: Date.now(),
+      })
 
       // Notify protocol handlers
       for (const handler of this.protocolHandlers.values()) {
@@ -1357,7 +1515,10 @@ export class P2PCoordinator extends EventEmitter {
 
       const peerInfo = this.peerInfo.get(peerId)
       if (peerInfo) {
-        this.emit(ConnectionEvent.DISCONNECTED, peerInfo)
+        this.emit(ConnectionEvent.DISCONNECTED, {
+          peerId,
+          timestamp: Date.now(),
+        })
       }
 
       // Notify protocol handlers
@@ -1384,7 +1545,10 @@ export class P2PCoordinator extends EventEmitter {
       }
 
       this.peerInfo.set(peerId, peerInfo)
-      this.emit(ConnectionEvent.DISCOVERED, peerInfo)
+      this.emit(ConnectionEvent.DISCOVERED, {
+        peerInfo,
+        timestamp: Date.now(),
+      })
 
       // Notify protocol handlers about discovered peer
       for (const handler of this.protocolHandlers.values()) {
@@ -1580,7 +1744,7 @@ export class P2PCoordinator extends EventEmitter {
       }
 
       // Emit message event
-      this.emit(ConnectionEvent.MESSAGE, message, from)
+      this.emit(ConnectionEvent.MESSAGE, { message, from })
 
       // Route to protocol handler
       if (message.protocol) {

@@ -10,6 +10,9 @@ export { MuSig2SecurityValidator, DEFAULT_MUSIG2_SECURITY } from './security.js'
 export type { MuSig2SecurityConfig } from './security.js'
 export * from './types.js'
 
+// Event types for strongly-typed event handling
+export * from './events.js'
+
 // Serialization Layer
 export {
   serializePoint,

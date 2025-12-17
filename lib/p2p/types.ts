@@ -108,6 +108,47 @@ export enum ConnectionEvent {
   UPDATED = 'peer:update',
   MESSAGE = 'message',
   ERROR = 'error',
+  /** Connection state changed (new in v2.1) */
+  STATE_CHANGED = 'connection:state-changed',
+}
+
+/**
+ * P2P Connection State
+ *
+ * Represents the lifecycle state of the P2P coordinator.
+ * UI applications can use this to show accurate connection status.
+ */
+export enum P2PConnectionState {
+  /** Not connected to P2P network */
+  DISCONNECTED = 'disconnected',
+  /** Connecting to P2P network (libp2p starting) */
+  CONNECTING = 'connecting',
+  /** Connected to at least one peer */
+  CONNECTED = 'connected',
+  /** DHT is initializing (routing table being populated) */
+  DHT_INITIALIZING = 'dht_initializing',
+  /** DHT is ready (routing table has peers) */
+  DHT_READY = 'dht_ready',
+  /** Fully operational (connected, DHT ready, sufficient peers) */
+  FULLY_OPERATIONAL = 'fully_operational',
+  /** Attempting to reconnect after connection loss */
+  RECONNECTING = 'reconnecting',
+  /** Error state (initialization or connection failed) */
+  ERROR = 'error',
+}
+
+/**
+ * Connection state change event data
+ */
+export interface ConnectionStateChangeData {
+  /** Previous connection state */
+  previousState: P2PConnectionState
+  /** Current connection state */
+  currentState: P2PConnectionState
+  /** Timestamp of state change */
+  timestamp: number
+  /** Optional error message if state is ERROR */
+  error?: string
 }
 
 /**
