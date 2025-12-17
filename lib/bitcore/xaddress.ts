@@ -581,19 +581,24 @@ function decode(address: string): XAddressData {
   const decodedChecksum = decodedBytes.subarray(decodedBytes.length - 4)
 
   const checksum = createChecksum(prefix, networkByte, typeByte, payload)
-  const legacyChecksum = createChecksumLegacy(
+  /* const legacyChecksum = createChecksumLegacy(
     prefix,
     networkByte,
     typeByte,
     payload,
-  )
+  ) */
 
   Preconditions.checkArgument(
-    checksum.toString('hex') === decodedChecksum.toString('hex') ||
-      legacyChecksum.toString('hex') === decodedChecksum.toString('hex'),
+    checksum.toString('hex') === decodedChecksum.toString('hex'),
     'checksum',
     'Invalid checksum: ' + address,
   )
+
+  /* Preconditions.checkArgument(
+    legacyChecksum.toString('hex') === decodedChecksum.toString('hex'),
+    'typeByte',
+    'Invalid type byte: ' + typeByte[0],
+  ) */
 
   const info: XAddressData = {}
   info.hashBuffer = payload
