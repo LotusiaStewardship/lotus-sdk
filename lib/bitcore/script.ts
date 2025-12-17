@@ -974,17 +974,14 @@ export class Script {
   isPayToTaproot(): boolean {
     const buf = this.toBuffer()
 
-    if (buf.length < TAPROOT_SIZE_WITHOUT_STATE) {
-      return false
-    }
-
-    // Must start with OP_SCRIPTTYPE OP_1
-    if (buf[0] !== Opcode.OP_SCRIPTTYPE || buf[1] !== Opcode.OP_1) {
-      return false
-    }
-
-    // Next byte must be 0x21 (33 bytes push)
-    if (buf[2] !== 33) {
+    if (
+      buf.length < TAPROOT_SIZE_WITHOUT_STATE ||
+      // Must start with OP_SCRIPTTYPE OP_1
+      buf[0] !== Opcode.OP_SCRIPTTYPE ||
+      buf[1] !== Opcode.OP_1 ||
+      // Next byte must be 0x21 (33 bytes push)
+      buf[2] !== 33
+    ) {
       return false
     }
 
