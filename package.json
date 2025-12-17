@@ -18,6 +18,14 @@
       "types": "./dist/lib/p2p/musig2/*.d.ts",
       "import": "./dist/lib/p2p/musig2/*.js"
     },
+    "./lib/p2p/discovery": {
+      "types": "./dist/lib/p2p/discovery/index.d.ts",
+      "import": "./dist/lib/p2p/discovery/index.js"
+    },
+    "./lib/p2p/discovery/*": {
+      "types": "./dist/lib/p2p/discovery/*.d.ts",
+      "import": "./dist/lib/p2p/*.js"
+    },
     "./lib/p2p": {
       "types": "./dist/lib/p2p/index.d.ts",
       "import": "./dist/lib/p2p/index.js"
@@ -87,7 +95,6 @@
   },
   "homepage": "https://github.com/LotusiaStewardship/lotus-sdk#readme",
   "dependencies": {
-    "@noble/hashes": "^1.7.2",
     "@chainsafe/libp2p-noise": "17.0.0",
     "@libp2p/autonat": "3.0.7",
     "@libp2p/bootstrap": "12.0.8",
@@ -102,11 +109,12 @@
     "@libp2p/peer-id": "6.0.4",
     "@libp2p/ping": "3.0.7",
     "@libp2p/tcp": "11.0.7",
-    "@libp2p/webrtc": "5.0.15",
     "@libp2p/upnp-nat": "4.0.7",
+    "@libp2p/webrtc": "5.0.15",
     "@libp2p/websockets": "10.1.0",
     "@libp2p/yamux": "8.0.1",
     "@multiformats/multiaddr": "^12.0.0",
+    "@noble/hashes": "^1.7.2",
     "async-mutex": "0.5.0",
     "bn.js": "5.2.2",
     "bs58": "6.0.0",
@@ -124,6 +132,7 @@
     "@types/node": "24.0.10",
     "@types/validator": "13.15.4",
     "prettier": "3.6.2",
+    "tsx": "^4.21.0",
     "typescript": "5.8.3",
     "typescript-eslint": "8.47.0"
   }
