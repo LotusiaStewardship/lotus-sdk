@@ -127,14 +127,43 @@ export class MuSig2Discovery extends EventEmitter {
     const publicKeyHex = publicKeyToHex(publicKey)
     const advertisementId = this.generateSignerAdId(publicKeyHex)
 
+    // PHASE 2: Get multiaddrs including relay addresses for NAT traversal
+    // This is CRITICAL for browser-to-browser connectivity
+    const allMultiaddrs = this.coordinator.libp2pNode
+      .getMultiaddrs()
+      .map(ma => ma.toString())
+
+    // Prioritize relay circuit addresses for NAT traversal
+    // Include both direct addresses AND relay addresses
+    const multiaddrs = allMultiaddrs.filter(addr => {
+      // Include relay circuit addresses (highest priority for NAT traversal)
+      if (addr.includes('/p2p-circuit/')) {
+        return true
+      }
+      // Include WebRTC addresses for browser-to-browser
+      if (addr.includes('/webrtc/')) {
+        return true
+      }
+      // Include WebSocket addresses
+      if (addr.includes('/ws') || addr.includes('/wss')) {
+        return true
+      }
+      // Include direct TCP addresses (for non-browser peers)
+      if (addr.includes('/tcp/')) {
+        return true
+      }
+      return false
+    })
+
+    // Ensure we have at least some addresses
+    const finalMultiaddrs = multiaddrs.length > 0 ? multiaddrs : allMultiaddrs
+
     const advertisement: MuSig2SignerAdvertisement = {
       id: advertisementId,
       protocol: 'musig2',
       peerInfo: {
         peerId: this.coordinator.peerId,
-        multiaddrs: this.coordinator.libp2pNode
-          .getMultiaddrs()
-          .map(ma => ma.toString()),
+        multiaddrs: finalMultiaddrs,
       },
       publicKey,
       transactionTypes,
@@ -235,15 +264,29 @@ export class MuSig2Discovery extends EventEmitter {
     const peerId = this.coordinator.peerId
     const creatorPublicKey = requiredPublicKeys[0]
 
+    // PHASE 2: Get multiaddrs including relay addresses for NAT traversal
+    const allMultiaddrs = this.coordinator.libp2pNode
+      .getMultiaddrs()
+      .map(ma => ma.toString())
+
+    // Prioritize relay circuit addresses for NAT traversal
+    const multiaddrs = allMultiaddrs.filter(addr => {
+      if (addr.includes('/p2p-circuit/')) return true
+      if (addr.includes('/webrtc/')) return true
+      if (addr.includes('/ws') || addr.includes('/wss')) return true
+      if (addr.includes('/tcp/')) return true
+      return false
+    })
+
+    const finalMultiaddrs = multiaddrs.length > 0 ? multiaddrs : allMultiaddrs
+
     const advertisement: MuSig2SigningRequestAdvertisement = {
       id: requestId,
       requestId,
       protocol: 'musig2-request',
       peerInfo: {
         peerId,
-        multiaddrs: this.coordinator.libp2pNode
-          .getMultiaddrs()
-          .map(ma => ma.toString()),
+        multiaddrs: finalMultiaddrs,
       },
       requiredPublicKeys: requiredPublicKeys.map(pk => publicKeyToHex(pk)),
       messageHash,

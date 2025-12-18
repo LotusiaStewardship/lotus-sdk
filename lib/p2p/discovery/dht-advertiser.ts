@@ -495,40 +495,82 @@ export class DHTAdvertiser implements IDiscoveryAdvertiser {
   }
 
   /**
-   * Publish advertisement to DHT and GossipSub
+   * Publish advertisement to GossipSub (PRIMARY) and DHT (SECONDARY)
    *
-   * This implements the hybrid approach:
-   * - DHT: Persistent storage for later lookup via discover()
-   * - GossipSub: Real-time notification for active subscribers
+   * PHASE 2: GossipSub is now the PRIMARY publish path.
+   * This implements the correct architecture:
+   * - GossipSub: PRIMARY - Real-time notification to all subscribers (discovery mechanism)
+   * - DHT: SECONDARY - Persistent storage for specific key lookups only (NOT for "find all" queries)
+   *
+   * The discover() method now queries LOCAL CACHE which is populated by GossipSub subscriptions.
+   * DHT is only used for direct key lookups when you know the exact advertisement ID.
    */
   private async publishToDHT(
     advertisement: DiscoveryAdvertisement,
     options: Required<DiscoveryOptions>,
   ): Promise<void> {
-    // 1. Store in DHT for persistence and one-time queries
-    await this.coordinator.announceResource(
-      'discovery:advertisement',
-      advertisement.id,
-      advertisement,
-      {
-        ttl: options.ttl,
-        expiresAt: advertisement.expiresAt,
-      },
-    )
-
-    // 2. Publish to GossipSub for real-time notification to subscribers
     const topic = this.getGossipSubTopic(advertisement)
-    try {
-      await this.coordinator.publishToTopic(topic, advertisement)
-      console.log(
-        `[Discovery] Published advertisement to GossipSub topic: ${topic}`,
+
+    // 1. PRIMARY: Publish to GossipSub for real-time discovery
+    // This is the main discovery mechanism - subscribers receive advertisements immediately
+    // PHASE 2: Added retry logic for reliability
+    let gossipSubSuccess = false
+    const maxRetries = 3
+    const retryDelayMs = 1000
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        await this.coordinator.publishToTopic(topic, advertisement)
+        console.log(
+          `[Discovery] Published advertisement to GossipSub topic: ${topic} (attempt ${attempt})`,
+        )
+        gossipSubSuccess = true
+        break
+      } catch (error) {
+        console.warn(
+          `[Discovery] GossipSub publish attempt ${attempt}/${maxRetries} failed for topic ${topic}:`,
+          error,
+        )
+        if (attempt < maxRetries) {
+          // Wait before retry with exponential backoff
+          await new Promise(resolve =>
+            setTimeout(resolve, retryDelayMs * attempt),
+          )
+        }
+      }
+    }
+
+    if (!gossipSubSuccess) {
+      console.error(
+        `[Discovery] All GossipSub publish attempts failed for topic ${topic}`,
       )
-    } catch (error) {
-      // GossipSub publish failure is non-fatal - DHT storage succeeded
-      // Subscribers will still find it via DHT query
-      console.warn(
-        `[Discovery] Failed to publish to GossipSub topic ${topic}:`,
-        error,
+    }
+
+    // 2. SECONDARY: Store in DHT for specific key lookups (optional)
+    // NOTE: This is NOT used for "find all" queries - only for direct key lookups
+    // when you know the exact advertisement ID
+    const dhtStats = this.coordinator.getDHTStats()
+    if (dhtStats.isReady) {
+      try {
+        await this.coordinator.announceResource(
+          'discovery:advertisement',
+          advertisement.id,
+          advertisement,
+          {
+            ttl: options.ttl,
+            expiresAt: advertisement.expiresAt,
+          },
+        )
+        console.log(
+          `[Discovery] Stored advertisement in DHT: ${advertisement.id}`,
+        )
+      } catch (error) {
+        // DHT storage failure is non-fatal - GossipSub is the primary path
+        console.warn('[Discovery] DHT storage failed (non-fatal):', error)
+      }
+    } else {
+      console.log(
+        '[Discovery] DHT not ready - skipping DHT storage (GossipSub is primary)',
       )
     }
   }

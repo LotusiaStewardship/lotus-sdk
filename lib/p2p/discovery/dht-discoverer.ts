@@ -1,13 +1,22 @@
 /**
  * DHT Discoverer Implementation
  *
- * Handles discovering peers based on criteria from DHT.
- * Uses GossipSub for real-time subscription notifications (event-driven).
- * Uses DHT for one-time queries and initial state fetch.
+ * PHASE 2 ARCHITECTURE (ROOT CAUSE FIX):
  *
- * Architecture:
- * - discover(): One-time DHT query for current state
- * - subscribe(): GossipSub subscription for real-time updates
+ * This implementation follows the CORRECT libp2p discovery architecture:
+ * - discover(): Queries LOCAL CACHE ONLY (populated by GossipSub subscriptions)
+ * - subscribe(): GossipSub subscription for real-time updates (populates cache)
+ *
+ * WHY DHT IS NOT USED FOR DISCOVERY:
+ * - DHT is a key-value store - you can only retrieve exactly what you stored with the exact key
+ * - Wildcard queries like "discovery:musig2:all" are architecturally impossible
+ * - The correct pattern is: GossipSub for discovery, DHT for specific key lookups
+ *
+ * HOW IT WORKS:
+ * 1. On start(), auto-subscribes to common discovery topics (musig2, musig2-request, etc.)
+ * 2. GossipSub messages populate the local cache
+ * 3. discover() queries the local cache (fast, synchronous-like)
+ * 4. subscribe() creates additional GossipSub subscriptions for real-time updates
  */
 
 import type { P2PCoordinator } from '../coordinator.js'
@@ -144,9 +153,16 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
   // ========================================================================
 
   /**
-   * Discover peers based on criteria (one-time DHT query)
+   * Discover peers based on criteria (LOCAL CACHE QUERY ONLY)
    *
-   * This performs a point-in-time query of the DHT for matching advertisements.
+   * PHASE 2 ROOT CAUSE FIX: This method now queries the LOCAL CACHE ONLY.
+   * The cache is populated by GossipSub subscriptions (via subscribe() or auto-subscription).
+   *
+   * DHT is NOT used for "find all" queries because:
+   * - DHT is a key-value store - you can only retrieve exactly what you stored with the exact key
+   * - Wildcard queries like "discovery:musig2:all" are architecturally impossible
+   * - The correct pattern is: GossipSub for discovery, DHT for specific key lookups
+   *
    * For real-time updates, use subscribe() instead.
    */
   async discover(
@@ -165,47 +181,47 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
     // Check rate limits
     this.checkRateLimits(criteria.protocol, opts)
 
-    // Generate DHT keys for the criteria
-    const keys = this.getDHTKeys(criteria)
-
-    // Query DHT for each key
     const results: DiscoveryAdvertisement[] = []
     const seenIds = new Set<string>()
+    const now = Date.now()
 
-    for (const key of keys) {
-      try {
-        const announcement = await this.coordinator.discoverResource(
-          'discovery:advertisement',
-          key,
-          5000, // 5 second timeout
-        )
+    // PHASE 2: Query LOCAL CACHE ONLY
+    // The cache is populated by GossipSub subscriptions
+    // NOTE: We do NOT query DHT here - DHT is a key-value store,
+    // not a search engine. "Find all signers" is not a valid DHT query.
+    for (const [_key, entry] of this.cache.entries()) {
+      const advertisement = entry.advertisement
 
-        if (announcement && announcement.data) {
-          const advertisement = announcement.data as DiscoveryAdvertisement
+      // Skip if doesn't match protocol
+      if (advertisement.protocol !== criteria.protocol) {
+        continue
+      }
 
-          // Skip duplicates
-          if (seenIds.has(advertisement.id)) {
-            continue
-          }
-          seenIds.add(advertisement.id)
+      // Skip duplicates
+      if (seenIds.has(advertisement.id)) {
+        continue
+      }
+      seenIds.add(advertisement.id)
 
-          // Validate advertisement
-          if (this.isValidAdvertisement(advertisement, Date.now())) {
-            // Apply filters
-            if (this.matchesCriteria(advertisement, criteria)) {
-              // Validate security
-              const securityResult =
-                await this.validateAdvertisementSecurity(advertisement)
-              if (securityResult.valid && securityResult.securityScore >= 50) {
-                results.push(advertisement)
-                this.addToCache(advertisement)
-              }
-            }
-          }
-        }
-      } catch (error) {
-        // Log error but continue with other keys
-        console.error(`DHT discovery failed for key ${key}:`, error)
+      // Validate advertisement (check expiration, required fields)
+      if (!this.isValidAdvertisement(advertisement, now)) {
+        continue
+      }
+
+      // Apply criteria filters
+      if (!this.matchesCriteria(advertisement, criteria)) {
+        continue
+      }
+
+      // Validate security
+      const securityResult =
+        await this.validateAdvertisementSecurity(advertisement)
+      if (securityResult.valid && securityResult.securityScore >= 50) {
+        results.push(advertisement)
+        // Update cache access stats
+        entry.accessCount++
+        entry.lastAccess = now
+        this.cacheStats.hits++
       }
     }
 
@@ -227,6 +243,9 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
       return results.slice(0, criteria.maxResults)
     }
 
+    console.log(
+      `[Discovery] discover() returned ${results.length} results from local cache (protocol: ${criteria.protocol})`,
+    )
     return results
   }
 
@@ -282,7 +301,8 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
       `[Discovery] Subscribed to GossipSub topic: ${topic} (subscription: ${subscriptionId})`,
     )
 
-    // Optionally fetch existing advertisements from DHT
+    // Optionally fetch existing advertisements from local cache
+    // PHASE 2: This now queries the local cache (populated by GossipSub), not DHT
     if (opts.fetchExisting) {
       try {
         const fetchCriteria = {
@@ -401,6 +421,9 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
 
   /**
    * Start the discoverer
+   *
+   * PHASE 2: Auto-subscribes to common discovery topics to populate the cache.
+   * This ensures discover() has data to return even before explicit subscribe() calls.
    */
   async start(): Promise<void> {
     if (this.started) {
@@ -417,6 +440,69 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
       },
       5 * 60 * 1000,
     ) // Every 5 minutes
+
+    // PHASE 2: Auto-subscribe to common discovery topics
+    // This ensures the cache is populated before any discover() calls
+    // The cache is the PRIMARY source for discover() - not DHT
+    await this.autoSubscribeToDiscoveryTopics()
+  }
+
+  /**
+   * Auto-subscribe to common discovery topics
+   *
+   * PHASE 2: This populates the local cache with advertisements from the network.
+   * Without this, discover() would return empty results because the cache is empty.
+   */
+  private async autoSubscribeToDiscoveryTopics(): Promise<void> {
+    const commonTopics = [
+      `${DISCOVERY_TOPIC_PREFIX}/musig2`, // MuSig2 signer advertisements
+      `${DISCOVERY_TOPIC_PREFIX}/musig2-request`, // MuSig2 signing requests
+      `${DISCOVERY_TOPIC_PREFIX}/wallet-presence`, // Wallet presence/online status
+    ]
+
+    for (const topic of commonTopics) {
+      try {
+        await this.coordinator.subscribeToTopic(topic, (data: Uint8Array) => {
+          this.handleAutoSubscriptionMessage(topic, data)
+        })
+        console.log(`[Discovery] Auto-subscribed to topic: ${topic}`)
+      } catch (error) {
+        // Non-fatal - some topics may not be available
+        console.warn(`[Discovery] Failed to auto-subscribe to ${topic}:`, error)
+      }
+    }
+  }
+
+  /**
+   * Handle incoming GossipSub message from auto-subscription
+   *
+   * PHASE 2: Parses advertisements and adds them to the local cache.
+   * This is how discover() gets its data.
+   */
+  private handleAutoSubscriptionMessage(topic: string, data: Uint8Array): void {
+    try {
+      const messageStr = new TextDecoder().decode(data)
+      const advertisement = JSON.parse(messageStr) as DiscoveryAdvertisement
+
+      // Validate advertisement structure and expiration
+      if (!this.isValidAdvertisement(advertisement, Date.now())) {
+        console.warn(
+          `[Discovery] Invalid advertisement received on auto-subscription topic ${topic}`,
+        )
+        return
+      }
+
+      // Add to cache - this makes it available to discover()
+      this.addToCache(advertisement)
+      console.log(
+        `[Discovery] Cached advertisement from auto-subscription: ${advertisement.id} (protocol: ${advertisement.protocol})`,
+      )
+    } catch (error) {
+      console.warn(
+        `[Discovery] Failed to parse auto-subscription message from ${topic}:`,
+        error,
+      )
+    }
   }
 
   /**
