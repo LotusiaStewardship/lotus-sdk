@@ -68,6 +68,7 @@ import { Point, BN } from '../../bitcore/crypto/index.js'
 import { Hash } from '../../bitcore/crypto/hash.js'
 import { MuSig2Discovery } from './discovery-extension.js'
 import type { MuSig2DiscoveryConfig } from './discovery-types.js'
+import type { IDiscoveryCache } from '../discovery/types.js'
 import {
   serializeMessage,
   deserializeMessage,
@@ -157,12 +158,14 @@ export class MuSig2P2PCoordinator extends EventEmitter {
    * @param musig2Config - MuSig2-specific configuration
    * @param securityConfig - Security validation configuration
    * @param discoveryConfig - Discovery layer configuration
+   * @param discoveryCache - Optional external cache for discovery persistence (e.g., localStorage-backed)
    */
   constructor(
     coordinator: P2PCoordinator,
     musig2Config?: MuSig2P2PConfig,
     securityConfig?: MuSig2SecurityConfig,
     discoveryConfig?: MuSig2DiscoveryConfig,
+    discoveryCache?: IDiscoveryCache,
   ) {
     super()
 
@@ -195,7 +198,11 @@ export class MuSig2P2PCoordinator extends EventEmitter {
 
     // Initialize discovery layer if config provided
     if (discoveryConfig) {
-      this.discovery = new MuSig2Discovery(this.coordinator, discoveryConfig)
+      this.discovery = new MuSig2Discovery(
+        this.coordinator,
+        discoveryConfig,
+        discoveryCache,
+      )
     }
 
     // Start cleanup if enabled

@@ -23,6 +23,8 @@ import type { P2PCoordinator } from '../coordinator.js'
 import type { P2PMessage } from '../types.js'
 import {
   type IDiscoveryDiscoverer,
+  type IDiscoveryCache,
+  type DiscoveryCacheEntry,
   type DiscoveryCriteria,
   type DiscoveryAdvertisement,
   type DiscoveryOptions,
@@ -32,6 +34,7 @@ import {
   DiscoveryError,
   DiscoveryErrorType,
   DEFAULT_DISCOVERY_OPTIONS,
+  InMemoryDiscoveryCache,
 } from './types.js'
 import { DiscoverySecurityValidator } from './security.js'
 import { Hash } from '../../bitcore/crypto/hash.js'
@@ -62,13 +65,16 @@ const DEFAULT_SUBSCRIPTION_OPTIONS: Required<SubscriptionOptions> = {
 // ============================================================================
 
 /**
- * Cache entry
+ * Internal cache entry (compatible with DiscoveryCacheEntry)
  */
 interface CacheEntry {
   /** Advertisement data */
   advertisement: DiscoveryAdvertisement
 
-  /** Cache timestamp */
+  /** When the entry was added to cache */
+  addedAt: number
+
+  /** Cache timestamp (alias for addedAt, for backward compatibility) */
   timestamp: number
 
   /** Access count */
@@ -76,6 +82,9 @@ interface CacheEntry {
 
   /** Last access time */
   lastAccess: number
+
+  /** Source of the advertisement */
+  source: 'gossipsub' | 'dht' | 'direct'
 }
 
 /**
@@ -130,10 +139,13 @@ interface CacheStats {
  * This implementation follows the proper libp2p architecture:
  * - DHT for persistent storage and one-time queries
  * - GossipSub for real-time event-driven subscriptions
+ *
+ * Supports injectable cache for persistence across page reloads.
  */
 export class DHTDiscoverer implements IDiscoveryDiscoverer {
   private readonly coordinator: P2PCoordinator
-  private readonly cache = new Map<string, CacheEntry>()
+  private readonly cache: Map<string, CacheEntry>
+  private readonly externalCache?: IDiscoveryCache
   private readonly subscriptions = new Map<string, SubscriptionRecord>()
   private readonly rateLimitTracker = new Map<
     string,
@@ -148,8 +160,56 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
     hitRate: 0,
   }
 
-  constructor(coordinator: P2PCoordinator) {
+  /**
+   * Create a new DHTDiscoverer
+   *
+   * @param coordinator - The P2P coordinator
+   * @param externalCache - Optional external cache for persistence (e.g., localStorage-backed)
+   */
+  constructor(coordinator: P2PCoordinator, externalCache?: IDiscoveryCache) {
     this.coordinator = coordinator
+    this.externalCache = externalCache
+    this.cache = new Map<string, CacheEntry>()
+
+    // If external cache provided, restore entries to internal cache
+    if (externalCache) {
+      this.restoreFromExternalCache()
+    }
+  }
+
+  /**
+   * Restore cache entries from external cache
+   */
+  private restoreFromExternalCache(): void {
+    if (!this.externalCache) return
+
+    let restored = 0
+    const now = Date.now()
+
+    for (const [key, entry] of this.externalCache.entries()) {
+      // Skip expired entries
+      if (entry.advertisement.expiresAt <= now) {
+        continue
+      }
+
+      // Convert to internal CacheEntry format
+      this.cache.set(key, {
+        advertisement: entry.advertisement,
+        addedAt: entry.addedAt,
+        timestamp: entry.addedAt,
+        accessCount: entry.accessCount,
+        lastAccess: entry.lastAccess,
+        source: entry.source,
+      })
+      restored++
+    }
+
+    if (restored > 0) {
+      console.log(
+        `[Discovery] Restored ${restored} entries from external cache`,
+      )
+    }
+    this.updateCacheStats()
   }
 
   // ========================================================================
@@ -864,22 +924,47 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
 
   /**
    * Add advertisement to cache
+   *
+   * @param advertisement - The advertisement to cache
+   * @param source - Source of the advertisement (default: 'gossipsub')
    */
-  private addToCache(advertisement: DiscoveryAdvertisement): void {
+  private addToCache(
+    advertisement: DiscoveryAdvertisement,
+    source: 'gossipsub' | 'dht' | 'direct' = 'gossipsub',
+  ): void {
     const existing = this.cache.get(advertisement.id)
+    const now = Date.now()
+
+    let entry: CacheEntry
 
     if (existing) {
       // Update existing entry
-      existing.timestamp = Date.now()
+      existing.timestamp = now
+      existing.addedAt = existing.addedAt || now // Preserve original addedAt
       existing.accessCount++
-      existing.lastAccess = Date.now()
+      existing.lastAccess = now
+      entry = existing
     } else {
       // Add new entry
-      this.cache.set(advertisement.id, {
+      entry = {
         advertisement,
-        timestamp: Date.now(),
+        addedAt: now,
+        timestamp: now,
         accessCount: 1,
-        lastAccess: Date.now(),
+        lastAccess: now,
+        source,
+      }
+      this.cache.set(advertisement.id, entry)
+    }
+
+    // Sync to external cache if available
+    if (this.externalCache) {
+      this.externalCache.set(advertisement.id, {
+        advertisement: entry.advertisement,
+        addedAt: entry.addedAt,
+        lastAccess: entry.lastAccess,
+        accessCount: entry.accessCount,
+        source: entry.source,
       })
     }
 

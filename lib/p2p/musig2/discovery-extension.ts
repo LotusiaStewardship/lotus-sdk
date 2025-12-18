@@ -15,6 +15,7 @@ import {
   DiscoveryErrorType,
   type DiscoveryOptions,
   type DiscoveryAdvertisement,
+  type IDiscoveryCache,
 } from '../discovery/types.js'
 import type {
   MuSig2SignerCriteria,
@@ -45,19 +46,30 @@ export class MuSig2Discovery extends EventEmitter {
   private activeSignerAd: string | null = null
   private activeRequestAds: Map<string, string> = new Map()
   private refreshTimer: NodeJS.Timeout | null = null
+  private externalCache?: IDiscoveryCache
 
+  /**
+   * Create a MuSig2Discovery instance
+   *
+   * @param coordinator - The P2P coordinator
+   * @param config - MuSig2 discovery configuration
+   * @param externalCache - Optional external cache for persistence (e.g., localStorage-backed)
+   */
   constructor(
     coordinator: P2PCoordinator,
     config?: Partial<MuSig2DiscoveryConfig>,
+    externalCache?: IDiscoveryCache,
   ) {
     super()
     this.coordinator = coordinator
     this.config = { ...DEFAULT_MUSIG2_DISCOVERY_CONFIG, ...config }
+    this.externalCache = externalCache
 
     // Note: DHTAdvertiser is created without a signing key initially.
     // The signing key is set via setSigningKey() before advertising.
     this.advertiser = new DHTAdvertiser(coordinator)
-    this.discoverer = new DHTDiscoverer(coordinator)
+    // Pass external cache to discoverer for persistence
+    this.discoverer = new DHTDiscoverer(coordinator, externalCache)
   }
 
   // ============================================================================
@@ -427,9 +439,14 @@ export class MuSig2Discovery extends EventEmitter {
 
   /**
    * Generate deterministic signer advertisement ID
+   *
+   * IMPORTANT: This ID is deterministic based on the public key only.
+   * This allows updating existing advertisements instead of creating duplicates.
+   * The same public key will always generate the same advertisement ID.
    */
   private generateSignerAdId(publicKeyHex: string): string {
-    const data = `musig2:signer:${publicKeyHex}${Date.now().toString()}`
+    // DETERMINISTIC: Same public key always gets same ID (no Date.now())
+    const data = `musig2:signer:${publicKeyHex}`
     const hash = bytesToHex(sha256(new TextEncoder().encode(data)))
     return `${this.config.signerKeyPrefix}${hash.substring(0, 32)}`
   }

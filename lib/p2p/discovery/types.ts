@@ -177,6 +177,121 @@ export interface SubscriptionOptions {
 }
 
 // ============================================================================
+// Discovery Cache Interface
+// ============================================================================
+
+/**
+ * Cache entry for discovered advertisements
+ */
+export interface DiscoveryCacheEntry {
+  /** The advertisement data */
+  advertisement: DiscoveryAdvertisement
+
+  /** When the entry was added to cache */
+  addedAt: number
+
+  /** Last time this entry was accessed */
+  lastAccess: number
+
+  /** Number of times this entry has been accessed */
+  accessCount: number
+
+  /** Source of the advertisement */
+  source: 'gossipsub' | 'dht' | 'direct'
+}
+
+/**
+ * Injectable discovery cache interface
+ *
+ * Allows external cache implementations (e.g., localStorage-backed)
+ * to be injected into the discoverer for persistence across page reloads.
+ */
+export interface IDiscoveryCache {
+  /**
+   * Get a cache entry by key
+   */
+  get(key: string): DiscoveryCacheEntry | undefined
+
+  /**
+   * Set a cache entry
+   */
+  set(key: string, entry: DiscoveryCacheEntry): void
+
+  /**
+   * Delete a cache entry
+   */
+  delete(key: string): boolean
+
+  /**
+   * Check if a key exists in the cache
+   */
+  has(key: string): boolean
+
+  /**
+   * Get all entries as an iterator
+   */
+  entries(): IterableIterator<[string, DiscoveryCacheEntry]>
+
+  /**
+   * Clear all entries (optionally filtered by protocol)
+   */
+  clear(protocol?: string): void
+
+  /**
+   * Get the number of entries in the cache
+   */
+  readonly size: number
+}
+
+/**
+ * Default in-memory cache implementation
+ */
+export class InMemoryDiscoveryCache implements IDiscoveryCache {
+  private cache = new Map<string, DiscoveryCacheEntry>()
+
+  get(key: string): DiscoveryCacheEntry | undefined {
+    const entry = this.cache.get(key)
+    if (entry) {
+      entry.lastAccess = Date.now()
+      entry.accessCount++
+    }
+    return entry
+  }
+
+  set(key: string, entry: DiscoveryCacheEntry): void {
+    this.cache.set(key, entry)
+  }
+
+  delete(key: string): boolean {
+    return this.cache.delete(key)
+  }
+
+  has(key: string): boolean {
+    return this.cache.has(key)
+  }
+
+  entries(): IterableIterator<[string, DiscoveryCacheEntry]> {
+    return this.cache.entries()
+  }
+
+  clear(protocol?: string): void {
+    if (protocol) {
+      for (const [key, entry] of Array.from(this.cache.entries())) {
+        if (entry.advertisement.protocol === protocol) {
+          this.cache.delete(key)
+        }
+      }
+    } else {
+      this.cache.clear()
+    }
+  }
+
+  get size(): number {
+    return this.cache.size
+  }
+}
+
+// ============================================================================
 // Advertiser Interface
 // ============================================================================
 

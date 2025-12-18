@@ -16,7 +16,13 @@ export type {
   SecurityPolicy,
   IDiscoveryAdvertiser,
   IDiscoveryDiscoverer,
+  // Cache interface types (Phase 3)
+  IDiscoveryCache,
+  DiscoveryCacheEntry,
 } from './types.js'
+
+// Cache implementation
+export { InMemoryDiscoveryCache } from './types.js'
 
 // Class and enum exports
 export { DHTAdvertiser } from './dht-advertiser.js'
@@ -46,7 +52,11 @@ import type { P2PCoordinator } from '../coordinator.js'
 import { DHTAdvertiser } from './dht-advertiser.js'
 import { DHTDiscoverer } from './dht-discoverer.js'
 import { DiscoverySecurityValidator, createSecurityPolicy } from './security.js'
-import type { DiscoveryOptions, SecurityPolicy } from './types.js'
+import type {
+  DiscoveryOptions,
+  SecurityPolicy,
+  IDiscoveryCache,
+} from './types.js'
 import type { PrivateKey } from '../../bitcore/privatekey.js'
 
 /**
@@ -66,6 +76,10 @@ export function createAdvertiser(
 
 /**
  * Create a discovery discoverer
+ *
+ * @param coordinator - The P2P coordinator
+ * @param options - Configuration options
+ * @param externalCache - Optional external cache for persistence
  */
 export function createDiscoverer(
   coordinator: P2PCoordinator,
@@ -73,8 +87,9 @@ export function createDiscoverer(
     defaultOptions?: Partial<DiscoveryOptions>
     securityPolicy?: Partial<SecurityPolicy>
   },
+  externalCache?: IDiscoveryCache,
 ): DHTDiscoverer {
-  const discoverer = new DHTDiscoverer(coordinator)
+  const discoverer = new DHTDiscoverer(coordinator, externalCache)
   return discoverer
 }
 
