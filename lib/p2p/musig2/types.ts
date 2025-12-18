@@ -78,6 +78,8 @@ export interface SessionAnnouncement {
 export interface MuSig2Payload {
   sessionId: string
   timestamp: number
+  /** Monotonically increasing sequence number for replay protection */
+  sequenceNumber?: number
 }
 
 /**

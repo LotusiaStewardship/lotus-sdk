@@ -88,6 +88,8 @@ export class DHTAdvertiser implements IDiscoveryAdvertiser {
 
   /**
    * Advertise peer capabilities to DHT
+   *
+   * If a signing key is available, the signature will be replaced with a valid one.
    */
   async advertise(
     advertisement: DiscoveryAdvertisement,

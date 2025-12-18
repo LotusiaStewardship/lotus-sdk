@@ -96,6 +96,11 @@ import {
   validateSessionAnnouncementPayload,
 } from './validation.js'
 import { SessionLock, withSessionLock } from './session-lock.js'
+import {
+  MuSig2MessageSigner,
+  type SignedP2PMessage,
+} from './message-signing.js'
+import { ReplayProtection } from './replay-protection.js'
 
 /**
  * MuSig2 P2P Coordinator
@@ -127,6 +132,15 @@ export class MuSig2P2PCoordinator extends EventEmitter {
 
   // Session locking for race condition prevention
   private sessionLock: SessionLock = new SessionLock()
+
+  // Message signing for authentication (Phase 4 Security)
+  private messageSigner: MuSig2MessageSigner = new MuSig2MessageSigner()
+
+  // Replay protection (Phase 4 Security)
+  private replayProtection: ReplayProtection = new ReplayProtection()
+
+  // Sequence number tracking per session
+  private sessionSequences: Map<string, number> = new Map()
 
   // Metrics
   private metrics = {
@@ -213,6 +227,10 @@ export class MuSig2P2PCoordinator extends EventEmitter {
       console.log('[MuSig2] Discovery layer started')
     }
 
+    // Start replay protection cleanup timer
+    this.replayProtection.start()
+    console.log('[MuSig2] Replay protection started')
+
     console.log('[MuSig2] Protocol initialized')
   }
 
@@ -228,6 +246,11 @@ export class MuSig2P2PCoordinator extends EventEmitter {
       await this.discovery.stop()
       console.log('[MuSig2] Discovery layer stopped')
     }
+
+    // Stop replay protection
+    this.replayProtection.stop()
+    this.replayProtection.clear()
+    console.log('[MuSig2] Replay protection stopped')
 
     // Clear cleanup interval
     if (this.cleanupInterval) {
@@ -253,6 +276,9 @@ export class MuSig2P2PCoordinator extends EventEmitter {
 
     // Clear nonce tracking
     this.usedNonces.clear()
+
+    // Clear sequence tracking
+    this.sessionSequences.clear()
 
     // Clear all session locks
     this.sessionLock.clearAll()
@@ -2240,6 +2266,57 @@ export class MuSig2P2PCoordinator extends EventEmitter {
       // -1 because we don't count ourselves
       console.log(`[MuSig2] All participants joined session ${sessionId}`)
       this.emit(MuSig2Event.SESSION_READY, sessionId)
+    }
+  }
+
+  // ============================================================================
+  // Phase 4 Security Methods
+  // ============================================================================
+
+  /**
+   * Get the message signer instance
+   * Useful for external signing operations
+   */
+  getMessageSigner(): MuSig2MessageSigner {
+    return this.messageSigner
+  }
+
+  /**
+   * Get the replay protection instance
+   * Useful for external validation or monitoring
+   */
+  getReplayProtection(): ReplayProtection {
+    return this.replayProtection
+  }
+
+  /**
+   * Get the next sequence number for a session
+   * Used when constructing outgoing messages
+   */
+  getNextSequenceNumber(sessionId: string): number {
+    const current = this.sessionSequences.get(sessionId) ?? -1
+    const next = current + 1
+    this.sessionSequences.set(sessionId, next)
+    return next
+  }
+
+  /**
+   * Get comprehensive security status including Phase 4 additions
+   */
+  getPhase4SecurityStatus() {
+    return {
+      messageSigning: {
+        enabled: true,
+        config: this.messageSigner.getConfig(),
+      },
+      replayProtection: {
+        enabled: true,
+        stats: this.replayProtection.getStats(),
+      },
+      sequenceTracking: {
+        activeSessions: this.sessionSequences.size,
+      },
+      securityValidator: this.securityValidator.getSecurityStatus(),
     }
   }
 }

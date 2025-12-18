@@ -43,6 +43,9 @@ export interface DiscoveryCriteria {
 
 /**
  * Advertisement data published to DHT
+ *
+ * Phase 4 Security: Signatures are now REQUIRED for all advertisements.
+ * Unsigned advertisements will be rejected by the security validator.
  */
 export interface DiscoveryAdvertisement {
   /** Unique advertisement identifier */
@@ -57,8 +60,11 @@ export interface DiscoveryAdvertisement {
   /** List of supported capabilities */
   capabilities: string[]
 
-  /** Advertisement signature for authenticity */
-  signature?: Buffer
+  /**
+   * Advertisement signature for authenticity (REQUIRED - Phase 4)
+   * Must be a valid Lotus Schnorr signature over the advertisement data
+   */
+  signature: Buffer
 
   /** Creation timestamp */
   createdAt: number
@@ -80,6 +86,16 @@ export interface DiscoveryAdvertisement {
     latitude: number
     longitude: number
   }
+}
+
+/**
+ * Unsigned advertisement for internal use before signing
+ * Used during advertisement creation before signature is added
+ */
+export interface UnsignedDiscoveryAdvertisement
+  extends Omit<DiscoveryAdvertisement, 'signature'> {
+  /** Signature is optional during creation */
+  signature?: Buffer
 }
 
 /**

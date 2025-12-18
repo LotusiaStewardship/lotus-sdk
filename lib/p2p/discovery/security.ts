@@ -325,16 +325,26 @@ export class DiscoverySecurityValidator {
   // ========================================================================
 
   /**
-   * Validate advertisement signature
+   * Validate advertisement signature (Phase 4: Strict enforcement)
+   *
+   * SECURITY: Signatures are now REQUIRED for all advertisements.
+   * This method will reject any advertisement without a valid signature.
    */
   private async validateSignature(
     advertisement: DiscoveryAdvertisement,
   ): Promise<boolean> {
+    // Phase 4: Signature is now required
     if (!advertisement.signature) {
+      console.warn(
+        `[DiscoverySecurity] Rejecting advertisement ${advertisement.id}: missing signature`,
+      )
       return false
     }
 
     if (!advertisement.peerInfo.publicKey) {
+      console.warn(
+        `[DiscoverySecurity] Rejecting advertisement ${advertisement.id}: missing public key`,
+      )
       return false
     }
 
@@ -354,7 +364,57 @@ export class DiscoverySecurityValidator {
         signature.isSchnorr = true
       }
 
-      // Verify the Schnorr signature
+      // Verify the Schnorr signature using Lotus format (big-endian)
+      const isValid = Schnorr.verify(
+        messageHash,
+        signature,
+        advertisement.peerInfo.publicKey,
+        'big',
+      )
+
+      if (!isValid) {
+        console.warn(
+          `[DiscoverySecurity] Rejecting advertisement ${advertisement.id}: invalid signature`,
+        )
+      }
+
+      return isValid
+    } catch (error) {
+      console.error(
+        `[DiscoverySecurity] Signature verification failed for ${advertisement.id}:`,
+        error,
+      )
+      return false
+    }
+  }
+
+  /**
+   * Verify advertisement signature (public method for external use)
+   * Phase 4: Strict signature verification
+   */
+  verifyAdvertisementSignature(advertisement: DiscoveryAdvertisement): boolean {
+    // Synchronous wrapper for the async validation
+    // Note: This is safe because validateSignature doesn't actually use async operations
+    try {
+      if (!advertisement.signature) {
+        console.warn(
+          `[DiscoverySecurity] Rejecting unsigned advertisement: ${advertisement.id}`,
+        )
+        return false
+      }
+
+      if (!advertisement.peerInfo.publicKey) {
+        console.warn(
+          `[DiscoverySecurity] Rejecting advertisement without public key: ${advertisement.id}`,
+        )
+        return false
+      }
+
+      const messageData = this.constructSignedMessage(advertisement)
+      const messageHash = Hash.sha256(messageData)
+      const signature = Signature.fromBuffer(advertisement.signature)
+      signature.isSchnorr = true
+
       return Schnorr.verify(
         messageHash,
         signature,
@@ -362,7 +422,10 @@ export class DiscoverySecurityValidator {
         'big',
       )
     } catch (error) {
-      console.error('Signature verification failed:', error)
+      console.error(
+        `[DiscoverySecurity] Signature verification error for ${advertisement.id}:`,
+        error,
+      )
       return false
     }
   }

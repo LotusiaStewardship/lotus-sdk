@@ -55,6 +55,12 @@ import {
   ErrorCode,
 } from './errors.js'
 import type { MuSig2SecurityValidator } from './security.js'
+import {
+  MuSig2MessageSigner,
+  type SignedP2PMessage,
+} from './message-signing.js'
+import { ReplayProtection } from './replay-protection.js'
+import { PublicKey } from '../../bitcore/publickey.js'
 
 type Message =
   | SessionJoinPayload
@@ -81,6 +87,21 @@ export class MuSig2ProtocolHandler
   // Security validator reference (set by coordinator)
   private securityValidator?: MuSig2SecurityValidator
 
+  // Message signer for signature verification (Phase 4)
+  private messageSigner: MuSig2MessageSigner = new MuSig2MessageSigner()
+
+  // Replay protection (Phase 4)
+  private replayProtection: ReplayProtection = new ReplayProtection()
+
+  // Whether to require signatures on messages (Phase 4)
+  private requireSignatures: boolean = false
+
+  // Session public key resolver (set by coordinator)
+  private publicKeyResolver?: (
+    sessionId: string,
+    signerIndex: number,
+  ) => PublicKey | undefined
+
   /**
    * Set the security validator for message validation
    */
@@ -89,7 +110,47 @@ export class MuSig2ProtocolHandler
   }
 
   /**
+   * Set the message signer for signature verification (Phase 4)
+   */
+  setMessageSigner(signer: MuSig2MessageSigner): void {
+    this.messageSigner = signer
+  }
+
+  /**
+   * Set the replay protection instance (Phase 4)
+   */
+  setReplayProtection(protection: ReplayProtection): void {
+    this.replayProtection = protection
+  }
+
+  /**
+   * Enable or disable signature requirement (Phase 4)
+   * When enabled, unsigned messages will be rejected
+   */
+  setRequireSignatures(require: boolean): void {
+    this.requireSignatures = require
+  }
+
+  /**
+   * Set the public key resolver for signature verification (Phase 4)
+   * The resolver should return the public key for a given session/signer
+   */
+  setPublicKeyResolver(
+    resolver: (sessionId: string, signerIndex: number) => PublicKey | undefined,
+  ): void {
+    this.publicKeyResolver = resolver
+  }
+
+  /**
    * Handle incoming MuSig2 message with security and validation integration
+   *
+   * Phase 4 Security Flow:
+   * 1. Basic protocol validation
+   * 2. Security validation (DoS, blocking, timestamp)
+   * 3. Signature verification (if enabled)
+   * 4. Replay protection validation
+   * 5. Message structure validation
+   * 6. Payload validation and routing
    */
   async handleMessage(message: P2PMessage, from: PeerInfo): Promise<void> {
     try {
@@ -120,13 +181,53 @@ export class MuSig2ProtocolHandler
         }
       }
 
-      // Step 3: Validate message structure (additional validation checks)
+      // Step 3: Signature verification (Phase 4)
+      if (this.requireSignatures) {
+        const signatureResult = this._verifyMessageSignature(message, from)
+        if (!signatureResult.valid) {
+          console.warn(
+            `[MuSig2Protocol] Signature verification failed for ${message.type} from ${from.peerId}: ${signatureResult.reason}`,
+          )
+          this.emit('security:rejected', {
+            message,
+            from,
+            reason: signatureResult.reason || 'signature_verification_failed',
+          })
+          return
+        }
+      }
+
+      // Step 4: Replay protection (Phase 4)
+      const payload = message.payload as {
+        sessionId?: string
+        signerIndex?: number
+        sequenceNumber?: number
+      }
+      const replayResult = this.replayProtection.validateMessage(
+        message,
+        payload?.sessionId,
+        payload?.signerIndex,
+        payload?.sequenceNumber,
+      )
+      if (!replayResult.valid) {
+        console.warn(
+          `[MuSig2Protocol] Replay protection failed for ${message.type} from ${from.peerId}: ${replayResult.reason}`,
+        )
+        this.emit('security:rejected', {
+          message,
+          from,
+          reason: replayResult.reason || 'replay_protection_failed',
+        })
+        return
+      }
+
+      // Step 5: Validate message structure (additional validation checks)
       validateMessageStructure(message)
 
-      // Step 4: Route and validate payload based on message type
+      // Step 6: Route and validate payload based on message type
       const validatedPayload = this._validateAndRouteMessage(message)
 
-      // Step 5: Emit events with validated payloads
+      // Step 7: Emit events with validated payloads
       this._emitValidatedMessage(
         message.type as MuSig2MessageType,
         validatedPayload,
@@ -136,6 +237,58 @@ export class MuSig2ProtocolHandler
       // Handle validation and security errors
       this._handleMessageError(error, message, from)
     }
+  }
+
+  /**
+   * Verify message signature (Phase 4)
+   *
+   * @param message - The message to verify
+   * @param from - Peer info of sender
+   * @returns Validation result
+   */
+  private _verifyMessageSignature(
+    message: P2PMessage,
+    from: PeerInfo,
+  ): { valid: boolean; reason?: string } {
+    // Check if message has signature
+    if (!this.messageSigner.hasSignature(message)) {
+      return { valid: false, reason: 'missing_signature' }
+    }
+
+    const signedMessage = message as SignedP2PMessage
+
+    // Try to get expected public key from resolver
+    let expectedPublicKey: PublicKey | undefined
+    if (this.publicKeyResolver) {
+      const payload = message.payload as {
+        sessionId?: string
+        signerIndex?: number
+      }
+      if (
+        payload?.sessionId !== undefined &&
+        payload?.signerIndex !== undefined
+      ) {
+        expectedPublicKey = this.publicKeyResolver(
+          payload.sessionId,
+          payload.signerIndex,
+        )
+      }
+    }
+
+    // If we have an expected public key from the session, use it
+    // Otherwise, use the public key from the message itself
+    if (expectedPublicKey) {
+      if (!this.messageSigner.verifyMessage(signedMessage, expectedPublicKey)) {
+        return { valid: false, reason: 'invalid_signature' }
+      }
+    } else {
+      // Verify using the public key embedded in the message
+      if (!this.messageSigner.verifyMessage(signedMessage)) {
+        return { valid: false, reason: 'invalid_signature' }
+      }
+    }
+
+    return { valid: true }
   }
 
   /**
@@ -321,6 +474,64 @@ export class MuSig2ProtocolHandler
    * Get validation info for debugging and monitoring
    */
   getValidationInfo() {
+    return {
+      supportedMessageTypes: [
+        MuSig2MessageType.SESSION_JOIN,
+        MuSig2MessageType.SESSION_JOIN_ACK,
+        MuSig2MessageType.NONCE_SHARE,
+        MuSig2MessageType.PARTIAL_SIG_SHARE,
+        MuSig2MessageType.SESSION_ABORT,
+        MuSig2MessageType.SESSION_COMPLETE,
+      ],
+      validationEnabled: true,
+      errorHandlingEnabled: true,
+      securityChecksEnabled: true,
+      // Phase 4 Security
+      signatureVerificationEnabled: this.requireSignatures,
+      replayProtectionEnabled: true,
+      replayProtectionStats: this.replayProtection.getStats(),
+    }
+  }
+
+  /**
+   * Get Phase 4 security status
+   */
+  getSecurityStatus() {
+    return {
+      signatureVerification: {
+        enabled: this.requireSignatures,
+        hasPublicKeyResolver: !!this.publicKeyResolver,
+      },
+      replayProtection: this.replayProtection.getStats(),
+    }
+  }
+
+  /**
+   * Start replay protection cleanup timer
+   */
+  startReplayProtection(): void {
+    this.replayProtection.start()
+  }
+
+  /**
+   * Stop replay protection cleanup timer
+   */
+  stopReplayProtection(): void {
+    this.replayProtection.stop()
+  }
+
+  /**
+   * Clear session from replay protection
+   */
+  clearSessionReplayData(sessionId: string): void {
+    this.replayProtection.clearSession(sessionId)
+  }
+
+  /**
+   * Get validation info for debugging and monitoring (legacy)
+   * @deprecated Use getValidationInfo() instead
+   */
+  getLegacyValidationInfo() {
     return {
       supportedMessageTypes: [
         MuSig2MessageType.SESSION_JOIN,

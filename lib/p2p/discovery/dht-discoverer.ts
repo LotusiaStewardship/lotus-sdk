@@ -34,6 +34,9 @@ import {
   DEFAULT_DISCOVERY_OPTIONS,
 } from './types.js'
 import { DiscoverySecurityValidator } from './security.js'
+import { Hash } from '../../bitcore/crypto/hash.js'
+import { Schnorr } from '../../bitcore/crypto/schnorr.js'
+import { Signature } from '../../bitcore/crypto/signature.js'
 
 // ============================================================================
 // Constants
@@ -478,6 +481,8 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
    *
    * PHASE 2: Parses advertisements and adds them to the local cache.
    * This is how discover() gets its data.
+   *
+   * PHASE 4: Adds signature verification - unsigned advertisements are rejected.
    */
   private handleAutoSubscriptionMessage(topic: string, data: Uint8Array): void {
     try {
@@ -488,6 +493,14 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
       if (!this.isValidAdvertisement(advertisement, Date.now())) {
         console.warn(
           `[Discovery] Invalid advertisement received on auto-subscription topic ${topic}`,
+        )
+        return
+      }
+
+      // PHASE 4: Verify signature - reject unsigned advertisements
+      if (!this.verifyAdvertisementSignature(advertisement)) {
+        console.warn(
+          `[Discovery] Rejecting unsigned/invalid advertisement on auto-subscription topic ${topic}: ${advertisement.id}`,
         )
         return
       }
@@ -532,6 +545,8 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
 
   /**
    * Handle incoming GossipSub message
+   *
+   * PHASE 4: Adds signature verification - unsigned advertisements are rejected.
    */
   private handleGossipSubMessage(
     subscriptionId: string,
@@ -551,6 +566,14 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
       if (!this.isValidAdvertisement(advertisement, Date.now())) {
         console.warn(
           `[Discovery] Invalid advertisement received on topic ${subscription.topic}`,
+        )
+        return
+      }
+
+      // PHASE 4: Verify signature - reject unsigned advertisements
+      if (!this.verifyAdvertisementSignature(advertisement)) {
+        console.warn(
+          `[Discovery] Rejecting unsigned/invalid advertisement on topic ${subscription.topic}: ${advertisement.id}`,
         )
         return
       }
@@ -949,5 +972,100 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
     this.cacheStats.size = this.cache.size
     const total = this.cacheStats.hits + this.cacheStats.misses
     this.cacheStats.hitRate = total > 0 ? this.cacheStats.hits / total : 0
+  }
+
+  // ========================================================================
+  // Phase 4 Security Methods
+  // ========================================================================
+
+  /**
+   * Verify advertisement signature (Phase 4)
+   *
+   * SECURITY: All advertisements MUST be signed with Lotus Schnorr.
+   * Unsigned or invalid signatures are rejected.
+   *
+   * @param advertisement - The advertisement to verify
+   * @returns true if signature is valid, false otherwise
+   */
+  private verifyAdvertisementSignature(
+    advertisement: DiscoveryAdvertisement,
+  ): boolean {
+    // Phase 4: Signature is required
+    if (!advertisement.signature) {
+      console.warn(
+        `[Discovery] Advertisement ${advertisement.id} has no signature`,
+      )
+      return false
+    }
+
+    if (!advertisement.peerInfo.publicKey) {
+      console.warn(
+        `[Discovery] Advertisement ${advertisement.id} has no public key`,
+      )
+      return false
+    }
+
+    try {
+      // Construct the signed message
+      const messageData = this.constructSignedMessage(advertisement)
+
+      // Hash the message for Schnorr verification
+      const messageHash = Hash.sha256(messageData)
+
+      // Parse signature from Buffer
+      const signature = Signature.fromBuffer(advertisement.signature)
+      signature.isSchnorr = true
+
+      // Verify the Schnorr signature using Lotus format (big-endian)
+      return Schnorr.verify(
+        messageHash,
+        signature,
+        advertisement.peerInfo.publicKey,
+        'big',
+      )
+    } catch (error) {
+      console.error(
+        `[Discovery] Signature verification failed for ${advertisement.id}:`,
+        error,
+      )
+      return false
+    }
+  }
+
+  /**
+   * Construct the message that was signed for the advertisement
+   * This must exactly match the signing process in the advertiser
+   */
+  private constructSignedMessage(
+    advertisement: DiscoveryAdvertisement,
+  ): Buffer {
+    const parts: Buffer[] = []
+
+    // Add peer ID
+    parts.push(Buffer.from(advertisement.peerInfo.peerId))
+
+    // Add multiaddrs if available
+    if (advertisement.peerInfo.multiaddrs) {
+      parts.push(Buffer.from(JSON.stringify(advertisement.peerInfo.multiaddrs)))
+    }
+
+    // Add protocol
+    parts.push(Buffer.from(advertisement.protocol))
+
+    // Add capabilities if available
+    if (advertisement.capabilities) {
+      parts.push(Buffer.from(JSON.stringify(advertisement.capabilities)))
+    }
+
+    // Add timestamps
+    parts.push(Buffer.from(advertisement.createdAt.toString()))
+    parts.push(Buffer.from(advertisement.expiresAt.toString()))
+
+    // Add custom criteria if available
+    if (advertisement.customCriteria) {
+      parts.push(Buffer.from(JSON.stringify(advertisement.customCriteria)))
+    }
+
+    return Buffer.concat(parts)
   }
 }

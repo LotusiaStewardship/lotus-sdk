@@ -158,6 +158,8 @@ export class MuSig2Discovery extends EventEmitter {
     // Ensure we have at least some addresses
     const finalMultiaddrs = multiaddrs.length > 0 ? multiaddrs : allMultiaddrs
 
+    // Create advertisement with empty signature placeholder
+    // DHTAdvertiser will replace with actual signature if signing key is available
     const advertisement: MuSig2SignerAdvertisement = {
       id: advertisementId,
       protocol: 'musig2',
@@ -173,6 +175,7 @@ export class MuSig2Discovery extends EventEmitter {
       createdAt: Date.now(),
       expiresAt: Date.now() + (options?.ttl || this.config.signerTTL),
       reputation: 50,
+      signature: Buffer.alloc(64), // Placeholder - replaced by DHTAdvertiser
       customCriteria: {
         transactionTypes,
         publicKeyHex,
@@ -280,6 +283,8 @@ export class MuSig2Discovery extends EventEmitter {
 
     const finalMultiaddrs = multiaddrs.length > 0 ? multiaddrs : allMultiaddrs
 
+    // Create advertisement with empty signature placeholder
+    // DHTAdvertiser will replace with actual signature if signing key is available
     const advertisement: MuSig2SigningRequestAdvertisement = {
       id: requestId,
       requestId,
@@ -298,6 +303,7 @@ export class MuSig2Discovery extends EventEmitter {
       createdAt: Date.now(),
       expiresAt: Date.now() + (options?.ttl || this.config.requestTTL),
       reputation: 50,
+      signature: Buffer.alloc(64), // Placeholder - replaced by DHTAdvertiser
       customCriteria: {
         requiredPublicKeys: requiredPublicKeys.map(pk => publicKeyToHex(pk)),
         messageHash,
@@ -647,5 +653,43 @@ export class MuSig2Discovery extends EventEmitter {
    */
   async unsubscribe(subscriptionId: string): Promise<void> {
     await this.discoverer.unsubscribe(subscriptionId)
+  }
+
+  // ============================================================================
+  // Cache & Diagnostics
+  // ============================================================================
+
+  /**
+   * Get cache statistics from the underlying discoverer
+   *
+   * Useful for diagnostics to understand cache population and hit rates.
+   *
+   * @returns Cache statistics including size, hits, misses, and hit rate
+   */
+  getCacheStats(): {
+    size: number
+    hits: number
+    misses: number
+    hitRate: number
+  } {
+    return this.discoverer.getCacheStats()
+  }
+
+  /**
+   * Clear the discovery cache
+   *
+   * @param protocol - Optional protocol filter ('musig2' or 'musig2-request')
+   */
+  clearCache(protocol?: string): void {
+    this.discoverer.clearCache(protocol)
+  }
+
+  /**
+   * Get active subscription IDs
+   *
+   * @returns Array of active subscription IDs
+   */
+  getActiveSubscriptions(): string[] {
+    return this.discoverer.getActiveSubscriptions()
   }
 }
