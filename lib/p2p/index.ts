@@ -19,6 +19,24 @@ export { P2PProtocol } from './protocol.js'
 // Core security (protocol-agnostic)
 export * from './security.js'
 
+// Phase 1: Bootstrap Manager (automatic reconnection)
+export { BootstrapManager, BOOTSTRAP_PROTOCOL } from './bootstrap-manager.js'
+
+// Phase 1: DHT Announcement Queue (deferred propagation)
+export {
+  DHTAnnouncementQueue,
+  type QueuedAnnouncement,
+  type DHTQueueConfig,
+} from './dht-queue.js'
+
+// Phase 1: GossipSub Monitor (mesh health)
+export {
+  GossipSubMonitor,
+  type TopicMeshHealth,
+  type GossipSubHealth,
+  type GossipSubMonitorConfig,
+} from './gossipsub-monitor.js'
+
 // Blockchain utilities (burn verification)
 export * from './blockchain-utils.js'
 

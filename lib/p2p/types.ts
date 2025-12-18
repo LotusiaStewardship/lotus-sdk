@@ -554,3 +554,70 @@ export interface CoreSecurityMetrics {
     warnings: number
   }
 }
+
+// ============================================================================
+// Bootstrap Manager Types (Phase 1: SDK Connectivity)
+// ============================================================================
+
+/**
+ * Bootstrap connection configuration
+ */
+export interface BootstrapConfig {
+  /** Base delay for reconnection attempts in ms (default: 1000) */
+  reconnectBaseDelay?: number
+  /** Maximum delay for reconnection attempts in ms (default: 60000) */
+  reconnectMaxDelay?: number
+  /** Jitter factor for reconnection delays (default: 0.3) */
+  reconnectJitter?: number
+  /** Maximum number of reconnection attempts (default: Infinity) */
+  maxReconnectAttempts?: number
+  /** Health check interval in ms (default: 30000) */
+  healthCheckInterval?: number
+  /** Connection timeout in ms (default: 10000) */
+  connectionTimeout?: number
+}
+
+/**
+ * Bootstrap connection state
+ */
+export interface BootstrapConnection {
+  /** Peer ID of the bootstrap node */
+  peerId: string
+  /** Multiaddr of the bootstrap node */
+  multiaddr: string
+  /** Whether currently connected */
+  isConnected: boolean
+  /** Number of reconnection attempts */
+  reconnectAttempts: number
+  /** Timestamp of last successful connection */
+  lastConnected?: number
+  /** Timestamp of last disconnection */
+  lastDisconnected?: number
+}
+
+/**
+ * Peer info returned from bootstrap protocol
+ */
+export interface BootstrapPeerInfo {
+  /** Peer ID */
+  peerId: string
+  /** Multiaddrs for connection */
+  multiaddrs: string[]
+  /** Capabilities the peer has registered */
+  capabilities?: string[]
+  /** Last seen timestamp */
+  lastSeen?: number
+}
+
+/**
+ * Bootstrap event types
+ */
+export enum BootstrapEvent {
+  CONNECTED = 'bootstrap:connected',
+  DISCONNECTED = 'bootstrap:disconnected',
+  RECONNECTING = 'bootstrap:reconnecting',
+  FAILED = 'bootstrap:failed',
+  PEERS_RECEIVED = 'bootstrap:peers-received',
+  ALL_CONNECTED = 'bootstrap:all-connected',
+  ALL_DISCONNECTED = 'bootstrap:all-disconnected',
+}

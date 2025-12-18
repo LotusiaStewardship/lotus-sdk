@@ -54,9 +54,13 @@ import {
   CORE_P2P_SECURITY_LIMITS,
   P2PConnectionState,
   ConnectionStateChangeData,
+  BootstrapEvent,
 } from './types.js'
 import { P2PProtocol } from './protocol.js'
 import { CoreSecurityManager } from './security.js'
+import { BootstrapManager } from './bootstrap-manager.js'
+import { DHTAnnouncementQueue } from './dht-queue.js'
+import { GossipSubMonitor } from './gossipsub-monitor.js'
 
 /**
  * Main P2P Coordinator using libp2p
@@ -84,6 +88,15 @@ export class P2PCoordinator extends EventEmitter<P2PEventMap> {
   private _connectionStateError?: string
   private _connectionStateMonitorId?: NodeJS.Timeout
 
+  // Phase 1: Bootstrap Manager for automatic reconnection
+  private bootstrapManager: BootstrapManager
+  // Phase 1: DHT Announcement Queue for deferred propagation
+  private dhtQueue: DHTAnnouncementQueue
+  // Phase 1: GossipSub Monitor for mesh health
+  private gossipSubMonitor: GossipSubMonitor
+  // Track if DHT was previously ready (for queue flush)
+  private _wasDHTReady = false
+
   constructor(protected readonly config: P2PConfig) {
     super()
     this.protocol = new P2PProtocol()
@@ -93,6 +106,17 @@ export class P2PCoordinator extends EventEmitter<P2PEventMap> {
       disableRateLimiting: config.securityConfig?.disableRateLimiting ?? false,
       customLimits: config.securityConfig?.customLimits,
     })
+
+    // Phase 1: Initialize Bootstrap Manager
+    this.bootstrapManager = new BootstrapManager()
+    this._setupBootstrapManagerEvents()
+
+    // Phase 1: Initialize DHT Announcement Queue
+    this.dhtQueue = new DHTAnnouncementQueue()
+    this._setupDHTQueueCallback()
+
+    // Phase 1: Initialize GossipSub Monitor
+    this.gossipSubMonitor = new GossipSubMonitor()
 
     // SECURITY: Start automatic DHT cleanup to prevent memory leaks
     this.startDHTCleanup()
@@ -187,6 +211,11 @@ export class P2PCoordinator extends EventEmitter<P2PEventMap> {
 
     const peers = this.node.getPeers()
     const dhtStats = this.getDHTStats()
+
+    // Phase 1: Check DHT readiness and flush queue if newly ready
+    this._checkDHTReadyAndFlush().catch(error => {
+      console.error('[P2P] Error checking DHT ready state:', error)
+    })
 
     // Determine appropriate state based on conditions
     if (peers.length === 0) {
@@ -514,6 +543,16 @@ export class P2PCoordinator extends EventEmitter<P2PEventMap> {
       // Transition to CONNECTED state
       this._transitionState(P2PConnectionState.CONNECTED)
 
+      // Phase 1: Initialize and start Bootstrap Manager
+      this.bootstrapManager.initialize(this.node)
+      if (this.config.bootstrapPeers && this.config.bootstrapPeers.length > 0) {
+        await this.bootstrapManager.start(this.config.bootstrapPeers)
+      }
+
+      // Phase 1: Initialize GossipSub Monitor
+      this.gossipSubMonitor.initialize(this.node)
+      this.gossipSubMonitor.start()
+
       // Start connection state monitor
       this._startConnectionStateMonitor()
     } catch (error) {
@@ -557,6 +596,15 @@ export class P2PCoordinator extends EventEmitter<P2PEventMap> {
   async stop(): Promise<void> {
     // Stop connection state monitor
     this._stopConnectionStateMonitor()
+
+    // Phase 1: Stop Bootstrap Manager
+    await this.bootstrapManager.stop()
+
+    // Phase 1: Stop GossipSub Monitor
+    this.gossipSubMonitor.stop()
+
+    // Phase 1: Stop DHT Queue
+    this.dhtQueue.stop()
 
     // SECURITY: Clear cleanup interval to allow process exit
     if (this.cleanupIntervalId) {
@@ -812,23 +860,24 @@ export class P2PCoordinator extends EventEmitter<P2PEventMap> {
     // Put in DHT if server mode is enabled AND routing table is ready
     // In client-only mode, we only store locally
     //
-    // Failsafe: Check if routing table has peers before DHT operations
-    // Why? Even with auto-population via TopologyListener, there's a brief window
-    // during startup before the first peer connects. This prevents hanging.
-    // Also handles network partitions and isolated scenarios gracefully.
+    // Phase 1: Use DHT queue for deferred propagation when DHT not ready
     if (this.node.services.kadDHT && this.config.enableDHTServer) {
       const dhtStats = this.getDHTStats()
 
       if (dhtStats.isReady) {
         // DHT routing table has peers - proceed with propagation
-        const dht = this.node.services.kadDHT as KadDHT
         const keyBytes = Buffer.from(key, 'utf8')
         const valueBytes = Buffer.from(JSON.stringify(announcement), 'utf8')
 
         await this._putDHT(keyBytes, valueBytes, 5000)
+      } else {
+        // Phase 1: Queue announcement for later propagation when DHT becomes ready
+        this.dhtQueue.enqueue(
+          key,
+          announcement as ResourceAnnouncement<unknown>,
+        )
+        console.log(`[P2P] DHT not ready - queued announcement: ${key}`)
       }
-      // Else: Routing table empty, skip DHT propagation
-      // Resource is still in local cache for later propagation
     }
 
     this.emit('resource:announced', announcement)
@@ -1921,5 +1970,120 @@ export class P2PCoordinator extends EventEmitter<P2PEventMap> {
 
     const peers = pubsub.getSubscribers(topic)
     return Array.from(peers).map(p => p.toString())
+  }
+
+  // ========================================================================
+  // Phase 1: Bootstrap Manager Integration
+  // ========================================================================
+
+  /**
+   * Get Bootstrap Manager instance
+   * Allows external access to bootstrap connection management
+   */
+  getBootstrapManager(): BootstrapManager {
+    return this.bootstrapManager
+  }
+
+  /**
+   * Get DHT Announcement Queue instance
+   * Allows external access to queue management
+   */
+  getDHTQueue(): DHTAnnouncementQueue {
+    return this.dhtQueue
+  }
+
+  /**
+   * Get GossipSub Monitor instance
+   * Allows external access to mesh health monitoring
+   */
+  getGossipSubMonitor(): GossipSubMonitor {
+    return this.gossipSubMonitor
+  }
+
+  /**
+   * Setup Bootstrap Manager event forwarding
+   */
+  private _setupBootstrapManagerEvents(): void {
+    // Forward bootstrap events to coordinator
+    this.bootstrapManager.on('bootstrap:connected', data => {
+      this.emit(BootstrapEvent.CONNECTED, data)
+      console.log(`[P2P] Bootstrap connected: ${data.peerId}`)
+    })
+
+    this.bootstrapManager.on('bootstrap:disconnected', data => {
+      this.emit(BootstrapEvent.DISCONNECTED, data)
+      console.log(`[P2P] Bootstrap disconnected: ${data.peerId}`)
+    })
+
+    this.bootstrapManager.on('bootstrap:reconnecting', data => {
+      this.emit(BootstrapEvent.RECONNECTING, data)
+      console.log(
+        `[P2P] Bootstrap reconnecting: ${data.peerId} (attempt ${data.attempt})`,
+      )
+    })
+
+    this.bootstrapManager.on('bootstrap:failed', data => {
+      this.emit(BootstrapEvent.FAILED, data)
+      console.warn(`[P2P] Bootstrap failed: ${data.peerId} - ${data.error}`)
+    })
+
+    this.bootstrapManager.on('bootstrap:all-disconnected', () => {
+      this.emit(BootstrapEvent.ALL_DISCONNECTED, undefined)
+      console.warn('[P2P] All bootstrap peers disconnected')
+    })
+  }
+
+  /**
+   * Setup DHT Queue flush callback
+   */
+  private _setupDHTQueueCallback(): void {
+    this.dhtQueue.setFlushCallback(async (key, announcement) => {
+      if (!this.node?.services.kadDHT) {
+        return false
+      }
+
+      const dhtStats = this.getDHTStats()
+      if (!dhtStats.isReady) {
+        return false
+      }
+
+      try {
+        const keyBytes = Buffer.from(key, 'utf8')
+        const valueBytes = Buffer.from(JSON.stringify(announcement), 'utf8')
+
+        await this._putDHT(keyBytes, valueBytes, 5000)
+        return true
+      } catch (error) {
+        console.error(`[P2P] DHT queue flush error for ${key}:`, error)
+        return false
+      }
+    })
+  }
+
+  /**
+   * Check DHT readiness and flush queue if newly ready
+   * Called periodically by connection state monitor
+   */
+  private async _checkDHTReadyAndFlush(): Promise<void> {
+    const dhtStats = this.getDHTStats()
+    const isReady = dhtStats.isReady
+
+    // If DHT just became ready, flush the queue
+    if (isReady && !this._wasDHTReady) {
+      console.log('[P2P] DHT became ready - flushing announcement queue')
+      this._wasDHTReady = true
+
+      // Flush queued announcements
+      const result = await this.dhtQueue.flush()
+      if (result.success > 0 || result.failed > 0) {
+        console.log(
+          `[P2P] DHT queue flush: ${result.success} success, ${result.failed} failed`,
+        )
+      }
+    } else if (!isReady && this._wasDHTReady) {
+      // DHT became not ready
+      this._wasDHTReady = false
+      console.log('[P2P] DHT no longer ready')
+    }
   }
 }

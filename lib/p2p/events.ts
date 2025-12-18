@@ -19,7 +19,7 @@ import type {
   ConnectionStateChangeData,
   ResourceAnnouncement,
 } from './types.js'
-import { ConnectionEvent, RelayEvent } from './types.js'
+import { ConnectionEvent, RelayEvent, BootstrapEvent } from './types.js'
 
 // ============================================================================
 // Core P2P Events
@@ -86,6 +86,31 @@ export interface P2PErrorEventData {
 }
 
 /**
+ * Bootstrap event data types
+ */
+export interface BootstrapConnectedEventData {
+  peerId: string
+  multiaddr: string
+}
+
+export interface BootstrapDisconnectedEventData {
+  peerId: string
+  reason?: string
+}
+
+export interface BootstrapReconnectingEventData {
+  peerId: string
+  attempt: number
+  delay: number
+}
+
+export interface BootstrapFailedEventData {
+  peerId: string
+  error: string
+  attempts: number
+}
+
+/**
  * Core P2P Event Map
  * Maps event names to their argument tuples (for Node.js EventEmitter compatibility)
  */
@@ -101,6 +126,13 @@ export type P2PEventMap = {
   'relay:connected': [{ peerId: string; timestamp: number }]
   'relay:disconnected': [{ peerId: string; timestamp: number }]
   'resource:announced': [ResourceAnnouncement]
+  // Phase 1: Bootstrap Manager events
+  'bootstrap:connected': [BootstrapConnectedEventData]
+  'bootstrap:disconnected': [BootstrapDisconnectedEventData]
+  'bootstrap:reconnecting': [BootstrapReconnectingEventData]
+  'bootstrap:failed': [BootstrapFailedEventData]
+  'bootstrap:all-connected': [undefined]
+  'bootstrap:all-disconnected': [undefined]
 }
 
 // ============================================================================
