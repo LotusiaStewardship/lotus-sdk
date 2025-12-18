@@ -92,3 +92,16 @@ export type {
   MuSig2SigningRequestAdvertisement,
   MuSig2DiscoveryConfig,
 } from './discovery-types.js'
+
+// Session Lifecycle (Phase 3)
+export { SessionLock, withSessionLock } from './session-lock.js'
+export {
+  SessionPersistence,
+  InMemorySessionStorage,
+  SessionRecoveryMessageType,
+  type SerializedSession,
+  type SerializedParticipant,
+  type SessionStorage,
+  type SessionRecoveryRequest,
+  type SessionRecoveryResponse,
+} from './session-persistence.js'

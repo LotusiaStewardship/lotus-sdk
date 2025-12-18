@@ -596,15 +596,59 @@ export class MuSigSessionManager {
   // Private helper methods
 
   /**
-   * Generate a unique session ID
+   * Generate a unique session ID with entropy
+   *
+   * Session IDs now include:
+   * - All signer public keys (sorted)
+   * - Message being signed
+   * - Creation timestamp
+   * - Random entropy (16 bytes)
+   *
+   * This prevents session ID collisions when signing the same message
+   * with the same signers multiple times.
+   *
+   * @param signers - Sorted list of signer public keys
+   * @param message - Message to be signed
+   * @param createdAt - Creation timestamp (defaults to Date.now())
+   * @param entropy - Random entropy (defaults to 16 random bytes)
+   * @returns Unique session ID (32 hex characters)
    */
-  private _generateSessionId(signers: PublicKey[], message: Buffer): string {
+  private _generateSessionId(
+    signers: PublicKey[],
+    message: Buffer,
+    createdAt: number = Date.now(),
+    entropy: Buffer = Random.getRandomBuffer(16),
+  ): string {
     const signersHash = Hash.sha256(
       Buffer.concat(signers.map(s => s.toBuffer())),
     )
     const messageHash = Hash.sha256(message)
-    const combined = Buffer.concat([signersHash, messageHash])
-    return Hash.sha256(combined).toString('hex').slice(0, 16)
+    const timestampBuffer = Buffer.alloc(8)
+    timestampBuffer.writeBigInt64BE(BigInt(createdAt))
+    const combined = Buffer.concat([
+      signersHash,
+      messageHash,
+      timestampBuffer,
+      entropy,
+    ])
+    return Hash.sha256(combined).toString('hex').slice(0, 32)
+  }
+
+  /**
+   * Regenerate session ID with new entropy
+   *
+   * Used when a session ID collision is detected.
+   *
+   * @param session - The session to regenerate ID for
+   * @returns New unique session ID
+   */
+  regenerateSessionId(session: MuSigSession): string {
+    return this._generateSessionId(
+      session.signers,
+      session.message,
+      session.createdAt,
+      Random.getRandomBuffer(16),
+    )
   }
 
   /**

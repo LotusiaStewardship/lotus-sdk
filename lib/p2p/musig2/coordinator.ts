@@ -95,6 +95,7 @@ import {
   validateSessionCompletePayload,
   validateSessionAnnouncementPayload,
 } from './validation.js'
+import { SessionLock, withSessionLock } from './session-lock.js'
 
 /**
  * MuSig2 P2P Coordinator
@@ -123,6 +124,9 @@ export class MuSig2P2PCoordinator extends EventEmitter {
 
   // Security: Track used nonces globally to prevent reuse
   private usedNonces: Set<string> = new Set()
+
+  // Session locking for race condition prevention
+  private sessionLock: SessionLock = new SessionLock()
 
   // Metrics
   private metrics = {
@@ -250,6 +254,9 @@ export class MuSig2P2PCoordinator extends EventEmitter {
     // Clear nonce tracking
     this.usedNonces.clear()
 
+    // Clear all session locks
+    this.sessionLock.clearAll()
+
     // Log final metrics
     console.log(
       '[MuSig2] Protocol cleaned up. Final metrics:',
@@ -360,9 +367,21 @@ export class MuSig2P2PCoordinator extends EventEmitter {
       metadata,
     )
 
-    // Check if session already exists (prevent duplicates)
-    if (this.sessions.has(session.sessionId)) {
-      throw new Error(`Session already exists: ${session.sessionId}`)
+    // Handle session ID collision by regenerating with new entropy
+    // This can happen if signing the same message with the same signers
+    let collisionAttempts = 0
+    const maxCollisionAttempts = 3
+    while (this.sessions.has(session.sessionId)) {
+      collisionAttempts++
+      if (collisionAttempts > maxCollisionAttempts) {
+        throw new Error(
+          `Session ID collision persisted after ${maxCollisionAttempts} regeneration attempts`,
+        )
+      }
+      console.warn(
+        `[MuSig2] Session ID collision detected, regenerating (attempt ${collisionAttempts})`,
+      )
+      session.sessionId = this.sessionManager.regenerateSessionId(session)
     }
 
     // Create P2P session wrapper
@@ -1327,6 +1346,9 @@ export class MuSig2P2PCoordinator extends EventEmitter {
    *
    * ARCHITECTURE NOTE: Payload validation is performed by protocol.ts before
    * this handler is called. No re-validation needed here.
+   *
+   * RACE CONDITION FIX: Uses session lock to prevent concurrent join requests
+   * from corrupting the participants map.
    */
   private _handleSessionJoin = async (
     payload: SessionJoinPayload,
@@ -1337,7 +1359,7 @@ export class MuSig2P2PCoordinator extends EventEmitter {
 
     const p2pSession = this.sessions.get(payload.sessionId)
 
-    // Session not found - reject
+    // Session not found - reject (no lock needed for this check)
     if (!p2pSession) {
       console.warn(
         `[MuSig2] Received join request for unknown session: ${payload.sessionId}`,
@@ -1351,7 +1373,7 @@ export class MuSig2P2PCoordinator extends EventEmitter {
       return
     }
 
-    // Only coordinator can accept join requests
+    // Only coordinator can accept join requests (no lock needed)
     if (!p2pSession.isCoordinator) {
       console.warn(
         `[MuSig2] Received join request but not coordinator for session: ${payload.sessionId}`,
@@ -1365,7 +1387,7 @@ export class MuSig2P2PCoordinator extends EventEmitter {
       return
     }
 
-    // Validate the signer public key
+    // Validate the signer public key (no lock needed)
     let signerPubKey: PublicKey
     try {
       signerPubKey = deserializePublicKey(payload.signerPublicKey)
@@ -1380,7 +1402,7 @@ export class MuSig2P2PCoordinator extends EventEmitter {
       return
     }
 
-    // Find signer index in session
+    // Find signer index in session (no lock needed - signers list is immutable)
     const signerIndex = p2pSession.session.signers.findIndex(pk =>
       pk.toBuffer().equals(signerPubKey.toBuffer()),
     )
@@ -1398,58 +1420,86 @@ export class MuSig2P2PCoordinator extends EventEmitter {
       return
     }
 
-    // Check if participant already joined
-    if (p2pSession.participants.has(fromPeerId)) {
-      console.warn(
-        `[MuSig2] Peer ${fromPeerId} already joined session: ${payload.sessionId}`,
+    // RACE CONDITION FIX: Acquire lock for atomic participant check-and-add
+    await withSessionLock(this.sessionLock, payload.sessionId, async () => {
+      // Re-check session exists (may have been deleted while waiting for lock)
+      const session = this.sessions.get(payload.sessionId)
+      if (!session) {
+        await this._sendJoinAck(fromPeerId, {
+          sessionId: payload.sessionId,
+          accepted: false,
+          reason: 'Session no longer exists',
+          timestamp: Date.now(),
+        })
+        return
+      }
+
+      // Atomic check: participant already joined?
+      if (session.participants.has(fromPeerId)) {
+        console.warn(
+          `[MuSig2] Peer ${fromPeerId} already joined session: ${payload.sessionId}`,
+        )
+        await this._sendJoinAck(fromPeerId, {
+          sessionId: payload.sessionId,
+          accepted: false,
+          reason: 'Already joined',
+          timestamp: Date.now(),
+        })
+        return
+      }
+
+      // Atomic check: signer index already taken by another peer?
+      for (const [peerId, participant] of session.participants) {
+        if (participant.signerIndex === signerIndex) {
+          console.warn(
+            `[MuSig2] Signer index ${signerIndex} already taken by peer ${peerId}`,
+          )
+          await this._sendJoinAck(fromPeerId, {
+            sessionId: payload.sessionId,
+            accepted: false,
+            reason: 'Signer index already taken',
+            timestamp: Date.now(),
+          })
+          return
+        }
+      }
+
+      // Atomic add: Accept the join request - add participant
+      const participant: SessionParticipant = {
+        peerId: fromPeerId,
+        signerIndex,
+        publicKey: signerPubKey,
+        hasNonce: false,
+        hasPartialSig: false,
+        lastSeen: Date.now(),
+      }
+
+      session.participants.set(fromPeerId, participant)
+      session.lastActivity = Date.now()
+
+      console.log(
+        `[MuSig2] Accepted join request from ${fromPeerId} for session ${payload.sessionId} (index ${signerIndex})`,
       )
+
+      // Send acceptance
       await this._sendJoinAck(fromPeerId, {
         sessionId: payload.sessionId,
-        accepted: false,
-        reason: 'Already joined',
+        accepted: true,
+        signerIndex,
         timestamp: Date.now(),
       })
-      return
-    }
 
-    // Accept the join request - add participant
-    const participant: SessionParticipant = {
-      peerId: fromPeerId,
-      signerIndex,
-      publicKey: signerPubKey,
-      hasNonce: false,
-      hasPartialSig: false,
-      lastSeen: Date.now(),
-    }
+      // Emit participant joined event
+      this.emit(MuSig2Event.PARTICIPANT_JOINED, payload.sessionId, participant)
 
-    p2pSession.participants.set(fromPeerId, participant)
-    p2pSession.lastActivity = Date.now()
-
-    console.log(
-      `[MuSig2] Accepted join request from ${fromPeerId} for session ${payload.sessionId} (index ${signerIndex})`,
-    )
-
-    // Send acceptance
-    await this._sendJoinAck(fromPeerId, {
-      sessionId: payload.sessionId,
-      accepted: true,
-      signerIndex,
-      timestamp: Date.now(),
+      // Check if all participants joined (excluding ourselves)
+      if (session.participants.size === session.session.signers.length - 1) {
+        console.log(
+          `[MuSig2] All participants joined session ${payload.sessionId}`,
+        )
+        this.emit(MuSig2Event.SESSION_READY, payload.sessionId)
+      }
     })
-
-    // Emit participant joined event
-    this.emit(MuSig2Event.PARTICIPANT_JOINED, payload.sessionId, participant)
-
-    // Check if all participants joined (excluding ourselves)
-    if (
-      p2pSession.participants.size ===
-      p2pSession.session.signers.length - 1
-    ) {
-      console.log(
-        `[MuSig2] All participants joined session ${payload.sessionId}`,
-      )
-      this.emit(MuSig2Event.SESSION_READY, payload.sessionId)
-    }
   }
 
   /**
