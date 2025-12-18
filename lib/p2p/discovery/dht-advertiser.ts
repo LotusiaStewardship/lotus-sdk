@@ -307,6 +307,10 @@ export class DHTAdvertiser implements IDiscoveryAdvertiser {
 
   /**
    * Sign advertisement with private key
+   *
+   * PHASE 13: For MuSig2 advertisements, the signing key must match the
+   * top-level 'publicKey' field (Bitcore wallet key). We no longer add
+   * peerInfo.publicKey since that conflates libp2p identity with wallet identity.
    */
   private async signAdvertisement(
     advertisement: DiscoveryAdvertisement,
@@ -332,9 +336,16 @@ export class DHTAdvertiser implements IDiscoveryAdvertiser {
       const signedAdvertisement = { ...advertisement }
       signedAdvertisement.signature = signature.toBuffer('schnorr')
 
-      // Add the public key to peer info if not present
-      if (!signedAdvertisement.peerInfo.publicKey) {
-        signedAdvertisement.peerInfo.publicKey = this.signingKey.publicKey
+      // PHASE 13: For MuSig2 advertisements, do NOT add peerInfo.publicKey
+      // The public key for signature verification is in the top-level 'publicKey' field
+      // For non-MuSig2 protocols, add peerInfo.publicKey if not present
+      if (
+        advertisement.protocol !== 'musig2' &&
+        advertisement.protocol !== 'musig2-request'
+      ) {
+        if (!signedAdvertisement.peerInfo.publicKey) {
+          signedAdvertisement.peerInfo.publicKey = this.signingKey.publicKey
+        }
       }
 
       return signedAdvertisement
@@ -497,6 +508,47 @@ export class DHTAdvertiser implements IDiscoveryAdvertiser {
   }
 
   /**
+   * Serialize advertisement for network transport
+   *
+   * PHASE 12: PublicKey and Buffer instances don't survive JSON serialization.
+   * This method converts them to hex strings for transport.
+   *
+   * PHASE 13: Also serialize MuSig2-specific publicKey field (top-level).
+   * For MuSig2 advertisements, the Bitcore wallet public key is in the top-level
+   * 'publicKey' field, NOT in peerInfo.publicKey.
+   */
+  private serializeForTransport(
+    advertisement: DiscoveryAdvertisement,
+  ): Record<string, unknown> {
+    const result: Record<string, unknown> = {
+      ...advertisement,
+      signature: advertisement.signature
+        ? advertisement.signature.toString('hex')
+        : undefined,
+      peerInfo: {
+        ...advertisement.peerInfo,
+        publicKey: advertisement.peerInfo.publicKey
+          ? advertisement.peerInfo.publicKey.toString()
+          : undefined,
+      },
+    }
+
+    // PHASE 13: Serialize MuSig2-specific publicKey field
+    // Cast to access potential MuSig2-specific field
+    const musig2Ad = advertisement as DiscoveryAdvertisement & {
+      publicKey?: PublicKey
+    }
+    if (
+      musig2Ad.publicKey &&
+      typeof musig2Ad.publicKey.toString === 'function'
+    ) {
+      result.publicKey = musig2Ad.publicKey.toString()
+    }
+
+    return result
+  }
+
+  /**
    * Publish advertisement to GossipSub (PRIMARY) and DHT (SECONDARY)
    *
    * PHASE 2: GossipSub is now the PRIMARY publish path.
@@ -513,6 +565,9 @@ export class DHTAdvertiser implements IDiscoveryAdvertiser {
   ): Promise<void> {
     const topic = this.getGossipSubTopic(advertisement)
 
+    // Serialize for transport (Phase 12: handle PublicKey and Buffer)
+    const serialized = this.serializeForTransport(advertisement)
+
     // 1. PRIMARY: Publish to GossipSub for real-time discovery
     // This is the main discovery mechanism - subscribers receive advertisements immediately
     // PHASE 2: Added retry logic for reliability
@@ -522,7 +577,7 @@ export class DHTAdvertiser implements IDiscoveryAdvertiser {
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        await this.coordinator.publishToTopic(topic, advertisement)
+        await this.coordinator.publishToTopic(topic, serialized)
         console.log(
           `[Discovery] Published advertisement to GossipSub topic: ${topic} (attempt ${attempt})`,
         )

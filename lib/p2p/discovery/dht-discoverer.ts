@@ -37,6 +37,7 @@ import { DiscoverySecurityValidator } from './security.js'
 import { Hash } from '../../bitcore/crypto/hash.js'
 import { Schnorr } from '../../bitcore/crypto/schnorr.js'
 import { Signature } from '../../bitcore/crypto/signature.js'
+import { PublicKey } from '../../bitcore/publickey.js'
 
 // ============================================================================
 // Constants
@@ -486,8 +487,11 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
    */
   private handleAutoSubscriptionMessage(topic: string, data: Uint8Array): void {
     try {
+      // Parse and deserialize the advertisement from the message
+      // PHASE 12: Use deserializeFromTransport to reconstruct PublicKey and Buffer
       const messageStr = new TextDecoder().decode(data)
-      const advertisement = JSON.parse(messageStr) as DiscoveryAdvertisement
+      const rawData = JSON.parse(messageStr) as Record<string, unknown>
+      const advertisement = this.deserializeFromTransport(rawData)
 
       // Validate advertisement structure and expiration
       if (!this.isValidAdvertisement(advertisement, Date.now())) {
@@ -544,6 +548,44 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
   // ========================================================================
 
   /**
+   * Deserialize advertisement from network transport
+   *
+   * PHASE 12: PublicKey and Buffer instances don't survive JSON serialization.
+   * This method reconstructs them from hex strings.
+   */
+  private deserializeFromTransport(
+    raw: Record<string, unknown>,
+  ): DiscoveryAdvertisement {
+    const peerInfo = raw.peerInfo as Record<string, unknown>
+
+    // Build the base advertisement
+    const result: Record<string, unknown> = {
+      ...raw,
+      signature:
+        typeof raw.signature === 'string'
+          ? Buffer.from(raw.signature, 'hex')
+          : raw.signature,
+      peerInfo: {
+        ...peerInfo,
+        // Note: peerInfo.publicKey is NOT used for MuSig2 - see publicKey field below
+        publicKey:
+          typeof peerInfo.publicKey === 'string'
+            ? PublicKey.fromString(peerInfo.publicKey)
+            : peerInfo.publicKey,
+      },
+    }
+
+    // PHASE 13: Deserialize MuSig2-specific publicKey field
+    // For MuSig2 advertisements, the wallet's Bitcore PublicKey is in the top-level
+    // 'publicKey' field, NOT in peerInfo.publicKey (which is for libp2p identity)
+    if (typeof raw.publicKey === 'string') {
+      result.publicKey = PublicKey.fromString(raw.publicKey)
+    }
+
+    return result as unknown as DiscoveryAdvertisement
+  }
+
+  /**
    * Handle incoming GossipSub message
    *
    * PHASE 4: Adds signature verification - unsigned advertisements are rejected.
@@ -558,9 +600,11 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
     }
 
     try {
-      // Parse the advertisement from the message
+      // Parse and deserialize the advertisement from the message
+      // PHASE 12: Use deserializeFromTransport to reconstruct PublicKey and Buffer
       const messageStr = new TextDecoder().decode(data)
-      const advertisement = JSON.parse(messageStr) as DiscoveryAdvertisement
+      const rawData = JSON.parse(messageStr) as Record<string, unknown>
+      const advertisement = this.deserializeFromTransport(rawData)
 
       // Validate advertisement structure
       if (!this.isValidAdvertisement(advertisement, Date.now())) {
@@ -998,7 +1042,11 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
       return false
     }
 
-    if (!advertisement.peerInfo.publicKey) {
+    // PHASE 13: Get the correct public key based on protocol
+    // For MuSig2 advertisements, use the top-level 'publicKey' field (Bitcore wallet key)
+    // For other protocols, fall back to peerInfo.publicKey
+    const publicKey = this.getAdvertisementPublicKey(advertisement)
+    if (!publicKey) {
       console.warn(
         `[Discovery] Advertisement ${advertisement.id} has no public key`,
       )
@@ -1017,12 +1065,7 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
       signature.isSchnorr = true
 
       // Verify the Schnorr signature using Lotus format (big-endian)
-      return Schnorr.verify(
-        messageHash,
-        signature,
-        advertisement.peerInfo.publicKey,
-        'big',
-      )
+      return Schnorr.verify(messageHash, signature, publicKey, 'big')
     } catch (error) {
       console.error(
         `[Discovery] Signature verification failed for ${advertisement.id}:`,
@@ -1030,6 +1073,49 @@ export class DHTDiscoverer implements IDiscoveryDiscoverer {
       )
       return false
     }
+  }
+
+  /**
+   * Get the public key to use for signature verification
+   *
+   * PHASE 13: For MuSig2 advertisements, the Bitcore wallet public key is in
+   * the top-level 'publicKey' field. For other protocols, use peerInfo.publicKey.
+   *
+   * This separation exists because:
+   * - peerInfo.peerId is the libp2p peer ID (for P2P transport/coordination)
+   * - MuSig2SignerAdvertisement.publicKey is the Bitcore wallet key (for MuSig2 identity)
+   */
+  private getAdvertisementPublicKey(
+    advertisement: DiscoveryAdvertisement,
+  ): PublicKey | undefined {
+    // For MuSig2 protocol, use the top-level publicKey field
+    if (
+      advertisement.protocol === 'musig2' ||
+      advertisement.protocol === 'musig2-request'
+    ) {
+      // Cast to access MuSig2-specific field
+      const musig2Ad = advertisement as DiscoveryAdvertisement & {
+        publicKey?: PublicKey
+        creatorPublicKey?: string
+      }
+
+      // For signer advertisements, use publicKey
+      if (musig2Ad.publicKey instanceof PublicKey) {
+        return musig2Ad.publicKey
+      }
+
+      // For signing request advertisements, use creatorPublicKey
+      if (typeof musig2Ad.creatorPublicKey === 'string') {
+        try {
+          return PublicKey.fromString(musig2Ad.creatorPublicKey)
+        } catch {
+          // Fall through to peerInfo.publicKey
+        }
+      }
+    }
+
+    // Fall back to peerInfo.publicKey for other protocols
+    return advertisement.peerInfo.publicKey
   }
 
   /**

@@ -6,6 +6,7 @@
 
 import { EventEmitter } from 'events'
 import { PublicKey } from '../../bitcore/publickey.js'
+import { PrivateKey } from '../../bitcore/privatekey.js'
 import type { P2PCoordinator } from '../coordinator.js'
 import { DHTAdvertiser } from '../discovery/dht-advertiser.js'
 import { DHTDiscoverer } from '../discovery/dht-discoverer.js'
@@ -53,8 +54,33 @@ export class MuSig2Discovery extends EventEmitter {
     this.coordinator = coordinator
     this.config = { ...DEFAULT_MUSIG2_DISCOVERY_CONFIG, ...config }
 
+    // Note: DHTAdvertiser is created without a signing key initially.
+    // The signing key is set via setSigningKey() before advertising.
     this.advertiser = new DHTAdvertiser(coordinator)
     this.discoverer = new DHTDiscoverer(coordinator)
+  }
+
+  // ============================================================================
+  // Signing Key Management (PHASE 13)
+  // ============================================================================
+
+  /**
+   * Set the signing key for advertisement signatures
+   *
+   * PHASE 13: The signing key must be the Bitcore PrivateKey that corresponds
+   * to the PublicKey being advertised. This is the wallet's signing key.
+   *
+   * This must be called before advertiseSigner() or createSigningRequest().
+   */
+  setSigningKey(signingKey: PrivateKey): void {
+    this.advertiser.setSigningKey(signingKey)
+  }
+
+  /**
+   * Get the current signing key
+   */
+  getSigningKey(): PrivateKey | undefined {
+    return this.advertiser.getSigningKey()
   }
 
   // ============================================================================
