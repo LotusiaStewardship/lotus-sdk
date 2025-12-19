@@ -470,6 +470,13 @@ export interface P2PStats {
 
   /** This node's multiaddrs */
   multiaddrs: string[]
+
+  /**
+   * Dialable relay addresses for this peer
+   * Other peers can use these addresses to connect via circuit relay
+   * Format: /dns4/.../wss/p2p/RELAY_PEER_ID/p2p-circuit/p2p/OUR_PEER_ID
+   */
+  relayAddresses: string[]
 }
 
 // ============================================================================

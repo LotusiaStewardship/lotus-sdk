@@ -1152,6 +1152,7 @@ export class P2PCoordinator extends EventEmitter<P2PEventMap> {
           localRecords: 0,
         },
         multiaddrs: [],
+        relayAddresses: [],
       }
     }
 
@@ -1172,6 +1173,7 @@ export class P2PCoordinator extends EventEmitter<P2PEventMap> {
         localRecords: this.dhtValues.size,
       },
       multiaddrs: multiaddrs.map(ma => ma.toString()),
+      relayAddresses: this.getBootstrapRelayAddresses(),
     }
   }
 
@@ -1331,6 +1333,113 @@ export class P2PCoordinator extends EventEmitter<P2PEventMap> {
     return reachableAddrs.filter((addr: string) =>
       addr.includes('/p2p-circuit/p2p/'),
     )
+  }
+
+  /**
+   * Get bootstrap relay addresses synchronously
+   * Returns relay addresses through connected bootstrap peers
+   * This is the synchronous version for use in getStats() and other sync contexts
+   */
+  getBootstrapRelayAddresses(): string[] {
+    return this._constructRelayCircuitAddresses()
+  }
+
+  /**
+   * Connect to a peer via circuit relay
+   *
+   * This is the primary method for browser-to-browser connections.
+   * Browsers cannot bind to ports directly, so they must connect through
+   * relay nodes using circuit relay addresses.
+   *
+   * @param peerId - Target peer ID to connect to
+   * @param relayAddr - Optional full relay address. If not provided, will construct one using bootstrap peers
+   * @returns Connection result with type information
+   */
+  async connectToPeerViaRelay(
+    peerId: string,
+    relayAddr?: string,
+  ): Promise<{
+    success: boolean
+    connectionType: 'webrtc' | 'relay' | 'direct'
+    error?: string
+  }> {
+    if (!this.node) {
+      return {
+        success: false,
+        connectionType: 'relay',
+        error: 'Node not started',
+      }
+    }
+
+    try {
+      let targetAddr: string
+
+      if (relayAddr) {
+        // Use provided relay address
+        targetAddr = relayAddr
+      } else {
+        // Build relay address through first connected bootstrap peer
+        const bootstrapRelayAddrs = this.getBootstrapRelayAddresses()
+        if (bootstrapRelayAddrs.length === 0) {
+          return {
+            success: false,
+            connectionType: 'relay',
+            error: 'No relay peers available',
+          }
+        }
+
+        // Replace our peer ID with target peer ID in the relay address
+        const ourPeerId = this.node.peerId.toString()
+        targetAddr = bootstrapRelayAddrs[0].replace(
+          `/p2p/${ourPeerId}`,
+          `/p2p/${peerId}`,
+        )
+      }
+
+      // For browser-to-browser, append /webrtc for WebRTC upgrade
+      // This enables direct WebRTC connection after relay signaling
+      if (isBrowser() && !targetAddr.includes('/webrtc')) {
+        // Insert /webrtc before the final /p2p/PEER_ID
+        targetAddr = targetAddr.replace(
+          /\/p2p-circuit\/p2p\/([^/]+)$/,
+          '/p2p-circuit/webrtc/p2p/$1',
+        )
+      }
+
+      console.log(`[P2P] Connecting to peer via relay: ${targetAddr}`)
+
+      // Dial the peer through the relay
+      await this.node.dial(multiaddr(targetAddr))
+
+      // Check connection type after successful dial
+      const connections = this.node.getConnections(peerIdFromString(peerId))
+      if (connections.length === 0) {
+        return {
+          success: false,
+          connectionType: 'relay',
+          error: 'Connection failed',
+        }
+      }
+
+      const conn = connections[0]
+      const connAddr = conn.remoteAddr.toString()
+
+      // Determine connection type from the address
+      let connectionType: 'webrtc' | 'relay' | 'direct' = 'relay'
+      if (connAddr.includes('/webrtc')) {
+        connectionType = 'webrtc'
+      } else if (!connAddr.includes('/p2p-circuit')) {
+        connectionType = 'direct'
+      }
+
+      console.log(`[P2P] Connected to ${peerId} via ${connectionType}`)
+
+      return { success: true, connectionType }
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error'
+      console.error(`[P2P] Failed to connect via relay:`, error)
+      return { success: false, connectionType: 'relay', error: errorMsg }
+    }
   }
 
   /**
