@@ -93,6 +93,12 @@ export type {
   MuSig2DiscoveryConfig,
 } from './discovery-types.js'
 
+// Discovery Cache Interface (for external cache implementations)
+export type {
+  IDiscoveryCache,
+  DiscoveryCacheEntry,
+} from '../discovery/types.js'
+
 // Session Lifecycle (Phase 3)
 export { SessionLock, withSessionLock } from './session-lock.js'
 export {
